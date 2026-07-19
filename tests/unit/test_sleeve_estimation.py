@@ -1,0 +1,259 @@
+import math
+import unittest
+
+from twin_guide.geometry import Vec3
+from twin_guide.sleeve_estimation.fitting import fit_circle, observed_arc_angle
+from twin_guide.sleeve_estimation.mesh_integrity import inspect_triangle_mesh
+from twin_guide.sleeve_estimation.sleeve import estimate_sleeve
+from twin_guide.sleeve_estimation.slicing import slice_mesh
+from twin_guide.sleeve_estimation.types import EstimationConfig, SleeveEstimate, TriangleMeshData
+from twin_guide.sleeve_estimation.validation import reconstruct_sleeve, validate_reconstruction
+
+
+def _add_quad(faces, first, second, third, fourth, *, reverse=False):
+    triangles = ((first, second, third), (first, third, fourth))
+    if reverse:
+        faces.extend(tuple(reversed(face)) for face in triangles)
+    else:
+        faces.extend(triangles)
+
+
+def _synthetic_sleeve(
+    *,
+    inner_radius=1.2,
+    outer_radius=2.0,
+    height=8.0,
+    platform_height=2.0,
+    platform_width=0.8,
+    arc_angle=1.5 * math.pi,
+    segments=48,
+):
+    """Create an independent open-bore, one-sided-platform sleeve fixture."""
+
+    cut_coordinate = inner_radius * math.cos(math.pi - 0.5 * arc_angle)
+    outer_arc_angle = 2.0 * math.pi - 2.0 * math.acos(cut_coordinate / outer_radius)
+    angles_by_kind = {
+        "inner": tuple(
+            math.pi - 0.5 * arc_angle + arc_angle * index / segments
+            for index in range(segments + 1)
+        ),
+        "outer": tuple(
+            math.pi - 0.5 * outer_arc_angle + outer_arc_angle * index / segments
+            for index in range(segments + 1)
+        ),
+    }
+    levels = (-0.5 * height, -0.5 * height + platform_height, 0.5 * height)
+    vertices = []
+    rings = {}
+    for level_index, z_value in enumerate(levels):
+        for kind in ("inner", "outer"):
+            ring = []
+            for angle in angles_by_kind[kind]:
+                extension = 0.0
+                if kind == "outer" and level_index == 0:
+                    alignment = max(0.0, math.cos(angle))
+                    extension = platform_width * alignment**8
+                radius = inner_radius if kind == "inner" else outer_radius + extension
+                ring.append(len(vertices))
+                vertices.append(Vec3(radius * math.cos(angle), radius * math.sin(angle), z_value))
+            rings[level_index, kind] = tuple(ring)
+
+    faces = []
+    for level_index in range(2):
+        for angle_index in range(segments):
+            inner_low = rings[level_index, "inner"][angle_index]
+            inner_high = rings[level_index + 1, "inner"][angle_index]
+            inner_high_next = rings[level_index + 1, "inner"][angle_index + 1]
+            inner_low_next = rings[level_index, "inner"][angle_index + 1]
+            _add_quad(faces, inner_low, inner_high, inner_high_next, inner_low_next)
+
+            outer_low = rings[level_index, "outer"][angle_index]
+            outer_low_next = rings[level_index, "outer"][angle_index + 1]
+            outer_high_next = rings[level_index + 1, "outer"][angle_index + 1]
+            outer_high = rings[level_index + 1, "outer"][angle_index]
+            _add_quad(faces, outer_low, outer_low_next, outer_high_next, outer_high)
+
+    for level_index in (0, 2):
+        reverse = level_index == 0
+        for angle_index in range(segments):
+            _add_quad(
+                faces,
+                rings[level_index, "inner"][angle_index],
+                rings[level_index, "inner"][angle_index + 1],
+                rings[level_index, "outer"][angle_index + 1],
+                rings[level_index, "outer"][angle_index],
+                reverse=reverse,
+            )
+    for angle_index in range(segments):
+        _add_quad(
+            faces,
+            rings[1, "outer"][angle_index],
+            rings[1, "outer"][angle_index + 1],
+            rings[0, "outer"][angle_index + 1],
+            rings[0, "outer"][angle_index],
+        )
+    for endpoint in (0, segments):
+        for level_index in range(2):
+            _add_quad(
+                faces,
+                rings[level_index, "inner"][endpoint],
+                rings[level_index, "outer"][endpoint],
+                rings[level_index + 1, "outer"][endpoint],
+                rings[level_index + 1, "inner"][endpoint],
+                reverse=endpoint == segments,
+            )
+    truth = (
+        inner_radius,
+        outer_radius,
+        height,
+        platform_height,
+        platform_width,
+        arc_angle,
+        outer_arc_angle,
+    )
+    return TriangleMeshData(tuple(vertices), tuple(faces)), truth
+
+
+def _rigid_transform(mesh, translation=None, angle=0.63):
+    if translation is None:
+        translation = Vec3(3.0, -4.0, 2.0)
+    cosine, sine = math.cos(angle), math.sin(angle)
+
+    def rotate(point):
+        # 构造第三列不与世界坐标轴重合的旋转矩阵。
+        first = Vec3(cosine, sine, 0.0)
+        third = Vec3(-0.35 * sine, 0.35 * cosine, math.sqrt(1.0 - 0.35**2))
+        second = third.cross(first).normalized()
+        third = first.cross(second).normalized()
+        return translation + first * point.x + second * point.y + third * point.z
+
+    return TriangleMeshData(tuple(rotate(point) for point in mesh.vertices), mesh.faces)
+
+
+def _bidirectional_vertex_distance(first, second):
+    def directed(source, target):
+        return max(
+            min(point.distance_to(other) for other in target.vertices)
+            for point in source.vertices
+        )
+
+    return max(directed(first, second), directed(second, first))
+
+
+class SleeveEstimationTests(unittest.TestCase):
+    def test_mesh_integrity_detects_open_and_duplicate_surfaces(self):
+        vertices = (
+            Vec3(0.0, 0.0, 0.0),
+            Vec3(1.0, 0.0, 0.0),
+            Vec3(0.0, 1.0, 0.0),
+            Vec3(0.0, 0.0, 1.0),
+        )
+        faces = ((0, 2, 1), (0, 1, 3), (1, 2, 3), (2, 0, 3))
+        closed = inspect_triangle_mesh(TriangleMeshData(vertices, faces))
+        self.assertTrue(closed.valid)
+        self.assertEqual(closed.component_count, 1)
+
+        opened = inspect_triangle_mesh(TriangleMeshData(vertices, faces[:-1]))
+        self.assertFalse(opened.valid)
+        self.assertEqual(opened.boundary_edge_count, 3)
+
+        duplicated = inspect_triangle_mesh(TriangleMeshData(vertices, (*faces, faces[0])))
+        self.assertFalse(duplicated.valid)
+        self.assertEqual(duplicated.duplicate_face_count, 1)
+        self.assertEqual(duplicated.non_manifold_edge_count, 3)
+
+    def test_slice_and_circle_fit_recover_open_bore(self):
+        mesh, truth = _synthetic_sleeve()
+        section = slice_mesh(mesh, Vec3(0.0, 0.0, 0.0), Vec3(0.0, 0.0, 1.0), 1.0)
+        bore_points = tuple(
+            sample.point
+            for sample in section.samples
+            if sample.point.x * sample.normal.x + sample.point.y * sample.normal.y < 0.0
+        )
+        fit = fit_circle(bore_points, Vec3(0.0, 0.0, 1.0), Vec3(0.0, 0.0, 1.0))
+        self.assertAlmostEqual(fit.radius, truth[0], delta=0.02)
+        self.assertAlmostEqual(observed_arc_angle(bore_points, fit), truth[5], delta=0.12)
+
+    def test_estimate_reconstruct_and_rigid_transform(self):
+        truth = SleeveEstimate(
+            axis_origin=Vec3(0.0, 0.0, 0.0),
+            axis=Vec3(0.0, 0.0, 1.0),
+            platform_direction=Vec3(1.0, 0.0, 0.0),
+            height=8.0,
+            platform_height=2.8,
+            closed_bore_height=1.4,
+            platform_width=0.8,
+            inner_radius=1.2,
+            outer_radius=2.0,
+            inner_arc_angle=1.5 * math.pi,
+            outer_arc_angle=2.0 * math.pi - 2.0 * math.acos(
+                1.2 * math.cos(math.pi - 0.75 * math.pi) / 2.0
+            ),
+        )
+        mesh = reconstruct_sleeve(truth)
+        transformed = _rigid_transform(mesh)
+        controls = EstimationConfig(slice_count=7, minimum_arc_points=5)
+        estimate = estimate_sleeve(transformed, controls)
+        self.assertAlmostEqual(estimate.inner_radius, truth.inner_radius, delta=0.08)
+        self.assertAlmostEqual(estimate.outer_radius, truth.outer_radius, delta=0.15)
+        self.assertAlmostEqual(estimate.height, truth.height, delta=0.15)
+        self.assertAlmostEqual(estimate.inner_arc_angle, truth.inner_arc_angle, delta=0.18)
+        self.assertAlmostEqual(estimate.outer_arc_angle, truth.outer_arc_angle, delta=0.18)
+        expected_platform = Vec3(math.cos(0.63), math.sin(0.63), 0.0)
+        self.assertGreater(estimate.platform_direction.dot(expected_platform), 0.90)
+        diagnostic_by_name = {item.parameter: item for item in estimate.diagnostics}
+        # 对离散布尔重建体检测台阶时可使用文档中的软回退规则；
+        # 生成程序另行检查各高度为正且顺序正确。
+        self.assertTrue(diagnostic_by_name["hs"].valid)
+        self.assertIn("拓扑", diagnostic_by_name["hp"].message)
+        self.assertFalse(hasattr(estimate, "platform_total_width"))
+        self.assertFalse(hasattr(estimate, "slot_width"))
+        self.assertFalse(hasattr(estimate, "platform_join_position"))
+        self.assertFalse(hasattr(estimate, "inner_start_angle"))
+        axial_coordinates = tuple(
+            (point - estimate.axis_origin).dot(estimate.axis)
+            for point in transformed.vertices
+        )
+        self.assertAlmostEqual(min(axial_coordinates), 0.0, delta=0.12)
+        self.assertAlmostEqual(max(axial_coordinates), estimate.height, delta=0.12)
+
+        reconstructed = reconstruct_sleeve(estimate)
+        validation = validate_reconstruction(transformed, estimate, maximum_samples=500)
+        # 测试几何使用平滑收缩平台，重建模型则使用三个分段常数区间。
+        self.assertLess(validation.symmetric_rms, 1.2)
+        self.assertTrue(reconstructed.faces)
+        self.assertLess(validation.hausdorff_approximation, 4.0)
+
+        self_validation = validate_reconstruction(reconstructed, estimate, maximum_samples=500)
+        self.assertAlmostEqual(self_validation.symmetric_rms, 0.0, delta=1e-10)
+        supplied_validation = validate_reconstruction(
+            reconstructed,
+            estimate,
+            maximum_samples=500,
+            reconstructed=reconstructed,
+        )
+        self.assertAlmostEqual(supplied_validation.symmetric_rms, 0.0, delta=1e-10)
+
+        sections = tuple(
+            slice_mesh(reconstructed, estimate.axis_origin, estimate.axis, offset)
+            for offset in (
+                0.5 * (estimate.height - estimate.platform_height),
+                estimate.height - 0.5 * (
+                    estimate.platform_height + estimate.closed_bore_height
+                ),
+                estimate.height - 0.5 * estimate.closed_bore_height,
+            )
+        )
+        self.assertTrue(all(section.samples for section in sections))
+        self.assertEqual(tuple(len(section.polylines) for section in sections), (1, 1, 2))
+        self.assertTrue(
+            all(
+                polyline.closed
+                for section in sections
+                for polyline in section.polylines
+            )
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,31 @@
+{
+  "case_id": "case_r305_h500",
+  "inputs": {
+    "template": "../../data/inputs/ring-guide.stl",
+    "guide_sleeve_assembly": "../../data/inputs/guide-sleeve-47-34-10-12-s-40s.stl"
+  },
+  "geometry": {
+    "template_channel_radius_mm": 3.05,
+    "channel_axial_margin_mm": 5.0,
+    "connector_radius_mm": 1.2,
+    "fusion_voxel_size_mm": 0.2
+  },
+  "windows": {
+    "operation_tangent_margin_mm": 1.0,
+    "operation_bitangent_margin_mm": 0.5
+  },
+  "render": {
+    "width_px": 1200,
+    "height_px": 900
+  },
+  "validation": {
+    "handpiece": {
+      "mesh": "../../data/inputs/handpiece-47.stl",
+      "head_crop_radius_mm": 10.0,
+      "minimum_clearance_mm": 1.0,
+      "maximum_tilt_degrees": 5.0,
+      "withdrawal_distances_mm": [0.0, 4.0, 8.0, 12.0]
+    }
+  },
+  "output_directory": "../output/twin_guide"
+}
