@@ -15,10 +15,11 @@ CASE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 @dataclass(frozen=True, slots=True)
 class InputMeshPaths:
-    """构建牙科导板所需的网格路径。"""
+    """病例的牙科导板、导套装配体和患者牙列网格路径。"""
 
     template: Path
     guide_sleeve_assembly: Path
+    patient_dentition: Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,9 +208,9 @@ def _stl_path(value: object, base_directory: Path, name: str) -> Path:
 
 
 def _parse_inputs(raw: dict[str, object], base_directory: Path) -> InputMeshPaths:
-    """解析生成所需的牙科导板和导套装配体 STL 路径。"""
+    """解析牙科导板、导套装配体和患者牙列 STL 路径。"""
 
-    fields = {"template", "guide_sleeve_assembly"}
+    fields = {"template", "guide_sleeve_assembly", "patient_dentition"}
     _reject_unknown(raw, fields, "inputs")
     return InputMeshPaths(
         template=_stl_path(_required(raw, "template"), base_directory, "inputs.template"),
@@ -217,6 +218,11 @@ def _parse_inputs(raw: dict[str, object], base_directory: Path) -> InputMeshPath
             _required(raw, "guide_sleeve_assembly"),
             base_directory,
             "inputs.guide_sleeve_assembly",
+        ),
+        patient_dentition=_stl_path(
+            _required(raw, "patient_dentition"),
+            base_directory,
+            "inputs.patient_dentition",
         ),
     )
 
@@ -296,9 +302,7 @@ def _parse_validation(raw: dict[str, object], base_directory: Path) -> Validatio
     _reject_unknown(handpiece, fields, "validation.handpiece")
     withdrawal_value = _required(handpiece, "withdrawal_distances_mm")
     if not isinstance(withdrawal_value, list) or not withdrawal_value:
-        raise ConfigurationError(
-            "validation.handpiece.withdrawal_distances_mm 必须为非空数组"
-        )
+        raise ConfigurationError("validation.handpiece.withdrawal_distances_mm 必须为非空数组")
     withdrawal_distances = tuple(
         _number(value, f"validation.handpiece.withdrawal_distances_mm[{index}]")
         for index, value in enumerate(withdrawal_value)

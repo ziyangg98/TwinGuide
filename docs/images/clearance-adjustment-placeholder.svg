@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 750" role="img" aria-labelledby="title desc">
+  <title id="title">避让空间调整</title>
+  <desc id="desc">避让空间调整模块的占位图</desc>
+  <rect width="1000" height="750" rx="28" fill="#f5f6f7"/>
+  <path d="M205 455 Q500 325 795 455" fill="none" stroke="#9aa3aa" stroke-width="62" stroke-linecap="round"/>
+  <rect x="395" y="175" width="210" height="220" rx="70" fill="#ffffff" stroke="#707980" stroke-width="8"/>
+  <path d="M350 225 H260 M650 225 H740 M350 350 H260 M650 350 H740" stroke="#52606a" stroke-width="11" stroke-linecap="round"/>
+  <path d="M285 200 L255 225 L285 250 M715 200 L745 225 L715 250 M285 325 L255 350 L285 375 M715 325 L745 350 L715 375" fill="none" stroke="#52606a" stroke-width="11" stroke-linejoin="round"/>
+  <text x="500" y="535" font-family="sans-serif" font-size="48" text-anchor="middle" fill="#33404a">避让空间调整</text>
+  <text x="500" y="590" font-family="sans-serif" font-size="30" text-anchor="middle" fill="#7a858d">待实现</text>
+</svg>

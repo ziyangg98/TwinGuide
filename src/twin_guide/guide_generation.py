@@ -1,4 +1,4 @@
-"""根据病例配置生成完整牙科导板 STL。"""
+"""根据病例配置生成导套—导板联建结构 STL。"""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from twin_guide.window_cutouts import plan_window_cutouts
 
 
 def generate_guide(config: CaseConfig) -> BuildArtifacts:
-    """使用第 4、6 步生成一个双导套牙科导板。
+    """生成包含双导套、窗口和曲线连接管的牙科导板。
 
     参数:
         config: 已通过校验的病例配置。
@@ -37,9 +37,7 @@ def generate_guide(config: CaseConfig) -> BuildArtifacts:
     cutout_plan = plan_window_cutouts(case, sleeves)
     points = select_template_link_points(
         TemplateLinkPointContext(case, sleeves, cutout_plan),
-        TemplatePointSelectionConfig(
-            connector_radius_mm=config.geometry.connector_radius_mm
-        ),
+        TemplatePointSelectionConfig(connector_radius_mm=config.geometry.connector_radius_mm),
     )
     links = link_selected_points(
         points,

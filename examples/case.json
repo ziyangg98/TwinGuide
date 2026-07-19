@@ -2,7 +2,8 @@
   "case_id": "case_r305_h500",
   "inputs": {
     "template": "../../data/inputs/ring-guide.stl",
-    "guide_sleeve_assembly": "../../data/inputs/guide-sleeve-47-34-10-12-s-40s.stl"
+    "guide_sleeve_assembly": "../../data/inputs/guide-sleeve-47-34-10-12-s-40s.stl",
+    "patient_dentition": "../../data/inputs/lbk.stl"
   },
   "geometry": {
     "template_channel_radius_mm": 3.05,
@@ -15,8 +16,8 @@
     "operation_bitangent_margin_mm": 0.5
   },
   "render": {
-    "width_px": 1200,
-    "height_px": 900
+    "width_px": 1600,
+    "height_px": 1200
   },
   "validation": {
     "handpiece": {

@@ -34,6 +34,7 @@ class StageRunStatus(StrEnum):
 @dataclass(frozen=True, slots=True)
 class StageDefinition:
     """阶段的静态元数据：编号、成熟度、依赖和输出键。"""
+
     number: int
     key: str
     title_zh: str
@@ -49,6 +50,7 @@ class StageResult:
 
     完成阶段必须提供 ``output``；跳过阶段必须提供 ``reason``。
     """
+
     definition: StageDefinition
     status: StageRunStatus
     output: object | None = None
@@ -81,14 +83,18 @@ class GenerationContext:
     config: CaseConfig
     case: CaseAnalysis | None = None
     sleeve_generation: SleeveGenerationResult | None = None
+    tooth_identification: object | None = None
     window_cutouts: CutoutPlan | None = None
     template_link_points: TemplateLinkPointPlan | None = None
+    press_beam_points: object | None = None
     point_linking: PointLinkingPlan | None = None
+    clearance_adjustment: object | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class GenerationProcessResult:
     """生成过程的上下文和阶段状态记录。"""
+
     context: GenerationContext
     stages: tuple[StageResult, ...] = field(default_factory=tuple)
 
@@ -99,11 +105,10 @@ class GenerationProcessResult:
 
     @property
     def completed_outputs(self) -> dict[str, object]:
-        """只返回真实完成阶段的命名输出。"""
+        """返回状态为 ``completed`` 的命名输出。"""
 
         return {
             result.definition.provides: result.output
             for result in self.stages
-            if result.status is StageRunStatus.COMPLETED
-            and result.definition.provides is not None
+            if result.status is StageRunStatus.COMPLETED and result.definition.provides is not None
         }

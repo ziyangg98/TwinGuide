@@ -19,7 +19,7 @@ from twin_guide.blender.mesh_queries import (
     remove_excess_components,
 )
 from twin_guide.blender.rendering import create_materials, render_objects
-from twin_guide.blender.scene import remove_object
+from twin_guide.blender.scene import duplicate_mesh_object, remove_object
 from twin_guide.blender.sleeve_reconstruction import create_closed_sleeve_object
 from twin_guide.blender.stl_io import export_stl_mesh
 from twin_guide.models import (
@@ -41,11 +41,20 @@ def _clear_generated_artifacts(output_directory: Path) -> None:
             artifact_path.unlink()
 
 
-def _create_channel_cutters(cutout_plan: CutoutPlan) -> tuple[bpy.types.Object, ...]:
+def _create_channel_cutters(
+    cutout_plan: CutoutPlan,
+    material: bpy.types.Material,
+) -> tuple[bpy.types.Object, ...]:
     """将第 3 步圆柱通道计划转换为 Blender 切割体。"""
 
     return tuple(
-        create_axis_cylinder(channel.name, channel.start, channel.end, channel.radius_mm)
+        create_axis_cylinder(
+            channel.name,
+            channel.start,
+            channel.end,
+            channel.radius_mm,
+            material,
+        )
         for channel in cutout_plan.channels
     )
 
@@ -143,6 +152,38 @@ def create_point_link_meshes(
     return tuple(links)
 
 
+def _create_link_point_markers(
+    plan: PointLinkingPlan,
+    materials: dict[str, bpy.types.Material],
+) -> tuple[tuple[bpy.types.Object, ...], tuple[bpy.types.Object, ...]]:
+    """为联建选点图创建导套侧和导板侧标记球。"""
+
+    marker_radius = min(0.55, plan.radius_mm * 0.45)
+
+    def markers(kind: str, points: tuple[object, ...]) -> tuple[bpy.types.Object, ...]:
+        """将去重后的一类选点转换为标记球。"""
+
+        unique: dict[tuple[float, float, float], object] = {}
+        for point in points:
+            unique[point.as_tuple()] = point
+        result = []
+        for index, point in enumerate(unique.values(), 1):
+            bpy.ops.mesh.primitive_uv_sphere_add(
+                segments=32,
+                ring_count=16,
+                radius=marker_radius,
+                location=point.as_tuple(),
+            )
+            marker = bpy.context.object
+            marker.name = f"{kind}_point_{index}"
+            result.append(assign_material(marker, materials[f"{kind}_point"]))
+        return tuple(result)
+
+    sleeve_markers = markers("sleeve", tuple(link.start for link in plan.links))
+    template_markers = markers("template", tuple(link.end for link in plan.links))
+    return sleeve_markers, template_markers
+
+
 def _render_process_images(
     output_directory: Path,
     case: CaseAnalysis,
@@ -150,24 +191,55 @@ def _render_process_images(
     connector_meshes: tuple[bpy.types.Object, ...],
     channel_cutters: tuple[bpy.types.Object, ...],
     window_cutters: tuple[bpy.types.Object, ...],
+    sleeve_point_markers: tuple[bpy.types.Object, ...],
+    template_point_markers: tuple[bpy.types.Object, ...],
 ) -> tuple[Path, ...]:
-    """渲染导套装配、连接结构和切口三张过程图。"""
+    """渲染输入、导套重建、切口、选点和连接结果。"""
 
     template_mesh = case.input_meshes.template_mesh
+    source_assembly = case.input_meshes.guide_sleeve_assembly_mesh
+    patient_dentition = case.input_meshes.patient_dentition_mesh
     accessory_meshes = case.retained_accessory_meshes
+    cut_template_preview = subtract_cutters(
+        duplicate_mesh_object(template_mesh, "cut_template_preview"),
+        (*channel_cutters, *window_cutters),
+    )
+    assign_material(cut_template_preview, template_mesh.data.materials[0])
     image_specs = (
+        ("input_template.png", (template_mesh,)),
+        ("input_sleeves.png", (source_assembly,)),
+        ("input_patient_dentition.png", (patient_dentition,)),
+        ("reconstructed_sleeves.png", sleeve_meshes),
         ("guide_assembly.png", (template_mesh, *sleeve_meshes, *accessory_meshes)),
         (
-            "guide_connectors.png",
-            (template_mesh, *sleeve_meshes, *accessory_meshes, *connector_meshes),
+            "link_points.png",
+            (
+                cut_template_preview,
+                *sleeve_meshes,
+                *sleeve_point_markers,
+                *template_point_markers,
+            ),
         ),
-        ("cutouts.png", (template_mesh, *channel_cutters, *window_cutters)),
+        (
+            "guide_connectors.png",
+            (
+                cut_template_preview,
+                *sleeve_meshes,
+                *accessory_meshes,
+                *connector_meshes,
+            ),
+        ),
+        (
+            "cutouts.png",
+            (template_mesh, *sleeve_meshes, *window_cutters),
+        ),
     )
     image_paths = []
     for filename, visible_meshes in image_specs:
         image_path = output_directory / filename
         render_objects(image_path, tuple(visible_meshes), case.config.render)
         image_paths.append(image_path)
+    remove_object(cut_template_preview)
     return tuple(image_paths)
 
 
@@ -198,13 +270,19 @@ def build_guide_from_links(
     materials = create_materials()
     template_mesh = case.input_meshes.template_mesh
     accessory_meshes = case.retained_accessory_meshes
-    assign_material(template_mesh, materials["final"])
+    assign_material(template_mesh, materials["template"])
+    assign_material(case.input_meshes.guide_sleeve_assembly_mesh, materials["sleeve"])
+    for guide in case.guide_sleeves:
+        assign_material(guide.guide_mesh, materials["sleeve"])
     for accessory_mesh in accessory_meshes:
-        assign_material(accessory_mesh, materials["final"])
-    sleeve_meshes = _create_reconstructed_sleeves(case, materials["final"])
-    channel_cutters = _create_channel_cutters(cutout_plan)
+        assign_material(accessory_mesh, materials["sleeve"])
+    sleeve_meshes = _create_reconstructed_sleeves(case, materials["sleeve"])
+    channel_cutters = _create_channel_cutters(cutout_plan, materials["channel"])
     window_cutters = _create_window_cutters(cutout_plan, materials)
     link_meshes = create_point_link_meshes(case, point_links, materials["connector"])
+    sleeve_point_markers, template_point_markers = _create_link_point_markers(
+        point_links, materials
+    )
     process_image_paths = _render_process_images(
         output_directory,
         case,
@@ -212,6 +290,8 @@ def build_guide_from_links(
         link_meshes,
         channel_cutters,
         window_cutters,
+        sleeve_point_markers,
+        template_point_markers,
     )
     cut_template_mesh = subtract_cutters(template_mesh, (*channel_cutters, *window_cutters))
     final_mesh = voxel_union(

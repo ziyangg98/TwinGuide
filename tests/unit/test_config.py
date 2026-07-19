@@ -12,7 +12,12 @@ class CaseConfigTests(unittest.TestCase):
     def setUp(self):
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.case_directory = Path(self.temporary_directory.name)
-        for filename in ("template.stl", "guide_sleeve_assembly.stl", "handpiece.stl"):
+        for filename in (
+            "template.stl",
+            "guide_sleeve_assembly.stl",
+            "patient_dentition.stl",
+            "handpiece.stl",
+        ):
             (self.case_directory / filename).touch()
 
     def tearDown(self):
@@ -24,6 +29,7 @@ class CaseConfigTests(unittest.TestCase):
             "inputs": {
                 "template": "template.stl",
                 "guide_sleeve_assembly": "guide_sleeve_assembly.stl",
+                "patient_dentition": "patient_dentition.stl",
             },
             "geometry": {
                 "template_channel_radius_mm": 3.05,
@@ -67,6 +73,10 @@ class CaseConfigTests(unittest.TestCase):
             (0.0, 4.0, 8.0),
         )
         self.assertEqual(config.inputs.template, (self.case_directory / "template.stl").resolve())
+        self.assertEqual(
+            config.inputs.patient_dentition,
+            (self.case_directory / "patient_dentition.stl").resolve(),
+        )
         self.assertEqual(config.output_directory, (self.case_directory / "output").resolve())
 
     def test_loads_generation_config_without_validation(self):

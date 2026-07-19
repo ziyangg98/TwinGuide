@@ -61,11 +61,11 @@ class PointLinkingPlan:
     """第 6 步输出。
 
     属性:
-        links: 每个导套四条、当前共八条的完全二部图连接。
+        links: 每个导套四条的完全二部图连接。
         radius_mm: 连接管半径。
         curve_resolution: Blender 实体化分辨率。
         recut_sleeve_bore: 是否在实体化后复切固定孔。
-        connection_type: 当前实现的连接类型。
+        connection_type: 连接类型。
         press_beam_links_included: 是否包含第 5 步按压梁柱连接。
     """
 
@@ -144,7 +144,7 @@ def link_selected_points(
            再生成终点控制柄。
         5. 用四个控制点生成三次贝塞尔曲线，离散样本数为
            ``max(16, int(d / max(0.35 * radius_mm, 0.15)) + 1)``。
-        6. 返回纯几何计划，并明确记录当前不包含按压梁柱连接。
+        6. 返回控制点、中心线和实体化参数。
 
         本函数不创建 Blender 对象。
     """

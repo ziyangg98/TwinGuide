@@ -20,7 +20,7 @@ class SleeveAnchorPoint:
     """一个导套侧锚点及其可行性诊断。
 
     属性:
-        label: 锚点标签，当前为 ``lower`` 或 ``upper``。
+        label: 锚点标签，取 ``lower`` 或 ``upper``。
         axial_fraction: 锚点高度占导套总高的比例。
         axial_position_mm: 锚点的轴向坐标，单位为毫米。
         section_center: 该高度处的导套轴线中心。
@@ -28,6 +28,7 @@ class SleeveAnchorPoint:
         feasible: 是否找到符合规则的外壁点。
         reason: 不可行原因；可行时为 ``None``。
     """
+
     label: str
     axial_fraction: float
     axial_position_mm: float
@@ -47,6 +48,7 @@ class SleeveAnchorSelection:
         lower: 四分之一高度的锚点。
         upper: 四分之三高度的锚点。
     """
+
     guide_index: int
     radial_direction: Vec3 | None
     lower: SleeveAnchorPoint
@@ -66,6 +68,7 @@ class SleeveAnchorPlan:
     属性:
         selections: 按导套顺序排列的锚点选择结果。
     """
+
     selections: tuple[SleeveAnchorSelection, ...]
 
 
@@ -126,21 +129,29 @@ def _anchor_at_fraction(
     center = guide.center + guide.axis * axial_position
     if direction is None:
         return SleeveAnchorPoint(
-            label, fraction, axial_position, center, None, False,
+            label,
+            fraction,
+            axial_position,
+            center,
+            None,
+            False,
             "平台径向无法确定",
         )
     position = center + direction * guide.body_radius_mm
     if not _is_exposed_body_wall(guide, direction, axial_position):
         return SleeveAnchorPoint(
-            label, fraction, axial_position, center, None, False,
+            label,
+            fraction,
+            axial_position,
+            center,
+            None,
+            False,
             "径向射线未与暴露的主体外圆弧相交",
         )
     return SleeveAnchorPoint(label, fraction, axial_position, center, position, True)
 
 
-def select_sleeve_anchors(
-    case: CaseAnalysis, sleeves: SleeveGenerationResult
-) -> SleeveAnchorPlan:
+def select_sleeve_anchors(case: CaseAnalysis, sleeves: SleeveGenerationResult) -> SleeveAnchorPlan:
     """在每个导套主体外壁的四分之一和四分之三高度选点。
 
     参数:
@@ -166,7 +177,6 @@ def select_sleeve_anchors(
         5. 候选点落入开口或平台非圆弧区时，返回
            ``feasible=False`` 和失败原因，不尝试旋转或备用选点。
 
-        该函数不读取牙科导板点、连线或牙位结果。
     """
 
     if case.guide_sleeves != sleeves.sleeves:

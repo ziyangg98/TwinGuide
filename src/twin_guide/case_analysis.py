@@ -11,7 +11,7 @@ from twin_guide.blender.mesh_queries import (
     sample_mesh_surface,
     separate_connected_components,
 )
-from twin_guide.blender.scene import clear_scene
+from twin_guide.blender.scene import clear_scene, duplicate_mesh_object
 from twin_guide.blender.stl_io import import_stl_mesh
 from twin_guide.config import CaseConfig
 from twin_guide.errors import GeometryError
@@ -34,12 +34,15 @@ from twin_guide.sleeve_generation import (
 
 
 def _load_generation_meshes(config: CaseConfig) -> GenerationMeshes:
-    """导入生成阶段所需的牙科导板和导套装配体 STL。"""
+    """导入病例配置中的三个 STL 网格。"""
 
     return GenerationMeshes(
         template_mesh=import_stl_mesh(config.inputs.template, "template_mesh"),
         guide_sleeve_assembly_mesh=import_stl_mesh(
             config.inputs.guide_sleeve_assembly, "guide_sleeve_assembly_mesh"
+        ),
+        patient_dentition_mesh=import_stl_mesh(
+            config.inputs.patient_dentition, "patient_dentition_mesh"
         ),
     )
 
@@ -102,7 +105,11 @@ def analyze_case(config: CaseConfig) -> CaseAnalysis:
     if not template_samples:
         raise GeometryError("牙科导板网格不存在可采样表面")
     template_bvh = build_bvh(input_meshes.template_mesh)
-    components = separate_connected_components(input_meshes.guide_sleeve_assembly_mesh)
+    assembly_working_mesh = duplicate_mesh_object(
+        input_meshes.guide_sleeve_assembly_mesh,
+        "guide_sleeve_assembly_components",
+    )
+    components = separate_connected_components(assembly_working_mesh)
     center = _template_center(input_meshes.template_mesh, template_samples)
     sleeve_generation = recognize_and_build_sleeves(
         SleeveGenerationInputs(

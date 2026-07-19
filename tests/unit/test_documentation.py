@@ -11,11 +11,14 @@ SOURCE_ROOT = Path(__file__).parents[2] / "src" / "twin_guide"
 CHINESE_TEXT = re.compile(r"[\u3400-\u9fff]")
 PUBLIC_FUNCTIONS = {
     "__init__.py": {"generate_guide", "validate_guide", "run_generation_process"},
+    "clearance_adjustment.py": {"adjust_clearance"},
     "point_linking.py": {"link_selected_points"},
+    "press_beam_points.py": {"select_press_beam_points"},
     "sleeve_anchors.py": {"select_sleeve_anchors"},
     "sleeve_generation.py": {"recognize_and_build_sleeves"},
     "template_link_points.py": {"select_template_link_points"},
     "template_anchors.py": {"select_template_points"},
+    "tooth_identification.py": {"identify_tooth_positions"},
     "window_cutouts.py": {"plan_window_cutouts"},
 }
 

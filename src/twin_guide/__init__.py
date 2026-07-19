@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+from twin_guide.clearance_adjustment import adjust_clearance
 from twin_guide.config import CaseConfig
 from twin_guide.models import BuildArtifacts, ValidationResult
 from twin_guide.point_linking import (
@@ -10,6 +11,7 @@ from twin_guide.point_linking import (
     PointLinkingPlan,
     link_selected_points,
 )
+from twin_guide.press_beam_points import select_press_beam_points
 from twin_guide.sleeve_anchors import (
     SleeveAnchorPlan,
     SleeveAnchorPoint,
@@ -28,6 +30,7 @@ from twin_guide.template_link_points import (
     TemplateLinkPointPlan,
     select_template_link_points,
 )
+from twin_guide.tooth_identification import identify_tooth_positions
 from twin_guide.types import (
     GenerationContext,
     GenerationProcessResult,
@@ -65,11 +68,14 @@ __all__ = [
     "TemplatePointSelectionConfig",
     "ValidationResult",
     "WindowCutoutPlan",
+    "adjust_clearance",
     "generate_guide",
+    "identify_tooth_positions",
     "link_selected_points",
     "plan_window_cutouts",
     "recognize_and_build_sleeves",
     "run_generation_process",
+    "select_press_beam_points",
     "select_sleeve_anchors",
     "select_template_link_points",
     "select_template_points",
@@ -97,6 +103,13 @@ def generate_guide(config: CaseConfig) -> BuildArtifacts:
 
     返回:
         导出的 STL 和诊断图路径。
+
+    异常:
+        TwinGuideError: 病例读取、几何计算、Blender 建模或导出失败。
+
+    算法说明:
+        分析三个病例网格，依次计算导套、切口、联建选点和曲线连接，
+        再调用 Blender 完成实体化、布尔运算、固定孔复切、网格清理和 STL 导出。
     """
 
     from twin_guide.guide_generation import generate_guide as run_pipeline
@@ -113,6 +126,13 @@ def validate_guide(model_path: str | Path, config: CaseConfig) -> tuple[Validati
 
     返回:
         拓扑、导套保留、连接管、导孔、窗口和手机净距检查结果。
+
+    异常:
+        TwinGuideError: STL 读取、病例分析或几何检查失败。
+
+    算法说明:
+        读取导出 STL 和病例基准，分别计算网格拓扑、导套保留、连接管、
+        导孔、窗口和牙科手机净距指标，每项检查返回独立的 ``ValidationResult``。
     """
 
     from twin_guide.guide_validation import validate_guide as run_validation
@@ -128,6 +148,13 @@ def run_generation_process(config: CaseConfig) -> GenerationProcessResult:
 
     返回:
         各阶段的执行状态、输出和共享上下文。
+
+    异常:
+        TwinGuideError: 病例读取或任一已执行几何步骤失败。
+
+    算法说明:
+        分析病例后依次执行第 1、3、4、6 步，将输出写入 ``GenerationContext``；
+        第 2、5、7 步记录为 ``skipped``。每一步均生成一个 ``StageResult``。
     """
 
     from twin_guide.generation_process import run_generation_process as execute

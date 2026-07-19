@@ -1,19 +1,23 @@
-"""第 7 步预留模块：避让空间调整。"""
+"""避让空间调整接口。"""
 
 from twin_guide.types import GenerationContext
 
 
 def adjust_clearance(context: GenerationContext) -> None:
-    """声明第 7 步未来接口。
+    """调整导板结构的避让空间。
 
     参数:
-        context: 生成流程上下文，当前仅用于锁定未来签名。
+        context: 生成过程的几何结果。
 
     返回:
-        本预留函数不返回有效结果。
+        无。函数实现后将改为避让空间调整结果类型。
 
     异常:
-        NotImplementedError: 始终抛出，不将净距验证冒充为几何调整。
+        NotImplementedError: 避让空间调整尚未实现。
+
+    算法说明:
+        目标实现计算连接结构与患者牙列、牙科手机运动包络和功能保护区的净距，
+        并在保持端点与连接半径的条件下调整曲线控制点。
     """
 
     del context

@@ -1,8 +1,7 @@
-通用几何与 Blender 后端
+几何工具与 Blender 建模
 =======================
 
-本节收录各步共用的几何工具和 Blender 实体化后端。
-它们不定义新的业务阶段，也不应跨过公开阶段接口读取其他阶段的内部数据。
+共享几何计算、Blender 实体化、布尔运算和 STL 读写接口。
 
 .. automodule:: twin_guide.geometry
 
@@ -11,6 +10,7 @@
 .. automodule:: twin_guide.blender.rendering
 
 .. automodule:: twin_guide.errors
+   :no-index:
 
 .. automodule:: twin_guide.blender.scene
 

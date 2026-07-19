@@ -69,6 +69,7 @@ class TemplateAnchorPoint:
         normal: 牙科导板表面单位法向。
         polygon_index: 来源牙科导板多边形索引，用于确定性排序和诊断。
     """
+
     position: Vec3
     normal: Vec3
     polygon_index: int
@@ -88,6 +89,7 @@ class TemplatePointSelection:
         minimum_span_mm: 实际使用的最小左右间距。
         reason: 不可行原因；可行时为 ``None``。
     """
+
     guide_index: int
     sleeve_midpoint: Vec3
     base_point: TemplateAnchorPoint | None
@@ -107,6 +109,7 @@ class TemplatePointSelection:
 @dataclass(frozen=True, slots=True)
 class TemplatePointPlan:
     """所有导套的牙科导板侧选点计划。"""
+
     selections: tuple[TemplatePointSelection, ...]
 
 
@@ -127,7 +130,9 @@ def _remaining_template_samples(
     return tuple(
         sample
         for sample in case.template_samples
-        if all(window_distance(sample.position, window) >= clearance_mm for window in cutouts.windows)
+        if all(
+            window_distance(sample.position, window) >= clearance_mm for window in cutouts.windows
+        )
         and all(
             channel_distance(sample.position, channel.start, channel.end, channel.radius_mm)
             >= clearance_mm
@@ -187,33 +192,53 @@ def _select_template_pair(
     minimum_span = config.minimum_span_mm(guide.body_radius_mm)
     if not sleeve.feasible:
         return TemplatePointSelection(
-            guide.guide_index, sleeve.lower.section_center, None, None, None, None,
-            minimum_span, "导套锚点不可行",
+            guide.guide_index,
+            sleeve.lower.section_center,
+            None,
+            None,
+            None,
+            None,
+            minimum_span,
+            "导套锚点不可行",
         )
     midpoint = (sleeve.lower.position + sleeve.upper.position) * 0.5
     ranked = sorted(
         samples, key=lambda sample: (midpoint.distance_to(sample.position), sample.polygon_index)
-    )[:config.surface_sample_limit]
+    )[: config.surface_sample_limit]
     if not ranked:
         return TemplatePointSelection(
-            guide.guide_index, midpoint, None, None, None, None, minimum_span,
+            guide.guide_index,
+            midpoint,
+            None,
+            None,
+            None,
+            None,
+            minimum_span,
             "牙科导板上没有剩余可选样本",
         )
     base = _template_anchor(ranked[0])
     lateral = _sleeve_side_direction(guide, sleeve)
     if lateral is None:
         return TemplatePointSelection(
-            guide.guide_index, midpoint, base, None, None, None, minimum_span,
+            guide.guide_index,
+            midpoint,
+            base,
+            None,
+            None,
+            None,
+            minimum_span,
             "局部左右方向无法确定",
         )
     left = tuple(
-        sample for sample in ranked
+        sample
+        for sample in ranked
         if (sample.position - midpoint).dot(lateral) < -_SURFACE_TOLERANCE
-    )[:config.candidate_limit]
+    )[: config.candidate_limit]
     right = tuple(
-        sample for sample in ranked
+        sample
+        for sample in ranked
         if (sample.position - midpoint).dot(lateral) > _SURFACE_TOLERANCE
-    )[:config.candidate_limit]
+    )[: config.candidate_limit]
     best: tuple[tuple[float, float, int, int], SurfaceSample, SurfaceSample] | None = None
     for left_sample in left:
         for right_sample in right:
@@ -221,19 +246,33 @@ def _select_template_pair(
             if span < minimum_span:
                 continue
             score = (
-                midpoint.distance_to(left_sample.position) + midpoint.distance_to(right_sample.position),
-                span, left_sample.polygon_index, right_sample.polygon_index,
+                midpoint.distance_to(left_sample.position)
+                + midpoint.distance_to(right_sample.position),
+                span,
+                left_sample.polygon_index,
+                right_sample.polygon_index,
             )
             if best is None or score < best[0]:
                 best = score, left_sample, right_sample
     if best is None:
         return TemplatePointSelection(
-            guide.guide_index, midpoint, base, lateral, None, None, minimum_span,
+            guide.guide_index,
+            midpoint,
+            base,
+            lateral,
+            None,
+            None,
+            minimum_span,
             "没有分居两侧的牙科导板点对满足最小跨度",
         )
     return TemplatePointSelection(
-        guide.guide_index, midpoint, base, lateral,
-        _template_anchor(best[1]), _template_anchor(best[2]), minimum_span,
+        guide.guide_index,
+        midpoint,
+        base,
+        lateral,
+        _template_anchor(best[1]),
+        _template_anchor(best[2]),
+        minimum_span,
     )
 
 
@@ -272,10 +311,11 @@ def select_template_points(
         6. 没有双侧候选或没有组合满足最小间距时，保留诊断原因，
            不使用同侧两点替代。
 
-        输出不包含曲线或 Blender 网格。
     """
     samples = _remaining_template_samples(case, cutouts, config.template_clearance_mm)
-    return TemplatePointPlan(tuple(
-        _select_template_pair(guide, anchor, samples, config)
-        for guide, anchor in zip(sleeves.sleeves, sleeve_anchors.selections, strict=True)
-    ))
+    return TemplatePointPlan(
+        tuple(
+            _select_template_pair(guide, anchor, samples, config)
+            for guide, anchor in zip(sleeves.sleeves, sleeve_anchors.selections, strict=True)
+        )
+    )

@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 750" role="img" aria-labelledby="title desc">
+  <title id="title">牙位识别</title>
+  <desc id="desc">牙位识别模块的占位图</desc>
+  <rect width="1000" height="750" rx="28" fill="#f5f6f7"/>
+  <path d="M210 390 C250 205 750 205 790 390" fill="none" stroke="#9aa3aa" stroke-width="44" stroke-linecap="round"/>
+  <g fill="#ffffff" stroke="#707980" stroke-width="6">
+    <ellipse cx="285" cy="340" rx="54" ry="68"/><ellipse cx="390" cy="290" rx="54" ry="68"/>
+    <ellipse cx="500" cy="270" rx="54" ry="68"/><ellipse cx="610" cy="290" rx="54" ry="68"/>
+    <ellipse cx="715" cy="340" rx="54" ry="68"/>
+  </g>
+  <g font-family="sans-serif" font-size="30" text-anchor="middle" fill="#45515a">
+    <text x="285" y="350">1</text><text x="390" y="300">2</text><text x="500" y="280">3</text>
+    <text x="610" y="300">4</text><text x="715" y="350">5</text>
+  </g>
+  <text x="500" y="520" font-family="sans-serif" font-size="48" text-anchor="middle" fill="#33404a">牙位识别</text>
+  <text x="500" y="575" font-family="sans-serif" font-size="30" text-anchor="middle" fill="#7a858d">待实现</text>
+</svg>

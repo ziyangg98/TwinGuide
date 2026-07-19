@@ -88,6 +88,11 @@ class EndToEndTests(unittest.TestCase):
                     "guide_assembly.png",
                     "guide_connectors.png",
                     "cutouts.png",
+                    "input_template.png",
+                    "input_sleeves.png",
+                    "input_patient_dentition.png",
+                    "reconstructed_sleeves.png",
+                    "link_points.png",
                 },
             )
             self.assertEqual(

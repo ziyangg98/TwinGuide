@@ -12,7 +12,12 @@ from twin_guide.config import RenderParameters
 
 COLORS = {
     "final": (0.72, 0.74, 0.78, 1.0),
+    "template": (0.30, 0.62, 0.86, 1.0),
+    "sleeve": (0.58, 0.61, 0.66, 1.0),
+    "sleeve_point": (0.90, 0.22, 0.12, 1.0),
+    "template_point": (1.0, 0.76, 0.08, 1.0),
     "connector": (0.95, 0.55, 0.10, 1.0),
+    "channel": (0.88, 0.38, 0.12, 0.42),
     "operation": (1.0, 0.30, 0.02, 0.45),
     "observation": (0.0, 0.85, 0.95, 0.48),
 }
@@ -71,6 +76,11 @@ def render_objects(
     scene.render.engine = "BLENDER_WORKBENCH"
     scene.display.shading.light = "STUDIO"
     scene.display.shading.color_type = "MATERIAL"
+    scene.display.shading.show_shadows = True
+    scene.display.shading.show_cavity = True
+    scene.display.shading.cavity_type = "WORLD"
+    scene.display.shading.curvature_ridge_factor = 1.25
+    scene.display.shading.curvature_valley_factor = 1.0
     scene.display.shading.background_type = "VIEWPORT"
     scene.display.shading.background_color = (0.94, 0.94, 0.94)
     scene.view_settings.view_transform = "Standard"

@@ -103,10 +103,11 @@ class TemplateFrame:
 
 @dataclass(frozen=True, slots=True)
 class GenerationMeshes:
-    """一个病例中已读取的 Blender 输入对象。"""
+    """一个病例中已读取的 Blender 输入网格。"""
 
     template_mesh: bpy.types.Object
     guide_sleeve_assembly_mesh: bpy.types.Object
+    patient_dentition_mesh: bpy.types.Object
 
 
 @dataclass(frozen=True, slots=True)
