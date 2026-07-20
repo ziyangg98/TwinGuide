@@ -4,6 +4,8 @@
 
 `CaseConfig` 是文件路径和数值参数的唯一配置入口。
 `analyze_case()` 读取网格，建立 `CaseAnalysis`，供各几何步骤共用。
+导柱的八个几何参数由 `SleeveParameters` 提供，连接柱直径由
+`GeometryParameters` 提供。
 
 ## 步骤结果
 
@@ -18,9 +20,8 @@
 | `clearance_adjustment` | 尚未定义 | `skipped`；预留扩展 |
 
 预留扩展的结果类型将在对应几何模块实现时定义。在步骤未执行时，
-`GenerationContext` 的对应字段为 `None`。当前 `window_cutouts` 只读取 `CaseAnalysis` 和
-`SleeveGenerationResult`；它使用导板局部标架定位观察窗，尚未读取 `tooth_identification`。
-目标数据流中，观察窗规划必须增加牙位和牙面区域输入。
+`GenerationContext` 的对应字段为 `None`。`window_cutouts` 读取 `CaseAnalysis` 和
+`SleeveGenerationResult`。前牙观察缺口的位置由牙位确定，当前病例在导板局部标架中使用临时估计坐标。
 
 ## 建模与检查结果
 

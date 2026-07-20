@@ -1,14 +1,23 @@
 {
   "case_id": "case_r305_h500",
   "inputs": {
-    "template": "../../data/inputs/ring-guide.stl",
-    "guide_sleeve_assembly": "../../data/inputs/guide-sleeve-47-34-10-12-s-40s.stl",
-    "patient_dentition": "../../data/inputs/lbk.stl"
+    "template": "../../data/cases/single/tooth-47/input/ring-guide.stl",
+    "guide_sleeve_assembly": "../../data/cases/single/tooth-47/input/guide-sleeve-47-34-10-12-s-40s.stl",
+    "patient_dentition": "../../data/cases/single/tooth-47/input/lbk.stl"
+  },
+  "sleeve": {
+    "inner_diameter_mm": 2.10,
+    "outer_diameter_mm": 4.3,
+    "height_mm": 16.373,
+    "platform_width_mm": 2.036,
+    "platform_height_mm": 9.875,
+    "closed_bore_height_mm": 4.777,
+    "inner_arc_angle_degrees": 264.934,
+    "outer_arc_angle_degrees": 211.684
   },
   "geometry": {
-    "template_channel_radius_mm": 3.05,
     "channel_axial_margin_mm": 5.0,
-    "connector_radius_mm": 1.2,
+    "connector_diameter_mm": 2.3,
     "fusion_voxel_size_mm": 0.2
   },
   "windows": {
@@ -21,7 +30,7 @@
   },
   "validation": {
     "handpiece": {
-      "mesh": "../../data/inputs/handpiece-47.stl",
+      "mesh": "../../data/cases/single/tooth-47/input/handpiece-47.stl",
       "head_crop_radius_mm": 10.0,
       "minimum_clearance_mm": 1.0,
       "maximum_tilt_degrees": 5.0,

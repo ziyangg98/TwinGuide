@@ -32,7 +32,9 @@ Twinguide 面向双导套牙科导板的自动化建模，负责导套几何重�
 
 > **当前程序：** 程序重建两个导套，规划导孔、操作窗和观察窗，
 > 为每个导套选择两个导套侧锚点和两个导板侧锚点，生成共八条曲线连接管，
-> 并输出 `twin_guide.stl`。观察窗当前由导板几何启发式定位。牙位驱动的观察窗定位、
+> 并输出 `twin_guide.stl`。观察缺口的位置由前牙牙位确定；当前病例临时使用前牙中线的估计坐标。
+> 当前缺口宽度为 7.0 mm，向导板内的切入深度为 5.5 mm。
+> 牙位精细识别、
 > 按压结构和净距调整仍待实现。
 
 ## 功能与结果
@@ -47,7 +49,7 @@ Twinguide 面向双导套牙科导板的自动化建模，负责导套几何重�
     <td align="center"><img src="docs/images/cutout-planning.png" width="100%" alt="导孔与窗口规划"></td>
     <td align="center"><img src="docs/images/link-point-selection.png" width="100%" alt="联建锚点选择"></td>
   </tr>
-  <tr><td align="center">3. 导孔与窗口规划（当前为几何启发式）</td><td align="center">4. 导套与牙科导板联建锚点选择</td></tr>
+  <tr><td align="center">3. 导孔与窗口规划</td><td align="center">4. 导套与牙科导板联建锚点选择</td></tr>
   <tr>
     <td align="center"><img src="docs/images/press-beam-placeholder.svg" width="100%" alt="按压梁柱锚点选择占位图（待实现）"></td>
     <td align="center"><img src="docs/images/point-linking.png" width="100%" alt="光滑连接管生成"></td>
@@ -73,7 +75,9 @@ python -m pip install .
 blender -b --python run.py -- generate --config examples/case.json
 ```
 
-配置文件为 `examples/case.json`。生成结果写入其 `output_directory`。
+配置文件为 `examples/case.json`，生成结果写入其中指定的 `output_directory`。
+当前病例的导柱内径为 2.10 mm、主体外径为 4.30 mm、连接柱直径为 2.30 mm；
+完整参数见使用指南的“病例配置”页。
 
 <!-- sphinx-homepage-end -->
 

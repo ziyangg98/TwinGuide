@@ -28,8 +28,8 @@ def generate_guide(config: CaseConfig) -> BuildArtifacts:
     算法说明:
         程序先分析病例并规划第 3 步切口，再将导套分析封装为第 1 步输出，
         依次调用第 4 步选点、第 6 步曲线规划和 Blender 建模导出。
-        牙科导板选点和曲线连接使用病例配置中的同一个
-        ``connector_radius_mm``。几何生成必须在 Blender 提供的 Python 环境中运行。
+        牙科导板选点和曲线连接均使用病例配置中的
+        ``connector_diameter_mm``。几何生成必须在 Blender 提供的 Python 环境中运行。
     """
 
     case = analyze_case(config)

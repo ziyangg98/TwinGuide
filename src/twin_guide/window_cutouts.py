@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from twin_guide.geometry import Vec3, orthonormal_tangent
+from twin_guide.geometry import orthonormal_tangent
 from twin_guide.models import (
     CaseAnalysis,
     CutoutPlan,
@@ -15,20 +15,26 @@ from twin_guide.types import SleeveGenerationResult
 
 WindowCutoutPlan = CutoutPlan
 
-OBSERVATION_FORWARD_FRACTION = 0.05
+OBSERVATION_TARGET_LATERAL_MM = 0.0
+OBSERVATION_TARGET_DEPTH_MM = 22.4
+OBSERVATION_WIDTH_MM = 7.0
+OBSERVATION_OPEN_HEIGHT_FRACTION = 0.60
+OBSERVATION_DEPTH_MM = 5.5
+OBSERVATION_OUTSIDE_MARGIN_MM = 0.8
+OBSERVATION_EDGE_MARGIN_MM = 2.0
 
 
 def _plan_channels(case: CaseAnalysis) -> tuple[CylinderCutout, CylinderCutout]:
     """沿两个导套轴线构造带轴向余量的牙科导板通道。"""
 
     axial_margin_mm = case.config.geometry.channel_axial_margin_mm
-    template_channel_radius_mm = case.config.geometry.template_channel_radius_mm
+    guide_inner_radius_mm = case.config.sleeve.inner_radius_mm
     channels = tuple(
         CylinderCutout(
             name=f"guide_{guide.guide_index}_channel",
             start=guide.center + guide.axis * (guide.axial_min_mm - axial_margin_mm),
             end=guide.center + guide.axis * (guide.axial_max_mm + axial_margin_mm),
-            radius_mm=template_channel_radius_mm,
+            radius_mm=guide_inner_radius_mm,
         )
         for guide in case.guide_sleeves
     )
@@ -112,79 +118,73 @@ def _nearest_surface_sample(
     )
 
 
-def _center_observation_window(
+def _observation_notch(
     case: CaseAnalysis,
-    sample: SurfaceSample,
-    vertical: Vec3,
-) -> tuple[Vec3, float]:
-    """根据样本附近的竖直高度范围对观察窗居中并计算深度。"""
+    name: str,
+    lateral_mm: float,
+    depth_mm: float,
+    width_mm: float,
+) -> WindowCutout:
+    """从导板下缘向上构造带水平止线的开放式观察缺口。"""
+
+    frame = case.template_frame
+    target_sample = _nearest_surface_sample(case, lateral_mm, depth_mm)
+    surface_normal = target_sample.normal.normalized()
+    if surface_normal.dot(frame.depth) < 0.0:
+        surface_normal = -surface_normal
+    tangent = orthonormal_tangent(surface_normal, frame.lateral)
+    bitangent = surface_normal.cross(tangent).normalized()
+    if bitangent.dot(frame.normal) < 0.0:
+        tangent = -tangent
+        bitangent = -bitangent
 
     local_samples = tuple(
         candidate
         for candidate in case.template_samples
-        if (
-            candidate.position
-            - sample.position
-            - vertical * (candidate.position - sample.position).dot(vertical)
-        ).length
-        <= 4.0
+        if abs(frame.coordinates(candidate.position)[0] - lateral_mm)
+        <= width_mm * 0.5 + 1.0
+        and abs(frame.coordinates(candidate.position)[1] - depth_mm) <= 5.0
     )
-    heights = tuple(
-        (candidate.position - sample.position).dot(vertical)
+    height_offsets = tuple(
+        (candidate.position - target_sample.position).dot(bitangent)
         for candidate in (local_samples or case.template_samples)
     )
-    lower_height, upper_height = min(heights), max(heights)
-    center = sample.position + vertical * ((lower_height + upper_height) * 0.5)
-    return center, upper_height - lower_height + 2.0
-
-
-def _plan_observation_windows(
-    case: CaseAnalysis, operation_window: WindowCutout
-) -> tuple[WindowCutout, ...]:
-    """在牙科导板左右外侧规划观察窗，并跳过与操作窗过近的候选。"""
-
-    coordinates = tuple(
-        case.template_frame.coordinates(sample.position) for sample in case.template_samples
+    lower_height, upper_height = min(height_offsets), max(height_offsets)
+    horizontal_cut_height = lower_height + (
+        upper_height - lower_height
+    ) * OBSERVATION_OPEN_HEIGHT_FRACTION
+    open_edge_height = lower_height - OBSERVATION_EDGE_MARGIN_MM
+    opening_height = horizontal_cut_height - open_edge_height
+    center_height = (horizontal_cut_height + open_edge_height) * 0.5
+    center = (
+        target_sample.position
+        + bitangent * center_height
+        - surface_normal * (OBSERVATION_DEPTH_MM * 0.5 - OBSERVATION_OUTSIDE_MARGIN_MM)
     )
-    lateral_values = tuple(value[0] for value in coordinates)
-    depth_values = tuple(value[1] for value in coordinates)
-    lateral_min, lateral_max = min(lateral_values), max(lateral_values)
-    depth_midpoint = (min(depth_values) + max(depth_values)) * 0.5
-    depth_span = max(depth_values) - min(depth_values)
-    forward_shift_mm = depth_span * OBSERVATION_FORWARD_FRACTION
-    lateral_span = lateral_max - lateral_min
-    targets = (
-        ("left", lateral_min + lateral_span * 0.10),
-        ("right", lateral_max - lateral_span * 0.10),
+    return WindowCutout(
+        name=f"observation_window_{name}",
+        purpose=WindowPurpose.OBSERVATION,
+        center=center,
+        normal=surface_normal,
+        tangent=tangent,
+        width_mm=width_mm,
+        height_mm=opening_height,
+        depth_mm=OBSERVATION_DEPTH_MM,
+        corner_radius_mm=0.35,
     )
-    windows = []
-    vertical = operation_window.normal.normalized()
-    for name, lateral_mm in targets:
-        baseline_sample = _nearest_surface_sample(case, lateral_mm, depth_midpoint)
-        baseline_center, _ = _center_observation_window(case, baseline_sample, vertical)
-        observation_depth = (
-            case.template_frame.coordinates(baseline_sample.position)[1] + forward_shift_mm
-        )
-        shifted_sample = _nearest_surface_sample(case, lateral_mm, observation_depth)
-        _, depth_mm = _center_observation_window(case, shifted_sample, vertical)
-        center = baseline_center + case.template_frame.depth * forward_shift_mm
-        if center.distance_to(operation_window.center) <= operation_window.width_mm * 0.6:
-            continue
-        tangent = orthonormal_tangent(vertical, case.template_frame.lateral)
-        windows.append(
-            WindowCutout(
-                name=f"observation_window_{name}",
-                purpose=WindowPurpose.OBSERVATION,
-                center=center,
-                normal=vertical,
-                tangent=tangent,
-                width_mm=3.0,
-                height_mm=3.0,
-                depth_mm=depth_mm,
-                corner_radius_mm=0.45,
-            )
-        )
-    return tuple(windows)
+
+
+def _plan_observation_windows(case: CaseAnalysis) -> tuple[WindowCutout, ...]:
+    """按当前病例的固定前牙坐标规划一个浅层开放观察缺口。"""
+
+    notch = _observation_notch(
+        case,
+        "anterior",
+        OBSERVATION_TARGET_LATERAL_MM,
+        OBSERVATION_TARGET_DEPTH_MM,
+        OBSERVATION_WIDTH_MM,
+    )
+    return (notch,)
 
 
 def plan_window_cutouts(
@@ -214,5 +214,5 @@ def plan_window_cutouts(
     operation_window = _plan_operation_window(case)
     return CutoutPlan(
         channels=_plan_channels(case),
-        windows=(operation_window, *_plan_observation_windows(case, operation_window)),
+        windows=(operation_window, *_plan_observation_windows(case)),
     )

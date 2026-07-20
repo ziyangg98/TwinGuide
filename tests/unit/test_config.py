@@ -31,10 +31,19 @@ class CaseConfigTests(unittest.TestCase):
                 "guide_sleeve_assembly": "guide_sleeve_assembly.stl",
                 "patient_dentition": "patient_dentition.stl",
             },
+            "sleeve": {
+                "inner_diameter_mm": 2.10,
+                "outer_diameter_mm": 4.3,
+                "height_mm": 16.373,
+                "platform_width_mm": 2.036,
+                "platform_height_mm": 9.875,
+                "closed_bore_height_mm": 4.777,
+                "inner_arc_angle_degrees": 264.934,
+                "outer_arc_angle_degrees": 211.684,
+            },
             "geometry": {
-                "template_channel_radius_mm": 3.05,
                 "channel_axial_margin_mm": 5.0,
-                "connector_radius_mm": 1.2,
+                "connector_diameter_mm": 2.3,
                 "fusion_voxel_size_mm": 0.2,
             },
             "windows": {
@@ -63,8 +72,18 @@ class CaseConfigTests(unittest.TestCase):
         config = CaseConfig.from_json(self._write_config(self._valid_config_data()))
 
         self.assertEqual(config.case_id, "case_01")
-        self.assertEqual(config.geometry.template_channel_radius_mm, 3.05)
-        self.assertEqual(config.geometry.connector_radius_mm, 1.2)
+        self.assertEqual(config.sleeve.inner_diameter_mm, 2.10)
+        self.assertEqual(config.sleeve.inner_radius_mm, 1.05)
+        self.assertEqual(config.sleeve.outer_diameter_mm, 4.3)
+        self.assertEqual(config.sleeve.outer_radius_mm, 2.15)
+        self.assertEqual(config.sleeve.height_mm, 16.373)
+        self.assertEqual(config.sleeve.platform_width_mm, 2.036)
+        self.assertEqual(config.sleeve.platform_height_mm, 9.875)
+        self.assertEqual(config.sleeve.closed_bore_height_mm, 4.777)
+        self.assertEqual(config.sleeve.inner_arc_angle_degrees, 264.934)
+        self.assertEqual(config.sleeve.outer_arc_angle_degrees, 211.684)
+        self.assertEqual(config.geometry.connector_diameter_mm, 2.3)
+        self.assertEqual(config.geometry.connector_radius_mm, 1.15)
         self.assertIsNotNone(config.validation)
         if config.validation is None:
             self.fail("Expected validation configuration")
@@ -111,6 +130,24 @@ class CaseConfigTests(unittest.TestCase):
         self.assertIsInstance(handpiece_data, dict)
         handpiece_data["withdrawal_distances_mm"] = [4.0, 8.0]
         with self.assertRaisesRegex(ConfigurationError, "必须包含 0"):
+            CaseConfig.from_json(self._write_config(config_data))
+
+    def test_rejects_outer_guide_diameter_not_larger_than_inner(self):
+        config_data = self._valid_config_data()
+        sleeve_data = config_data["sleeve"]
+        self.assertIsInstance(sleeve_data, dict)
+        sleeve_data["outer_diameter_mm"] = 2.10
+
+        with self.assertRaisesRegex(ConfigurationError, "必须大于"):
+            CaseConfig.from_json(self._write_config(config_data))
+
+    def test_rejects_missing_sleeve_parameter(self):
+        config_data = self._valid_config_data()
+        sleeve_data = config_data["sleeve"]
+        self.assertIsInstance(sleeve_data, dict)
+        del sleeve_data["height_mm"]
+
+        with self.assertRaisesRegex(ConfigurationError, "缺少必填字段：height_mm"):
             CaseConfig.from_json(self._write_config(config_data))
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, replace
 
 import bpy
@@ -13,6 +14,7 @@ from twin_guide.blender.sleeve_reconstruction import (
     create_closed_sleeve_object,
     validate_sleeve_boolean_parameters,
 )
+from twin_guide.config import SleeveParameters
 from twin_guide.errors import GeometryError
 from twin_guide.geometry import (
     Vec3,
@@ -26,6 +28,7 @@ from twin_guide.geometry import (
 )
 from twin_guide.models import GuideSleeve, SurfaceSample, TemplateFrame
 from twin_guide.sleeve_estimation import estimate_sleeve_parameters, validate_reconstruction
+from twin_guide.sleeve_estimation.types import ParameterDiagnostic
 from twin_guide.types import SleeveGenerationResult
 
 MINIMUM_GUIDE_ALIGNMENT = 0.95
@@ -41,6 +44,7 @@ class SleeveGenerationInputs:
     template_bvh: BVHTree
     template_samples: tuple[SurfaceSample, ...]
     template_center: Vec3
+    sleeve_parameters: SleeveParameters
 
 
 @dataclass(frozen=True, slots=True)
@@ -251,16 +255,22 @@ def _template_frame(
     return TemplateFrame(inputs.template_center, depth.cross(normal).normalized(), depth, normal)
 
 
-def _build_sleeve(candidate: _GuideCandidate, intersection: Vec3, index: int) -> GuideSleeve:
-    """估计、重建并验证一个导套。
+def _build_sleeve(
+    candidate: _GuideCandidate,
+    intersection: Vec3,
+    index: int,
+    configured: SleeveParameters,
+) -> GuideSleeve:
+    """定位、重建并验证一个导套。
 
     参数:
         candidate: 已定向导套候选。
         intersection: 牙科导板参考交点。
         index: 输出导套编号。
+        configured: 病例配置中的导柱几何参数。
 
     返回:
-        包含估计参数和重建验证指标的导套。
+        包含配置参数和重建验证指标的导套。
     """
 
     source = mesh_object_to_triangle_data(candidate.guide_mesh)
@@ -270,6 +280,41 @@ def _build_sleeve(candidate: _GuideCandidate, intersection: Vec3, index: int) ->
         raise GeometryError(
             f"无法估计导套候选分量 {candidate.component_index}：{error}"
         ) from error
+    configured_values = {
+        "H": configured.height_mm,
+        "Wp": configured.platform_width_mm,
+        "hp": configured.platform_height_mm,
+        "hs": configured.closed_bore_height_mm,
+        "Rin": configured.inner_radius_mm,
+        "Rout": configured.outer_radius_mm,
+        "phi_in": math.radians(configured.inner_arc_angle_degrees),
+        "phi_out": math.radians(configured.outer_arc_angle_degrees),
+    }
+    diagnostics = tuple(
+        (
+            ParameterDiagnostic(
+                item.parameter,
+                True,
+                1,
+                message="采用病例配置",
+            )
+            if item.parameter in configured_values
+            else item
+        )
+        for item in parameters.diagnostics
+    )
+    parameters = replace(
+        parameters,
+        height=configured.height_mm,
+        platform_width=configured.platform_width_mm,
+        platform_height=configured.platform_height_mm,
+        closed_bore_height=configured.closed_bore_height_mm,
+        inner_radius=configured.inner_radius_mm,
+        outer_radius=configured.outer_radius_mm,
+        inner_arc_angle=configured_values["phi_in"],
+        outer_arc_angle=configured_values["phi_out"],
+        diagnostics=diagnostics,
+    )
     soft_diagnostics = {"hp", "Wp", "phi_out"}
     blocking = tuple(
         item for item in parameters.diagnostics
@@ -356,7 +401,12 @@ def recognize_and_build_sleeves(inputs: SleeveGenerationInputs) -> SleeveGenerat
         ),
     )
     sleeves = tuple(
-        _build_sleeve(candidate, intersection, index)
+        _build_sleeve(
+            candidate,
+            intersection,
+            index,
+            inputs.sleeve_parameters,
+        )
         for index, (candidate, intersection) in enumerate(ordered, 1)
     )
     return SleeveGenerationResult((sleeves[0], sleeves[1]), template_frame)

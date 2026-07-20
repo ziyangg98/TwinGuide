@@ -18,6 +18,9 @@ Python API 参考
 .. autoclass:: twin_guide.CaseConfig
    :members:
 
+.. autoclass:: twin_guide.SleeveParameters
+   :members:
+
 .. autoclass:: twin_guide.GenerationContext
    :members:
 
@@ -54,8 +57,8 @@ Python API 参考
 第 3 步：导孔与窗口规划
 ----------------------------------------
 
-现有接口读取病例分析和导套重建结果，按导板几何启发式生成导孔、操作窗和观察窗。
-牙位驱动的观察窗定位需要未来扩展该函数签名。
+现有接口读取病例分析和导套重建结果，生成导孔、操作窗和前牙观察缺口。
+观察缺口的位置由牙位确定，当前病例使用临时估计坐标。
 
 .. autofunction:: twin_guide.plan_window_cutouts
 

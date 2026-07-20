@@ -19,7 +19,8 @@ blender -b --python run.py -- generate --config examples/case.json
 
 `generate` 读取病例网格，完成导套重建、导孔与窗口规划、联建锚点选择和
 八条曲线连接管生成，再执行实体化、布尔运算、固定孔复切、网格清理和 STL 导出。
-当前观察窗由导板几何启发式定位；牙位驱动的定位、按压结构和净距调整不在本次生成中。
+观察缺口的位置由前牙牙位确定，当前病例使用临时估计坐标；
+按压结构和净距调整不在本次生成中。
 具体数据流见[生成过程](../process/index.md)。
 
 ## 查看计算过程
@@ -50,7 +51,7 @@ blender -b --python run.py -- validate \
 | `input_patient_dentition.png` | 患者牙列输入网格 |
 | `reconstructed_sleeves.png` | 导套参数化重建 |
 | `guide_assembly.png` | 牙科导板、重建导套和保留附件的装配关系 |
-| `cutouts.png` | 导孔、操作窗和观察窗 |
+| `cutouts.png` | 导孔、操作窗和前牙开放观察缺口 |
 | `link_points.png` | 导套侧和牙科导板侧锚点 |
 | `guide_connectors.png` | 曲线连接管 |
 | `guide_*.png` | 最终网格的标准视图 |

@@ -8,9 +8,10 @@ from twin_guide.case_analysis import analyze_case
 from twin_guide.models import WindowPurpose
 from twin_guide.types import SleeveGenerationResult, StageRunStatus
 from twin_guide.window_cutouts import (
-    OBSERVATION_FORWARD_FRACTION,
-    _center_observation_window,
-    _nearest_surface_sample,
+    OBSERVATION_DEPTH_MM,
+    OBSERVATION_TARGET_DEPTH_MM,
+    OBSERVATION_TARGET_LATERAL_MM,
+    OBSERVATION_WIDTH_MM,
     plan_window_cutouts,
 )
 
@@ -37,42 +38,16 @@ class EndToEndTests(unittest.TestCase):
                 for window in cutout_plan.windows
                 if window.purpose is WindowPurpose.OBSERVATION
             )
-            self.assertEqual(len(observation_windows), 2)
-            template_coordinates = tuple(
-                case_analysis.template_frame.coordinates(sample.position)
-                for sample in case_analysis.template_samples
-            )
-            lateral_values = tuple(value[0] for value in template_coordinates)
-            depth_values = tuple(value[1] for value in template_coordinates)
-            lateral_min, lateral_max = min(lateral_values), max(lateral_values)
-            depth_midpoint = (min(depth_values) + max(depth_values)) * 0.5
-            forward_shift_mm = (
-                max(depth_values) - min(depth_values)
-            ) * OBSERVATION_FORWARD_FRACTION
-            baseline_targets = {
-                "observation_window_left": lateral_min + (lateral_max - lateral_min) * 0.10,
-                "observation_window_right": lateral_max - (lateral_max - lateral_min) * 0.10,
-            }
-            vertical = cutout_plan.windows[0].normal.normalized()
+            self.assertEqual(len(observation_windows), 1)
             for window in observation_windows:
-                baseline_sample = _nearest_surface_sample(
-                    case_analysis,
-                    baseline_targets[window.name],
-                    depth_midpoint,
-                )
-                baseline_center, _ = _center_observation_window(
-                    case_analysis,
-                    baseline_sample,
-                    vertical,
-                )
-                baseline_lateral, baseline_depth, _ = case_analysis.template_frame.coordinates(
-                    baseline_center
-                )
-                window_lateral, window_depth, _ = case_analysis.template_frame.coordinates(
-                    window.center
-                )
-                self.assertAlmostEqual(window_lateral, baseline_lateral)
-                self.assertAlmostEqual(window_depth, baseline_depth + forward_shift_mm)
+                bitangent = window.normal.normalized().cross(window.tangent.normalized())
+                self.assertGreater(window.normal.dot(case_analysis.template_frame.depth), 0.0)
+                self.assertGreater(bitangent.dot(case_analysis.template_frame.normal), 0.0)
+                self.assertEqual(window.width_mm, OBSERVATION_WIDTH_MM)
+                self.assertGreater(window.height_mm, 3.0)
+                self.assertEqual(window.depth_mm, OBSERVATION_DEPTH_MM)
+            self.assertEqual(OBSERVATION_TARGET_LATERAL_MM, 0.0)
+            self.assertEqual(OBSERVATION_TARGET_DEPTH_MM, 22.4)
             build_artifacts = generate_guide(case_config)
             validation_results = validate_guide(build_artifacts.model_path, case_config)
 

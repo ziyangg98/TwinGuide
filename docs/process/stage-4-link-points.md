@@ -30,7 +30,7 @@
 | 参数 | 默认值 | 含义 |
 | --- | ---: | --- |
 | `template_clearance_mm` | 1.2 | 候选点到导孔和窗口的最小净距 |
-| `connector_radius_mm` | 1.2 | 连接管半径及左右点最小跨度的计算依据 |
+| `connector_diameter_mm` | 2.30 | 导柱与牙科导板之间的连接柱直径 |
 | `surface_sample_limit` | 4096 | 按距离保留的表面样本上限 |
 | `candidate_limit` | 512 | 每侧参与成对评分的候选上限 |
 

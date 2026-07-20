@@ -23,13 +23,44 @@ class InputMeshPaths:
 
 
 @dataclass(frozen=True, slots=True)
+class SleeveParameters:
+    """控制导柱形状的八个几何参数。"""
+
+    inner_diameter_mm: float
+    outer_diameter_mm: float
+    height_mm: float
+    platform_width_mm: float
+    platform_height_mm: float
+    closed_bore_height_mm: float
+    inner_arc_angle_degrees: float
+    outer_arc_angle_degrees: float
+
+    @property
+    def inner_radius_mm(self) -> float:
+        """返回导柱内半径。"""
+
+        return self.inner_diameter_mm / 2.0
+
+    @property
+    def outer_radius_mm(self) -> float:
+        """返回导柱主体外半径。"""
+
+        return self.outer_diameter_mm / 2.0
+
+
+@dataclass(frozen=True, slots=True)
 class GeometryParameters:
     """导孔切除、连接管和网格融合所需的几何参数。"""
 
-    template_channel_radius_mm: float
     channel_axial_margin_mm: float
-    connector_radius_mm: float
+    connector_diameter_mm: float
     fusion_voxel_size_mm: float
+
+    @property
+    def connector_radius_mm(self) -> float:
+        """返回连接柱半径。"""
+
+        return self.connector_diameter_mm / 2.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +103,7 @@ class CaseConfig:
 
     case_id: str
     inputs: InputMeshPaths
+    sleeve: SleeveParameters
     geometry: GeometryParameters
     windows: WindowParameters
     render: RenderParameters
@@ -80,7 +112,7 @@ class CaseConfig:
 
     @classmethod
     def from_json(cls, config_file: str | Path) -> CaseConfig:
-        """读取配置文件，并拒绝未知字段或无效取值。"""
+        """读取并校验配置文件。"""
 
         path = Path(config_file).resolve()
         try:
@@ -93,6 +125,7 @@ class CaseConfig:
             {
                 "case_id",
                 "inputs",
+                "sleeve",
                 "geometry",
                 "windows",
                 "render",
@@ -105,6 +138,7 @@ class CaseConfig:
         return cls(
             case_id=_case_id(_required(root, "case_id")),
             inputs=_parse_inputs(_section(root, "inputs"), base_directory),
+            sleeve=_parse_sleeve(_section(root, "sleeve")),
             geometry=_parse_geometry(_section(root, "geometry")),
             windows=_parse_windows(_section(root, "windows")),
             render=_parse_render(_section(root, "render")),
@@ -128,7 +162,7 @@ def _mapping(value: object, name: str) -> dict[str, object]:
 
 
 def _required(values: dict[str, object], name: str) -> object:
-    """返回必填字段，字段缺失时抛出配置异常。"""
+    """读取配置中必须提供的字段。"""
 
     if name not in values:
         raise ConfigurationError(f"缺少必填字段：{name}")
@@ -227,28 +261,99 @@ def _parse_inputs(raw: dict[str, object], base_directory: Path) -> InputMeshPath
     )
 
 
+def _parse_sleeve(raw: dict[str, object]) -> SleeveParameters:
+    """解析并校验导柱的八个几何参数。"""
+
+    fields = {
+        "inner_diameter_mm",
+        "outer_diameter_mm",
+        "height_mm",
+        "platform_width_mm",
+        "platform_height_mm",
+        "closed_bore_height_mm",
+        "inner_arc_angle_degrees",
+        "outer_arc_angle_degrees",
+    }
+    _reject_unknown(raw, fields, "sleeve")
+    parameters = SleeveParameters(
+        inner_diameter_mm=_number(
+            _required(raw, "inner_diameter_mm"),
+            "sleeve.inner_diameter_mm",
+            positive=True,
+        ),
+        outer_diameter_mm=_number(
+            _required(raw, "outer_diameter_mm"),
+            "sleeve.outer_diameter_mm",
+            positive=True,
+        ),
+        height_mm=_number(
+            _required(raw, "height_mm"), "sleeve.height_mm", positive=True
+        ),
+        platform_width_mm=_number(
+            _required(raw, "platform_width_mm"),
+            "sleeve.platform_width_mm",
+            positive=True,
+        ),
+        platform_height_mm=_number(
+            _required(raw, "platform_height_mm"),
+            "sleeve.platform_height_mm",
+            positive=True,
+        ),
+        closed_bore_height_mm=_number(
+            _required(raw, "closed_bore_height_mm"),
+            "sleeve.closed_bore_height_mm",
+            positive=True,
+        ),
+        inner_arc_angle_degrees=_number(
+            _required(raw, "inner_arc_angle_degrees"),
+            "sleeve.inner_arc_angle_degrees",
+            positive=True,
+        ),
+        outer_arc_angle_degrees=_number(
+            _required(raw, "outer_arc_angle_degrees"),
+            "sleeve.outer_arc_angle_degrees",
+            positive=True,
+        ),
+    )
+    if parameters.outer_diameter_mm <= parameters.inner_diameter_mm:
+        raise ConfigurationError(
+            "sleeve.outer_diameter_mm 必须大于 sleeve.inner_diameter_mm"
+        )
+    for name, angle in (
+        ("inner_arc_angle_degrees", parameters.inner_arc_angle_degrees),
+        ("outer_arc_angle_degrees", parameters.outer_arc_angle_degrees),
+    ):
+        if angle >= 360.0:
+            raise ConfigurationError(f"sleeve.{name} 必须小于 360")
+    if not (
+        0.0
+        < parameters.closed_bore_height_mm
+        < parameters.platform_height_mm
+        < parameters.height_mm
+    ):
+        raise ConfigurationError(
+            "sleeve 高度必须满足 0 < closed_bore_height_mm < "
+            "platform_height_mm < height_mm"
+        )
+    return parameters
+
+
 def _parse_geometry(raw: dict[str, object]) -> GeometryParameters:
     """解析并校验通道、连接和融合几何参数。"""
 
     fields = {
-        "template_channel_radius_mm",
         "channel_axial_margin_mm",
-        "connector_radius_mm",
+        "connector_diameter_mm",
         "fusion_voxel_size_mm",
     }
     _reject_unknown(raw, fields, "geometry")
     return GeometryParameters(
-        template_channel_radius_mm=_number(
-            _required(raw, "template_channel_radius_mm"),
-            "geometry.template_channel_radius_mm",
-            positive=True,
-        ),
         channel_axial_margin_mm=_number(
             _required(raw, "channel_axial_margin_mm"), "geometry.channel_axial_margin_mm"
         ),
-        connector_radius_mm=_number(
-            _required(raw, "connector_radius_mm"),
-            "geometry.connector_radius_mm",
+        connector_diameter_mm=_number(
+            _required(raw, "connector_diameter_mm"),
+            "geometry.connector_diameter_mm",
             positive=True,
         ),
         fusion_voxel_size_mm=_number(

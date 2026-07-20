@@ -30,7 +30,7 @@ class TemplatePointSelectionConfig:
     """
 
     template_clearance_mm: float = 1.2
-    connector_radius_mm: float = 1.2
+    connector_radius_mm: float = 1.15
     surface_sample_limit: int = 4096
     candidate_limit: int = 512
 

@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from twin_guide.clearance_adjustment import adjust_clearance
-from twin_guide.config import CaseConfig
+from twin_guide.config import CaseConfig, SleeveParameters
 from twin_guide.models import BuildArtifacts, ValidationResult
 from twin_guide.point_linking import (
     PointLink,
@@ -57,6 +57,7 @@ __all__ = [
     "SleeveAnchorSelection",
     "SleeveGenerationInputs",
     "SleeveGenerationResult",
+    "SleeveParameters",
     "StageMaturity",
     "StageResult",
     "StageRunStatus",

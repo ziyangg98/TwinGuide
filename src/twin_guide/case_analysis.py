@@ -117,6 +117,7 @@ def analyze_case(config: CaseConfig) -> CaseAnalysis:
             template_bvh=template_bvh,
             template_samples=template_samples,
             template_center=center,
+            sleeve_parameters=config.sleeve,
         )
     )
     selected_guides = sleeve_generation.sleeves
