@@ -1,8 +1,8 @@
-"""Twinguide 专用异常类型。"""
+"""TwinGuide 专用异常类型。"""
 
 
 class TwinGuideError(RuntimeError):
-    """Twinguide 错误的基类。"""
+    """TwinGuide 错误的基类。"""
 
 
 class ConfigurationError(TwinGuideError):

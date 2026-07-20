@@ -1,6 +1,6 @@
-# Twinguide
+# TwinGuide
 
-Twinguide 面向双导套牙科导板的自动化建模，负责导套几何重建、导孔与窗口规划、
+TwinGuide 面向双导套牙科导板的自动化建模，负责导套几何重建、导孔与窗口规划、
 结构连接、Blender 实体化、STL 导出和独立检查。
 
 ## 问题描述
@@ -64,7 +64,7 @@ Twinguide 面向双导套牙科导板的自动化建模，负责导套几何重�
 
 ## 安装与运行
 
-Twinguide 支持 Python 3.13–3.14，网格建模使用 Blender 5.2 LTS。
+TwinGuide 支持 Python 3.13–3.14，网格建模使用 Blender 5.2 LTS。
 Blender 已包含 `bpy`，无需单独安装。
 
 ```bash

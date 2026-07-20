@@ -11,7 +11,7 @@ from twin_guide.guide_generation import generate_guide
 
 
 def _blender_arguments() -> list[str]:
-    """返回 Blender ``--`` 之后传给 Twinguide 的命令行参数。"""
+    """返回 Blender ``--`` 之后传给 TwinGuide 的命令行参数。"""
 
     return sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else []
 

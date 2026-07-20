@@ -1,4 +1,4 @@
-"""Twinguide 命令行在 Blender 中的启动脚本。"""
+"""TwinGuide 命令行在 Blender 中的启动脚本。"""
 
 from __future__ import annotations
 

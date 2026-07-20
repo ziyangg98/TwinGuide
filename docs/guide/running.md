@@ -2,7 +2,7 @@
 
 ## 环境
 
-Twinguide 支持 Python 3.13–3.14。Blender 建模和集成测试使用 Blender 5.2 LTS。
+TwinGuide 支持 Python 3.13–3.14。Blender 建模和集成测试使用 Blender 5.2 LTS。
 
 ```bash
 python3 -m venv .venv

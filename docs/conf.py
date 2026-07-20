@@ -1,4 +1,4 @@
-"""Twinguide 文档配置。"""
+"""TwinGuide 文档配置。"""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ from pathlib import Path
 SOURCE_ROOT = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SOURCE_ROOT))
 
-project = "Twinguide"
-author = "Twinguide 开发组"
+project = "TwinGuide"
+author = "TwinGuide 开发组"
 language = "zh_CN"
 
 extensions = [
@@ -46,7 +46,7 @@ myst_fence_as_directive = ["mermaid"]
 myst_heading_anchors = 3
 
 html_theme = "furo"
-html_title = "Twinguide 文档"
+html_title = "TwinGuide 文档"
 html_static_path = ["_static"]
 html_css_files = ["custom.css"]
 html_theme_options = {
