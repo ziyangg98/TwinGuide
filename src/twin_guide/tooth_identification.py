@@ -10,14 +10,12 @@ def identify_tooth_positions(context: GenerationContext) -> None:
         context: 生成过程的几何结果。
 
     返回:
-        无。函数实现后将改为牙位识别结果类型。
+        无。
 
     异常:
         NotImplementedError: 牙位识别尚未实现。
 
-    算法说明:
-        目标实现将患者牙列网格转换到病例坐标系，分割单颗牙齿，
-        再根据牙弓顺序赋予牙位标签并返回表面区域。
+    当前仅保留阶段接口。
     """
 
     del context

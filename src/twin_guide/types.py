@@ -70,7 +70,7 @@ class SleeveGenerationResult:
     """第 1 步输出，与牙位、切窗和后续连建无关。"""
 
     sleeves: tuple[GuideSleeve, GuideSleeve]
-    template_frame: TemplateFrame | None = None
+    template_frame: TemplateFrame
 
 
 @dataclass(slots=True)

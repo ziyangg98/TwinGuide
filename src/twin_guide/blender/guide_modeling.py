@@ -16,7 +16,6 @@ from twin_guide.blender.mesh_builders import (
 )
 from twin_guide.blender.mesh_queries import (
     clean_mesh,
-    remove_excess_components,
 )
 from twin_guide.blender.rendering import create_materials, render_objects
 from twin_guide.blender.scene import duplicate_mesh_object, remove_object
@@ -261,7 +260,7 @@ def build_guide_from_links(
     算法说明:
         函数依次重建导套、创建通道和窗口切割体、实体化曲线并复切
         固定孔、从牙科导板扣除切口，再将已切牙科导板、导套、保留附件和连接管
-        做一次体素融合。最后保留主连通分量、清理网格并导出 STL 和四视图。
+        做一次体素融合，清理网格并导出 STL 和四视图。
     """
 
     output_directory = case.config.output_directory
@@ -300,7 +299,6 @@ def build_guide_from_links(
         case.config.geometry.fusion_voxel_size_mm,
         materials["final"],
     )
-    remove_excess_components(final_mesh, 1)
     clean_mesh(final_mesh)
     assign_material(final_mesh, materials["final"])
     model_path = output_directory / "twin_guide.stl"

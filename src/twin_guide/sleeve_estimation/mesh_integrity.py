@@ -61,9 +61,7 @@ def inspect_triangle_mesh(mesh: TriangleMeshData) -> MeshIntegrityReport:
     adjacency = [set() for _ in mesh.faces]
     for incident_faces in edge_faces.values():
         for face_index in incident_faces:
-            adjacency[face_index].update(
-                other for other in incident_faces if other != face_index
-            )
+            adjacency[face_index].update(other for other in incident_faces if other != face_index)
     unseen = set(range(len(mesh.faces)))
     component_count = 0
     while unseen:

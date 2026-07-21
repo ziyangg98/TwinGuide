@@ -32,8 +32,8 @@ TwinGuide 面向双导套牙科导板的自动化建模，负责导套几何重�
 
 > **当前程序：** 程序重建两个导套，规划导孔、操作窗和观察窗，
 > 为每个导套选择两个导套侧锚点和两个导板侧锚点，生成共八条曲线连接管，
-> 并输出 `twin_guide.stl`。观察缺口的位置由前牙牙位确定；当前病例临时使用前牙中线的估计坐标。
-> 当前缺口宽度为 7.0 mm，向导板内的切入深度为 5.5 mm。
+> 并输出 `twin_guide.stl`。观察缺口对准前牙牙面，下缘刚好露出牙齿。
+> 当前缺口宽度为 7.0 mm，切入深度覆盖导板局部厚度。
 > 牙位精细识别、
 > 按压结构和净距调整仍待实现。
 
@@ -72,10 +72,11 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install .
 
-blender -b --python run.py -- generate --config examples/case.json
+blender -b --python run.py -- generate --config examples/case-tooth-47.json
 ```
 
-配置文件为 `examples/case.json`，生成结果写入其中指定的 `output_directory`。
+示例配置统一命名为 `examples/case-tooth-<牙号>.json`，生成结果写入
+`output/tooth_<牙号>`。
 当前病例的导柱内径为 2.10 mm、主体外径为 4.30 mm、连接柱直径为 2.30 mm；
 完整参数见使用指南的“病例配置”页。
 

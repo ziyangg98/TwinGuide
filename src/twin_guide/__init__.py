@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from twin_guide.clearance_adjustment import adjust_clearance
-from twin_guide.config import CaseConfig, SleeveParameters
+from twin_guide.config import CaseConfig, Jaw, SleeveParameters
 from twin_guide.models import BuildArtifacts, ValidationResult
 from twin_guide.point_linking import (
     PointLink,
@@ -49,6 +49,7 @@ __all__ = [
     "CaseConfig",
     "GenerationContext",
     "GenerationProcessResult",
+    "Jaw",
     "PointLink",
     "PointLinkingConfig",
     "PointLinkingPlan",
@@ -126,14 +127,15 @@ def validate_guide(model_path: str | Path, config: CaseConfig) -> tuple[Validati
         config: 已通过校验的病例配置。
 
     返回:
-        拓扑、导套保留、连接管、导孔、窗口和手机净距检查结果。
+        拓扑、导套保留、连接管、导孔和窗口检查结果。
 
     异常:
         TwinGuideError: STL 读取、病例分析或几何检查失败。
 
     算法说明:
         读取导出 STL 和病例基准，分别计算网格拓扑、导套保留、连接管、
-        导孔、窗口和牙科手机净距指标，每项检查返回独立的 ``ValidationResult``。
+        导孔和窗口指标，每项检查返回独立的 ``ValidationResult``。
+        牙科手机净距属于待实现的第 7 步，当前不执行。
     """
 
     from twin_guide.guide_validation import validate_guide as run_validation

@@ -10,7 +10,6 @@ from twin_guide.models import CaseAnalysis, CutoutPlan, GuideSleeve, SurfaceSamp
 from twin_guide.sleeve_anchors import SleeveAnchorPlan, SleeveAnchorSelection
 from twin_guide.types import SleeveGenerationResult
 
-_DIRECTION_TOLERANCE = 1e-10
 _SURFACE_TOLERANCE = 1e-9
 
 
@@ -82,7 +81,6 @@ class TemplatePointSelection:
     属性:
         guide_index: 导套编号。
         sleeve_midpoint: 导套上下锚点中点。
-        base_point: 距离中点最近的可用牙科导板表面点。
         lateral_direction: 区分左右侧的单位向量。
         left: 牙科导板左侧锚点；不可行时为 ``None``。
         right: 牙科导板右侧锚点；不可行时为 ``None``。
@@ -92,8 +90,7 @@ class TemplatePointSelection:
 
     guide_index: int
     sleeve_midpoint: Vec3
-    base_point: TemplateAnchorPoint | None
-    lateral_direction: Vec3 | None
+    lateral_direction: Vec3
     left: TemplateAnchorPoint | None
     right: TemplateAnchorPoint | None
     minimum_span_mm: float
@@ -154,7 +151,7 @@ def _template_anchor(sample: SurfaceSample) -> TemplateAnchorPoint:
     return TemplateAnchorPoint(sample.position, sample.normal.normalized(), sample.polygon_index)
 
 
-def _sleeve_side_direction(guide: GuideSleeve, sleeve: SleeveAnchorSelection) -> Vec3 | None:
+def _sleeve_side_direction(guide: GuideSleeve, sleeve: SleeveAnchorSelection) -> Vec3:
     """计算牙科导板点的左右分组方向。
 
     参数:
@@ -162,13 +159,11 @@ def _sleeve_side_direction(guide: GuideSleeve, sleeve: SleeveAnchorSelection) ->
         sleeve: 该导套的上下锚点选择。
 
     返回:
-        轴向与径向叉积的单位向量；方向退化时为 ``None``。
+        轴向与 C 口反向的叉积单位向量。
     """
 
-    if sleeve.radial_direction is None:
-        return None
     direction = guide.axis.cross(sleeve.radial_direction)
-    return None if direction.length <= _DIRECTION_TOLERANCE else direction.normalized()
+    return direction.normalized()
 
 
 def _select_template_pair(
@@ -190,17 +185,6 @@ def _select_template_pair(
     """
 
     minimum_span = config.minimum_span_mm(guide.body_radius_mm)
-    if not sleeve.feasible:
-        return TemplatePointSelection(
-            guide.guide_index,
-            sleeve.lower.section_center,
-            None,
-            None,
-            None,
-            None,
-            minimum_span,
-            "导套锚点不可行",
-        )
     midpoint = (sleeve.lower.position + sleeve.upper.position) * 0.5
     ranked = sorted(
         samples, key=lambda sample: (midpoint.distance_to(sample.position), sample.polygon_index)
@@ -209,26 +193,13 @@ def _select_template_pair(
         return TemplatePointSelection(
             guide.guide_index,
             midpoint,
-            None,
-            None,
+            guide.axis.cross(sleeve.radial_direction).normalized(),
             None,
             None,
             minimum_span,
             "牙科导板上没有剩余可选样本",
         )
-    base = _template_anchor(ranked[0])
     lateral = _sleeve_side_direction(guide, sleeve)
-    if lateral is None:
-        return TemplatePointSelection(
-            guide.guide_index,
-            midpoint,
-            base,
-            None,
-            None,
-            None,
-            minimum_span,
-            "局部左右方向无法确定",
-        )
     left = tuple(
         sample
         for sample in ranked
@@ -258,7 +229,6 @@ def _select_template_pair(
         return TemplatePointSelection(
             guide.guide_index,
             midpoint,
-            base,
             lateral,
             None,
             None,
@@ -268,7 +238,6 @@ def _select_template_pair(
     return TemplatePointSelection(
         guide.guide_index,
         midpoint,
-        base,
         lateral,
         _template_anchor(best[1]),
         _template_anchor(best[2]),

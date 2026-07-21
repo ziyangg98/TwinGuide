@@ -6,6 +6,8 @@
 `analyze_case()` 读取网格，建立 `CaseAnalysis`，供各几何步骤共用。
 导柱的八个几何参数由 `SleeveParameters` 提供，连接柱直径由
 `GeometryParameters` 提供。
+`SleeveEstimate.c_opening_direction` 保存世界坐标单位向量。它是两导柱中心连线
+在各自轴线法平面上的投影，因此两个 C 口相对。
 
 ## 步骤结果
 
@@ -13,7 +15,7 @@
 | --- | --- | --- |
 | `sleeve_generation` | `SleeveGenerationResult` | 生成两个重建导套和导板局部标架 |
 | `tooth_identification` | 尚未定义 | `skipped`；预留扩展 |
-| `window_cutouts` | `WindowCutoutPlan` | 生成两个导孔、一个操作窗和可行的观察窗 |
+| `window_cutouts` | `WindowCutoutPlan` | 生成两个导孔、一个操作窗和一个前牙观察缺口 |
 | `template_link_points` | `TemplateLinkPointPlan` | 生成导套侧和导板侧锚点 |
 | `press_beam_points` | 尚未定义 | `skipped`；预留扩展 |
 | `point_linking` | `PointLinkingPlan` | 生成八条导套—导板曲线连接 |
@@ -21,7 +23,7 @@
 
 预留扩展的结果类型将在对应几何模块实现时定义。在步骤未执行时，
 `GenerationContext` 的对应字段为 `None`。`window_cutouts` 读取 `CaseAnalysis` 和
-`SleeveGenerationResult`。前牙观察缺口的位置由牙位确定，当前病例在导板局部标架中使用临时估计坐标。
+`SleeveGenerationResult`。前牙观察缺口还读取患者牙列表面，以牙面位置和高度确定切口。
 
 ## 建模与检查结果
 

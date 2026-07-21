@@ -7,19 +7,20 @@
 | 分组 | 内容 |
 | --- | --- |
 | `case_id` | 病例标识符 |
+| `jaw` | 上下颌：`upper` 或 `lower`；用于观察窗牙合侧定向 |
 | `inputs` | 三个病例 STL 路径 |
 | `sleeve` | 导柱的八个几何参数 |
 | `geometry` | 导孔、连接管和体素融合参数 |
 | `windows` | 操作窗扩展余量 |
 | `render` | 过程图和结果图的像素尺寸 |
-| `validation` | 可选；牙科手机、净距和运动采样参数，执行 `validate` 时必需 |
 | `output_directory` | STL 和过程图的输出目录 |
 
 ## 完整示例
 
 ```json
 {
-  "case_id": "case_r305_h500",
+  "case_id": "tooth_47",
+  "jaw": "lower",
   "inputs": {
     "template": "../../data/cases/single/tooth-47/input/ring-guide.stl",
     "guide_sleeve_assembly": "../../data/cases/single/tooth-47/input/guide-sleeve-47-34-10-12-s-40s.stl",
@@ -48,16 +49,7 @@
     "width_px": 1600,
     "height_px": 1200
   },
-  "validation": {
-    "handpiece": {
-      "mesh": "../../data/cases/single/tooth-47/input/handpiece-47.stl",
-      "head_crop_radius_mm": 10.0,
-      "minimum_clearance_mm": 1.0,
-      "maximum_tilt_degrees": 5.0,
-      "withdrawal_distances_mm": [0.0, 4.0, 8.0, 12.0]
-    }
-  },
-  "output_directory": "../output/twin_guide"
+  "output_directory": "../output/tooth_47"
 }
 ```
 
@@ -77,19 +69,20 @@
 | $\phi_{\mathrm{out}}$ | 211.684° | 主体外圆弧覆盖角 |
 | 连接柱直径 | 2.30 mm | 导柱与导板之间的连接柱直径 |
 
-`sleeve` 集中定义导柱形状，`geometry.connector_diameter_mm` 定义连接柱直径。
+`sleeve` 集中定义导柱的八个标量尺寸，`geometry.connector_diameter_mm`
+定义连接柱直径。两个 C 口分别指向对侧导柱。
 角度在配置中使用度，建模时转换为弧度。
 
-## 当前观察缺口参数
+## 当前观察缺口约定
 
 | 参数 | 当前值 | 含义 |
 | --- | ---: | --- |
-| 局部横向坐标 | 0.0 mm | 前牙中线的当前估计位置 |
-| 局部前后向坐标 | 22.4 mm | 前牙区的当前估计位置 |
+| 局部位置 | 牙面对应点 | 导板前缘中线附近的最近牙面 |
 | 缺口宽度 | 7.0 mm | 观察缺口沿牙弓横向的宽度 |
-| 切入深度 | 5.5 mm | 观察缺口向导板内的深度 |
+| 缺口下缘 | 牙面高度 | 刚好露出牙齿 |
+| 切入深度 | 局部厚度 + 1.6 mm | 覆盖导板并在两侧各留 0.8 mm 余量 |
 
-观察缺口的位置由前牙牙位确定，表中坐标是当前病例的临时估计值。
+观察缺口的位置和下缘由导板与患者牙列 STL 的几何对应确定。
 
-`validation` 用于独立检查；`generate` 和 `process` 只使用建模参数。
+牙科手机净距尚未实现，当前配置不包含相关字段。
 各几何参数的算法含义见对应的[生成步骤](../process/index.md)。

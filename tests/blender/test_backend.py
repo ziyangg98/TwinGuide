@@ -24,6 +24,7 @@ from twin_guide.blender.sleeve_reconstruction import (
 )
 from twin_guide.errors import GeometryError
 from twin_guide.geometry import Vec3
+from twin_guide.guide_validation import _point_is_retained
 from twin_guide.sleeve_estimation.types import SleeveEstimate
 
 
@@ -42,7 +43,7 @@ class BlenderBackendTests(unittest.TestCase):
         estimate = SleeveEstimate(
             axis_origin=Vec3(0.0, 0.0, 0.0),
             axis=Vec3(0.0, 0.0, 1.0),
-            platform_direction=Vec3(1.0, 0.0, 0.0),
+            c_opening_direction=Vec3(1.0, 0.0, 0.0),
             height=8.0,
             platform_height=2.8,
             closed_bore_height=1.4,
@@ -59,7 +60,7 @@ class BlenderBackendTests(unittest.TestCase):
         estimate = SleeveEstimate(
             axis_origin=Vec3(0.0, 0.0, 0.0),
             axis=Vec3(0.0, 0.0, 1.0),
-            platform_direction=Vec3(1.0, 0.0, 0.0),
+            c_opening_direction=Vec3(1.0, 0.0, 0.0),
             height=8.0,
             platform_height=2.8,
             closed_bore_height=1.4,
@@ -75,8 +76,7 @@ class BlenderBackendTests(unittest.TestCase):
         self.assertEqual(duplicate_triangle_count(sleeve), 0)
         triangle_data = mesh_object_to_triangle_data(sleeve)
         axial = tuple(
-            (point - estimate.axis_origin).dot(estimate.axis)
-            for point in triangle_data.vertices
+            (point - estimate.axis_origin).dot(estimate.axis) for point in triangle_data.vertices
         )
         self.assertAlmostEqual(min(axial), 0.0, delta=1e-6)
         self.assertAlmostEqual(max(axial), estimate.height, delta=1e-6)
@@ -89,6 +89,16 @@ class BlenderBackendTests(unittest.TestCase):
 
         self.assertTrue(point_inside_mesh(cylinder_bvh, Vec3(0.0, 0.0, 0.0)))
         self.assertFalse(point_inside_mesh(cylinder_bvh, Vec3(3.0, 0.0, 0.0)))
+
+    def test_retention_accepts_contained_and_near_surface_points(self):
+        model = create_axis_cylinder(
+            "retention_model", Vec3(0.0, 0.0, -2.0), Vec3(0.0, 0.0, 2.0), 2.0
+        )
+        model_bvh = build_bvh(model)
+
+        self.assertTrue(_point_is_retained(model_bvh, Vec3(0.0, 0.0, 0.0), 0.4))
+        self.assertTrue(_point_is_retained(model_bvh, Vec3(2.2, 0.0, 0.0), 0.4))
+        self.assertFalse(_point_is_retained(model_bvh, Vec3(3.0, 0.0, 0.0), 0.4))
 
     def test_voxel_union_preserves_input_objects(self):
         first_cylinder_mesh = create_axis_cylinder(

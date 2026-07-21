@@ -22,7 +22,7 @@ def _sleeve(index: int, x: float) -> GuideSleeve:
         parameters=SleeveEstimate(
             axis_origin=Vec3(x, 0.0, 0.0),
             axis=Vec3(0.0, 0.0, 1.0),
-            platform_direction=Vec3(1.0, 0.0, 0.0),
+            c_opening_direction=Vec3(1.0, 0.0, 0.0),
             height=16.0,
             platform_height=6.0,
             closed_bore_height=4.0,
@@ -34,7 +34,6 @@ def _sleeve(index: int, x: float) -> GuideSleeve:
         ),
         axial_min_mm=0.0,
         axial_max_mm=16.0,
-        template_intersection=Vec3(x, 0.0, 0.0),
     )
 
 
@@ -65,7 +64,6 @@ class PointLinkingTests(unittest.TestCase):
             TemplatePointSelection(
                 sleeve.guide_index,
                 Vec3(sleeve.center.x, 0.0, 8.0),
-                None,
                 Vec3(0.0, 1.0, 0.0),
                 TemplateAnchorPoint(Vec3(sleeve.center.x, -4.0, 0.0), Vec3(0, 0, 1), 1),
                 TemplateAnchorPoint(Vec3(sleeve.center.x, 4.0, 0.0), Vec3(0, 0, 1), 2),
@@ -76,7 +74,6 @@ class PointLinkingTests(unittest.TestCase):
         points = TemplateLinkPointPlan(
             sleeve_plan,
             TemplatePointPlan(template_selections),
-            (),
         )
         config = PointLinkingConfig(radius_mm=1.2, curve_resolution=30)
 

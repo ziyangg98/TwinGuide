@@ -66,7 +66,7 @@ def reconstruct_sleeve(estimate: SleeveEstimate, angular_segments: int = 72) -> 
     if angular_segments < 8:
         raise ValueError("角向分段数不得小于 8")
     axis = estimate.axis.normalized()
-    platform = estimate.platform_direction - axis * estimate.platform_direction.dot(axis)
+    platform = estimate.c_opening_direction - axis * estimate.c_opening_direction.dot(axis)
     platform = platform.normalized()
     across = axis.cross(platform).normalized()
     inner_gap = 2.0 * math.pi - estimate.inner_arc_angle
@@ -92,12 +92,7 @@ def reconstruct_sleeve(estimate: SleeveEstimate, angular_segments: int = 72) -> 
     def point(x_value: float, y_value: float, axial: float) -> Vec3:
         """将导套局部坐标转换为世界坐标。"""
 
-        return (
-            estimate.axis_origin
-            + platform * x_value
-            + across * y_value
-            + axis * axial
-        )
+        return estimate.axis_origin + platform * x_value + across * y_value + axis * axial
 
     def arc(radius: float, start: float, end: float, count: int) -> tuple[tuple[float, float], ...]:
         """按等角度间隔采样局部平面圆弧。"""
@@ -105,8 +100,10 @@ def reconstruct_sleeve(estimate: SleeveEstimate, angular_segments: int = 72) -> 
         while end <= start:
             end += 2.0 * math.pi
         return tuple(
-            (radius * math.cos(start + (end - start) * index / count),
-             radius * math.sin(start + (end - start) * index / count))
+            (
+                radius * math.cos(start + (end - start) * index / count),
+                radius * math.sin(start + (end - start) * index / count),
+            )
             for index in range(count + 1)
         )
 
@@ -215,8 +212,7 @@ def reconstruct_sleeve(estimate: SleeveEstimate, angular_segments: int = 72) -> 
 
     # 第一台阶只连接上部 C 形外轮廓与公共 D 形外轮廓。
     shoulder_angles = tuple(
-        outer_start
-        + (outer_end + 2.0 * math.pi - outer_start) * index / angular_segments
+        outer_start + (outer_end + 2.0 * math.pi - outer_start) * index / angular_segments
         for index in range(angular_segments + 1)
     )
     shoulder_d = tuple(
@@ -239,16 +235,14 @@ def reconstruct_sleeve(estimate: SleeveEstimate, angular_segments: int = 72) -> 
     cap_strip(gap_inner, gap_outer, z_transition, reverse=False)
 
     angles = tuple(
-        2.0 * math.pi * index / angular_segments
-        for index in range(angular_segments + 1)
+        2.0 * math.pi * index / angular_segments for index in range(angular_segments + 1)
     )
     lower_inner = tuple(
         (estimate.inner_radius * math.cos(value), estimate.inner_radius * math.sin(value))
         for value in angles
     )
     lower_outer = tuple(
-        (d_radius(value) * math.cos(value), d_radius(value) * math.sin(value))
-        for value in angles
+        (d_radius(value) * math.cos(value), d_radius(value) * math.sin(value)) for value in angles
     )
     cap_strip(lower_inner, lower_outer, z_bottom, reverse=False)
     return _weld_mesh(vertices, faces)
@@ -318,7 +312,7 @@ def _region(point: Vec3, estimate: SleeveEstimate) -> str:
     radial = radial_vector.length
     if min(abs(axial), abs(axial - estimate.height)) <= 0.04 * estimate.height:
         return "end_faces"
-    if radial_vector.dot(estimate.platform_direction) > estimate.outer_radius * 1.02:
+    if radial_vector.dot(estimate.c_opening_direction) > estimate.outer_radius * 1.02:
         return "platform"
     if abs(radial - estimate.inner_radius) <= abs(radial - estimate.outer_radius):
         return "inner_arc"
@@ -346,9 +340,7 @@ def validate_reconstruction(
     backward = _distances(reconstructed_samples, original)
     rms_forward = math.sqrt(sum(value * value for value in forward) / len(forward))
     rms_backward = math.sqrt(sum(value * value for value in backward) / len(backward))
-    sum_squared = sum(value * value for value in forward) + sum(
-        value * value for value in backward
-    )
+    sum_squared = sum(value * value for value in forward) + sum(value * value for value in backward)
     symmetric = math.sqrt(sum_squared / (len(forward) + len(backward)))
     combined = tuple(sorted((*forward, *backward)))
     percentile_95 = combined[round(0.95 * (len(combined) - 1))]

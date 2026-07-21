@@ -10,14 +10,12 @@ def adjust_clearance(context: GenerationContext) -> None:
         context: 生成过程的几何结果。
 
     返回:
-        无。函数实现后将改为避让空间调整结果类型。
+        无。
 
     异常:
         NotImplementedError: 避让空间调整尚未实现。
 
-    算法说明:
-        目标实现计算连接结构与患者牙列、牙科手机运动包络和功能保护区的净距，
-        并在保持端点与连接半径的条件下调整曲线控制点。
+    当前仅保留阶段接口。
     """
 
     del context

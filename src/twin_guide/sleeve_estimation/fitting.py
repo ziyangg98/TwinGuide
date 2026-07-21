@@ -30,15 +30,6 @@ class LineFit:
     point_count: int
 
 
-@dataclass(frozen=True, slots=True)
-class ArcAngles:
-    """有序圆弧的端点角和有向张角。"""
-
-    start: float
-    end: float
-    sweep: float
-
-
 def _solve_3x3(matrix: list[list[float]], values: list[float]) -> tuple[float, float, float]:
     """使用带主元的高斯消元求解三阶线性方程组。"""
 
@@ -126,97 +117,7 @@ def fit_axis(points: tuple[Vec3, ...]) -> LineFit:
     origin = mean_point(points)
     direction = principal_axis(points)
     residuals = tuple(
-        ((point - origin) - direction * (point - origin).dot(direction)).length
-        for point in points
+        ((point - origin) - direction * (point - origin).dot(direction)).length for point in points
     )
     rms = math.sqrt(sum(value * value for value in residuals) / len(residuals))
     return LineFit(origin, direction, rms, len(points))
-
-
-def observed_arc_angle(points: tuple[Vec3, ...], circle: CircleFit) -> float:
-    """根据观测点返回圆弧实际占据的张角。"""
-
-    if len(points) < 2:
-        raise ValueError("圆弧测量至少需要两个点")
-    tangent = orthonormal_tangent(circle.plane_normal, Vec3(1.0, 0.0, 0.0))
-    bitangent = circle.plane_normal.cross(tangent).normalized()
-    angles = sorted(
-        math.atan2((point - circle.center).dot(bitangent), (point - circle.center).dot(tangent))
-        % (2.0 * math.pi)
-        for point in points
-    )
-    gaps = [angles[index + 1] - angles[index] for index in range(len(angles) - 1)]
-    gaps.append(angles[0] + 2.0 * math.pi - angles[-1])
-    return 2.0 * math.pi - max(gaps)
-
-
-def ordered_arc_angles(
-    points: tuple[Vec3, ...],
-    circle: CircleFit,
-    reference: Vec3,
-) -> ArcAngles:
-    """在保持折线方向的前提下测量端点角和张角。"""
-
-    if len(points) < 2:
-        raise ValueError("有序圆弧测量至少需要两个点")
-    tangent = orthonormal_tangent(circle.plane_normal, reference)
-    bitangent = circle.plane_normal.cross(tangent).normalized()
-    raw = [
-        math.atan2(
-            (point - circle.center).dot(bitangent),
-            (point - circle.center).dot(tangent),
-        )
-        for point in points
-    ]
-    unwrapped = [raw[0]]
-    for angle in raw[1:]:
-        delta = (angle - unwrapped[-1] + math.pi) % (2.0 * math.pi) - math.pi
-        unwrapped.append(unwrapped[-1] + delta)
-    sweep = unwrapped[-1] - unwrapped[0]
-    if sweep < 0.0:
-        unwrapped.reverse()
-        sweep = -sweep
-    return ArcAngles(
-        unwrapped[0] % (2.0 * math.pi),
-        unwrapped[-1] % (2.0 * math.pi),
-        min(sweep, 2.0 * math.pi),
-    )
-
-
-def circular_median(angles: tuple[float, ...]) -> float:
-    """返回使圆周绝对距离总和最小的观测角。"""
-
-    if not angles:
-        raise ValueError("圆周中位数至少需要一个观测值")
-    return min(
-        angles,
-        key=lambda candidate: sum(
-            abs((value - candidate + math.pi) % (2.0 * math.pi) - math.pi)
-            for value in angles
-        ),
-    ) % (2.0 * math.pi)
-
-
-def unordered_arc_angles(
-    points: tuple[Vec3, ...], circle: CircleFit, reference: Vec3
-) -> ArcAngles:
-    """以最大角间隙的补集推断无序圆弧的端点。"""
-
-    tangent = orthonormal_tangent(circle.plane_normal, reference)
-    bitangent = circle.plane_normal.cross(tangent).normalized()
-    angles = sorted(
-        math.atan2(
-            (point - circle.center).dot(bitangent),
-            (point - circle.center).dot(tangent),
-        )
-        % (2.0 * math.pi)
-        for point in points
-    )
-    if len(angles) < 2:
-        raise ValueError("圆弧测量至少需要两个点")
-    gaps = [angles[index + 1] - angles[index] for index in range(len(angles) - 1)]
-    gaps.append(angles[0] + 2.0 * math.pi - angles[-1])
-    gap_index = max(range(len(gaps)), key=gaps.__getitem__)
-    start = angles[(gap_index + 1) % len(angles)]
-    end = angles[gap_index]
-    return ArcAngles(start, end, 2.0 * math.pi - gaps[gap_index])

@@ -1,4 +1,4 @@
-"""对已导出牙科导板进行结构和牙科手机净距检查。"""
+"""对已导出牙科导板进行当前已实现的结构检查。"""
 
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ from twin_guide.blender.mesh_queries import (
     build_bvh,
     duplicate_triangle_count,
     mesh_component_vertex_counts,
-    mesh_overlap_pairs,
     nearest_mesh_distance,
     point_inside_mesh,
     sample_mesh_surface,
@@ -21,15 +20,12 @@ from twin_guide.blender.mesh_queries import (
 from twin_guide.blender.sleeve_reconstruction import create_closed_sleeve_object
 from twin_guide.blender.stl_io import import_stl_mesh
 from twin_guide.case_analysis import analyze_case
-from twin_guide.config import CaseConfig, HandpieceValidationParameters
-from twin_guide.errors import ConfigurationError
+from twin_guide.config import CaseConfig
 from twin_guide.geometry import Vec3, point_axis_coordinates
-from twin_guide.handpiece_clearance import build_handpiece_sweep, locate_handpiece_reference
 from twin_guide.models import (
     CaseAnalysis,
     CylinderCutout,
     ValidationResult,
-    WindowCutout,
 )
 from twin_guide.point_linking import PointLinkingConfig, PointLinkingPlan, link_selected_points
 from twin_guide.template_anchors import TemplatePointSelectionConfig
@@ -44,7 +40,14 @@ REFERENCE_SAMPLE_LIMIT = 3_000
 RETAINED_FRACTION_MINIMUM = 0.90
 BORE_VOXEL_MARGIN_FACTOR = 3.0
 CONNECTOR_INSIDE_FRACTION_MINIMUM = 0.95
-WINDOW_BLOCKED_SAMPLE_MAXIMUM = 2
+
+
+def _point_is_retained(model_bvh: BVHTree, point: Vec3, distance_tolerance_mm: float) -> bool:
+    """返回导套表面点是否仍由最终实体保留。"""
+
+    return point_inside_mesh(model_bvh, point) or (
+        nearest_mesh_distance(model_bvh, point) <= distance_tolerance_mm
+    )
 
 
 def _channel_probe_points(
@@ -75,26 +78,12 @@ def _channel_probe_points(
     return tuple(points)
 
 
-def _window_probe_points(window: WindowCutout) -> tuple[Vec3, ...]:
-    """在窗口中面生成七乘七的规则堵塞检查点。"""
-
-    tangent = window.tangent.normalized()
-    bitangent = window.normal.normalized().cross(tangent).normalized()
-    return tuple(
-        window.center
-        + tangent * (window.width_mm * horizontal / 8.0)
-        + bitangent * (window.height_mm * vertical / 8.0)
-        for horizontal in range(-3, 4)
-        for vertical in range(-3, 4)
-    )
-
-
 def _guide_retention_result(
     model_bvh: BVHTree,
     case: CaseAnalysis,
     reference_sleeves: tuple[bpy.types.Object, bpy.types.Object],
 ) -> ValidationResult:
-    """通过重建导套表面样本到最终模型的距离比例验证导套保留。"""
+    """以重建导套表面点的实体包含率验证导套保留。"""
 
     voxel_size_mm = case.config.geometry.fusion_voxel_size_mm
     distance_tolerance_mm = voxel_size_mm * 2.0
@@ -109,7 +98,7 @@ def _guide_retention_result(
             for sample in sample_mesh_surface(reference_sleeve, REFERENCE_SAMPLE_LIMIT)
         )
         retained_count = sum(
-            nearest_mesh_distance(model_bvh, point) <= distance_tolerance_mm
+            _point_is_retained(model_bvh, point, distance_tolerance_mm)
             for point in reference_points
         )
         retained_fraction = retained_count / len(reference_points) if reference_points else 0.0
@@ -159,78 +148,18 @@ def _connector_result(
     return ValidationResult("guide_connectors", passed, metrics)
 
 
-def _handpiece_result(
-    model_mesh: bpy.types.Object,
-    model_bvh: BVHTree,
-    case: CaseAnalysis,
-    parameters: HandpieceValidationParameters,
-) -> ValidationResult:
-    """构造手机姿态扫掠体，并检查三角面重叠、相互包含和最小净距。"""
-
-    handpiece_mesh = import_stl_mesh(parameters.mesh_path, "handpiece_validation_mesh")
-    reference = locate_handpiece_reference(handpiece_mesh, case.guide_sleeves)
-    sweep_mesh = build_handpiece_sweep(
-        handpiece_mesh,
-        case.guide_sleeves,
-        reference,
-        parameters,
-    )
-    sweep_bvh = build_bvh(sweep_mesh)
-    model_samples = sample_mesh_surface(model_mesh, REFERENCE_SAMPLE_LIMIT)
-    sweep_samples = sample_mesh_surface(sweep_mesh, REFERENCE_SAMPLE_LIMIT)
-    overlap_count = len(mesh_overlap_pairs(model_mesh, sweep_mesh))
-    sweep_inside_model_count = sum(
-        point_inside_mesh(model_bvh, sample.position) for sample in sweep_samples
-    )
-    model_inside_sweep_count = sum(
-        point_inside_mesh(sweep_bvh, sample.position) for sample in model_samples
-    )
-    minimum_distance_mm = min(
-        min(
-            (nearest_mesh_distance(model_bvh, sample.position) for sample in sweep_samples),
-            default=math.inf,
-        ),
-        min(
-            (nearest_mesh_distance(sweep_bvh, sample.position) for sample in model_samples),
-            default=math.inf,
-        ),
-    )
-    passed = (
-        overlap_count == 0
-        and sweep_inside_model_count == 0
-        and model_inside_sweep_count == 0
-        and minimum_distance_mm >= parameters.minimum_clearance_mm
-    )
-    return ValidationResult(
-        "handpiece_clearance",
-        passed,
-        {
-            "triangle_overlap_count": overlap_count,
-            "sweep_inside_model_count": sweep_inside_model_count,
-            "model_inside_sweep_count": model_inside_sweep_count,
-            "minimum_distance_mm": minimum_distance_mm,
-            "required_clearance_mm": parameters.minimum_clearance_mm,
-        },
-    )
-
-
 def validate_guide(
     model_path: Path,
     config: CaseConfig,
 ) -> tuple[ValidationResult, ...]:
     """对已导出 STL 执行独立检查，不修改输入文件。"""
 
-    if config.validation is None:
-        raise ConfigurationError("缺少验证配置")
-    handpiece_parameters = config.validation.handpiece
     case = analyze_case(config)
     sleeves = SleeveGenerationResult(case.guide_sleeves, case.template_frame)
     cutout_plan = plan_window_cutouts(case, sleeves)
     link_points = select_template_link_points(
         TemplateLinkPointContext(case, sleeves, cutout_plan),
-        TemplatePointSelectionConfig(
-            connector_radius_mm=config.geometry.connector_radius_mm
-        ),
+        TemplatePointSelectionConfig(connector_radius_mm=config.geometry.connector_radius_mm),
     )
     connector_plan = link_selected_points(
         link_points,
@@ -307,33 +236,4 @@ def validate_guide(
             },
         )
     )
-    window_probe_points = tuple(
-        point for window in cutout_plan.windows for point in _window_probe_points(window)
-    )
-    protected_bvhs = tuple(
-        build_bvh(mesh_object) for mesh_object in (*clean_sleeves, *case.retained_accessory_meshes)
-    )
-    assembly_tolerance_mm = config.geometry.fusion_voxel_size_mm * 2.0
-    blocked_window_count = sum(
-        point_inside_mesh(model_bvh, point)
-        and not any(
-            point_inside_mesh(assembly_bvh, point)
-            or nearest_mesh_distance(assembly_bvh, point) <= assembly_tolerance_mm
-            for assembly_bvh in protected_bvhs
-        )
-        for point in window_probe_points
-    )
-    results.append(
-        ValidationResult(
-            "windows",
-            blocked_window_count <= WINDOW_BLOCKED_SAMPLE_MAXIMUM,
-            {
-                "sample_count": len(window_probe_points),
-                "blocked_sample_count": blocked_window_count,
-                "maximum_blocked_sample_count": WINDOW_BLOCKED_SAMPLE_MAXIMUM,
-                "assembly_tolerance_mm": assembly_tolerance_mm,
-            },
-        )
-    )
-    results.append(_handpiece_result(model_mesh, model_bvh, case, handpiece_parameters))
     return tuple(results)

@@ -1,12 +1,13 @@
 import math
 import unittest
+from dataclasses import replace
 
 from twin_guide.geometry import Vec3
-from twin_guide.sleeve_estimation.fitting import fit_circle, observed_arc_angle
+from twin_guide.sleeve_estimation.fitting import fit_circle
 from twin_guide.sleeve_estimation.mesh_integrity import inspect_triangle_mesh
-from twin_guide.sleeve_estimation.sleeve import estimate_sleeve
+from twin_guide.sleeve_estimation.sleeve import c_opening_toward, estimate_sleeve_axis
 from twin_guide.sleeve_estimation.slicing import slice_mesh
-from twin_guide.sleeve_estimation.types import EstimationConfig, SleeveEstimate, TriangleMeshData
+from twin_guide.sleeve_estimation.types import SleeveEstimate, TriangleMeshData
 from twin_guide.sleeve_estimation.validation import reconstruct_sleeve, validate_reconstruction
 
 
@@ -133,8 +134,7 @@ def _rigid_transform(mesh, translation=None, angle=0.63):
 def _bidirectional_vertex_distance(first, second):
     def directed(source, target):
         return max(
-            min(point.distance_to(other) for other in target.vertices)
-            for point in source.vertices
+            min(point.distance_to(other) for other in target.vertices) for point in source.vertices
         )
 
     return max(directed(first, second), directed(second, first))
@@ -172,13 +172,12 @@ class SleeveEstimationTests(unittest.TestCase):
         )
         fit = fit_circle(bore_points, Vec3(0.0, 0.0, 1.0), Vec3(0.0, 0.0, 1.0))
         self.assertAlmostEqual(fit.radius, truth[0], delta=0.02)
-        self.assertAlmostEqual(observed_arc_angle(bore_points, fit), truth[5], delta=0.12)
 
     def test_estimate_reconstruct_and_rigid_transform(self):
         truth = SleeveEstimate(
             axis_origin=Vec3(0.0, 0.0, 0.0),
             axis=Vec3(0.0, 0.0, 1.0),
-            platform_direction=Vec3(1.0, 0.0, 0.0),
+            c_opening_direction=Vec3(1.0, 0.0, 0.0),
             height=8.0,
             platform_height=2.8,
             closed_bore_height=1.4,
@@ -186,33 +185,29 @@ class SleeveEstimationTests(unittest.TestCase):
             inner_radius=1.2,
             outer_radius=2.0,
             inner_arc_angle=1.5 * math.pi,
-            outer_arc_angle=2.0 * math.pi - 2.0 * math.acos(
-                1.2 * math.cos(math.pi - 0.75 * math.pi) / 2.0
-            ),
+            outer_arc_angle=2.0 * math.pi
+            - 2.0 * math.acos(1.2 * math.cos(math.pi - 0.75 * math.pi) / 2.0),
         )
         mesh = reconstruct_sleeve(truth)
         transformed = _rigid_transform(mesh)
-        controls = EstimationConfig(slice_count=7, minimum_arc_points=5)
-        estimate = estimate_sleeve(transformed, controls)
-        self.assertAlmostEqual(estimate.inner_radius, truth.inner_radius, delta=0.08)
-        self.assertAlmostEqual(estimate.outer_radius, truth.outer_radius, delta=0.15)
-        self.assertAlmostEqual(estimate.height, truth.height, delta=0.15)
-        self.assertAlmostEqual(estimate.inner_arc_angle, truth.inner_arc_angle, delta=0.18)
-        self.assertAlmostEqual(estimate.outer_arc_angle, truth.outer_arc_angle, delta=0.18)
-        expected_platform = Vec3(math.cos(0.63), math.sin(0.63), 0.0)
-        self.assertGreater(estimate.platform_direction.dot(expected_platform), 0.90)
-        diagnostic_by_name = {item.parameter: item for item in estimate.diagnostics}
-        # 对离散布尔重建体检测台阶时可使用文档中的软回退规则；
-        # 生成程序另行检查各高度为正且顺序正确。
-        self.assertTrue(diagnostic_by_name["hs"].valid)
-        self.assertIn("拓扑", diagnostic_by_name["hp"].message)
+        pose = estimate_sleeve_axis(transformed)
+        estimate = replace(
+            truth,
+            axis_origin=pose.axis_origin,
+            axis=pose.axis,
+        )
+        expected_axis = Vec3(
+            -0.35 * math.sin(0.63),
+            0.35 * math.cos(0.63),
+            math.sqrt(1.0 - 0.35**2),
+        )
+        self.assertGreater(estimate.axis.dot(expected_axis), 0.99)
         self.assertFalse(hasattr(estimate, "platform_total_width"))
         self.assertFalse(hasattr(estimate, "slot_width"))
         self.assertFalse(hasattr(estimate, "platform_join_position"))
         self.assertFalse(hasattr(estimate, "inner_start_angle"))
         axial_coordinates = tuple(
-            (point - estimate.axis_origin).dot(estimate.axis)
-            for point in transformed.vertices
+            (point - estimate.axis_origin).dot(estimate.axis) for point in transformed.vertices
         )
         self.assertAlmostEqual(min(axial_coordinates), 0.0, delta=0.12)
         self.assertAlmostEqual(max(axial_coordinates), estimate.height, delta=0.12)
@@ -238,21 +233,53 @@ class SleeveEstimationTests(unittest.TestCase):
             slice_mesh(reconstructed, estimate.axis_origin, estimate.axis, offset)
             for offset in (
                 0.5 * (estimate.height - estimate.platform_height),
-                estimate.height - 0.5 * (
-                    estimate.platform_height + estimate.closed_bore_height
-                ),
+                estimate.height - 0.5 * (estimate.platform_height + estimate.closed_bore_height),
                 estimate.height - 0.5 * estimate.closed_bore_height,
             )
         )
         self.assertTrue(all(section.samples for section in sections))
         self.assertEqual(tuple(len(section.polylines) for section in sections), (1, 1, 2))
         self.assertTrue(
-            all(
-                polyline.closed
-                for section in sections
-                for polyline in section.polylines
-            )
+            all(polyline.closed for section in sections for polyline in section.polylines)
         )
+
+    def test_orientation_is_recovered_from_upside_down_input(self):
+        truth = SleeveEstimate(
+            axis_origin=Vec3(0.0, 0.0, 0.0),
+            axis=Vec3(0.0, 0.0, 1.0),
+            c_opening_direction=Vec3(1.0, 0.0, 0.0),
+            height=8.0,
+            platform_height=2.8,
+            closed_bore_height=1.4,
+            platform_width=0.8,
+            inner_radius=1.2,
+            outer_radius=2.0,
+            inner_arc_angle=1.5 * math.pi,
+            outer_arc_angle=4.0,
+        )
+        source = reconstruct_sleeve(truth)
+        upside_down = TriangleMeshData(
+            tuple(Vec3(point.x, -point.y, -point.z) for point in source.vertices),
+            source.faces,
+        )
+
+        estimate = estimate_sleeve_axis(upside_down)
+
+        self.assertGreater(estimate.axis.dot(Vec3(0.0, 0.0, -1.0)), 0.99)
+
+    def test_c_openings_face_each_other(self):
+        first_axis = Vec3(0.0, 0.0, 1.0)
+        second_axis = Vec3(0.2, 0.0, 0.98).normalized()
+        first_center = Vec3(-5.0, 0.0, 1.0)
+        second_center = Vec3(5.0, 0.0, -1.0)
+
+        first = c_opening_toward(first_axis, first_center, second_center)
+        second = c_opening_toward(second_axis, second_center, first_center)
+
+        self.assertGreater(first.dot(second_center - first_center), 0.0)
+        self.assertGreater(second.dot(first_center - second_center), 0.0)
+        self.assertAlmostEqual(first.dot(first_axis), 0.0, delta=1e-12)
+        self.assertAlmostEqual(second.dot(second_axis), 0.0, delta=1e-12)
 
 
 if __name__ == "__main__":

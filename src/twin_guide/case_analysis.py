@@ -5,19 +5,21 @@ from __future__ import annotations
 import bpy
 
 from twin_guide.blender.mesh_queries import (
-    build_bvh,
     mesh_bounds,
     mesh_triangles,
     sample_mesh_surface,
     separate_connected_components,
 )
 from twin_guide.blender.scene import clear_scene, duplicate_mesh_object
+from twin_guide.blender.sleeve_estimation_adapter import mesh_object_to_triangle_data
 from twin_guide.blender.stl_io import import_stl_mesh
 from twin_guide.config import CaseConfig
 from twin_guide.errors import GeometryError
 from twin_guide.geometry import (
     Vec3,
+    covariance_matrix,
     mean_point,
+    symmetric_eigenvectors,
     volume_centroid,
 )
 from twin_guide.models import (
@@ -79,20 +81,30 @@ def _measure_operation_feature(
     """测量两个导套附近用于操作窗定位的紧凑圆形分量。"""
 
     guide_meshes = {guide.guide_mesh for guide in guide_sleeves}
-    guide_midpoint = (guide_sleeves[0].center + guide_sleeves[1].center) * 0.5
+    guide_centers = tuple(
+        guide.center + guide.axis * (0.5 * guide.length_mm) for guide in guide_sleeves
+    )
+    guide_midpoint = (guide_centers[0] + guide_centers[1]) * 0.5
     candidates = []
     for component in components:
         if component in guide_meshes:
             continue
-        lower, upper = mesh_bounds(component)
-        spans = sorted((upper - lower).as_tuple())
-        if spans[0] <= 1e-6 or spans[2] / spans[0] > 2.0:
-            continue
-        center = (lower + upper) * 0.5
-        candidates.append((center.distance_to(guide_midpoint), center, spans[2]))
-    if not candidates:
-        raise GeometryError("无法识别操作窗对应的圆形结构")
-    _, center, diameter_mm = min(candidates, key=lambda candidate: candidate[0])
+        points = mesh_object_to_triangle_data(component).vertices
+        origin = mean_point(points)
+        axes = tuple(pair[1] for pair in symmetric_eigenvectors(covariance_matrix(points, origin)))
+        ranges = []
+        center = origin
+        for axis in axes:
+            coordinates = tuple((point - origin).dot(axis) for point in points)
+            lower, upper = min(coordinates), max(coordinates)
+            ranges.append(upper - lower)
+            center += axis * (0.5 * (lower + upper))
+        plane_ratio = ranges[0] / max(ranges[1], 1e-9)
+        candidates.append(
+            (center.distance_to(guide_midpoint), plane_ratio, center, max(ranges[:2]))
+        )
+    circular = tuple(candidate for candidate in candidates if candidate[1] <= 1.3)
+    _, _, center, diameter_mm = min(circular, key=lambda candidate: candidate[0])
     return OperationFeature(center, diameter_mm)
 
 
@@ -104,7 +116,9 @@ def analyze_case(config: CaseConfig) -> CaseAnalysis:
     template_samples = sample_mesh_surface(input_meshes.template_mesh)
     if not template_samples:
         raise GeometryError("牙科导板网格不存在可采样表面")
-    template_bvh = build_bvh(input_meshes.template_mesh)
+    dentition_samples = sample_mesh_surface(input_meshes.patient_dentition_mesh)
+    if not dentition_samples:
+        raise GeometryError("患者牙列网格不存在可采样表面")
     assembly_working_mesh = duplicate_mesh_object(
         input_meshes.guide_sleeve_assembly_mesh,
         "guide_sleeve_assembly_components",
@@ -114,15 +128,13 @@ def analyze_case(config: CaseConfig) -> CaseAnalysis:
     sleeve_generation = recognize_and_build_sleeves(
         SleeveGenerationInputs(
             components=components,
-            template_bvh=template_bvh,
             template_samples=template_samples,
             template_center=center,
             sleeve_parameters=config.sleeve,
+            jaw=config.jaw,
         )
     )
     selected_guides = sleeve_generation.sleeves
-    if sleeve_generation.template_frame is None:
-        raise GeometryError("导套识别未生成牙科导板局部坐标系")
     template_frame = sleeve_generation.template_frame
     operation_feature = _measure_operation_feature(components, selected_guides)
     return CaseAnalysis(
@@ -133,4 +145,5 @@ def analyze_case(config: CaseConfig) -> CaseAnalysis:
         operation_feature=operation_feature,
         template_frame=template_frame,
         template_samples=template_samples,
+        dentition_samples=dentition_samples,
     )

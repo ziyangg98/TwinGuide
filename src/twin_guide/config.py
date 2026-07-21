@@ -6,11 +6,25 @@ import json
 import math
 import re
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 from twin_guide.errors import ConfigurationError
 
 CASE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+
+class Jaw(StrEnum):
+    """病例的上下颌标记。"""
+
+    UPPER = "upper"
+    LOWER = "lower"
+
+    @property
+    def occlusal_axis_sign(self) -> float:
+        """返回观察窗牙合侧开放方向在世界 Z 轴上的符号。"""
+
+        return -1.0 if self is Jaw.UPPER else 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,34 +94,16 @@ class RenderParameters:
 
 
 @dataclass(frozen=True, slots=True)
-class HandpieceValidationParameters:
-    """仅用于检查的牙科手机网格和运动采样参数。"""
-
-    mesh_path: Path
-    head_crop_radius_mm: float
-    minimum_clearance_mm: float
-    maximum_tilt_degrees: float
-    withdrawal_distances_mm: tuple[float, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class ValidationParameters:
-    """独立检查所需的输入。"""
-
-    handpiece: HandpieceValidationParameters
-
-
-@dataclass(frozen=True, slots=True)
 class CaseConfig:
     """构建与检查命令共用的已校验配置。"""
 
     case_id: str
+    jaw: Jaw
     inputs: InputMeshPaths
     sleeve: SleeveParameters
     geometry: GeometryParameters
     windows: WindowParameters
     render: RenderParameters
-    validation: ValidationParameters | None
     output_directory: Path
 
     @classmethod
@@ -124,12 +120,12 @@ class CaseConfig:
             root,
             {
                 "case_id",
+                "jaw",
                 "inputs",
                 "sleeve",
                 "geometry",
                 "windows",
                 "render",
-                "validation",
                 "output_directory",
             },
             "configuration",
@@ -137,16 +133,12 @@ class CaseConfig:
         base_directory = path.parent
         return cls(
             case_id=_case_id(_required(root, "case_id")),
+            jaw=_jaw(_required(root, "jaw")),
             inputs=_parse_inputs(_section(root, "inputs"), base_directory),
             sleeve=_parse_sleeve(_section(root, "sleeve")),
             geometry=_parse_geometry(_section(root, "geometry")),
             windows=_parse_windows(_section(root, "windows")),
             render=_parse_render(_section(root, "render")),
-            validation=(
-                _parse_validation(_mapping(root["validation"], "validation"), base_directory)
-                if "validation" in root
-                else None
-            ),
             output_directory=_path(
                 _required(root, "output_directory"), base_directory, "output_directory"
             ),
@@ -212,6 +204,15 @@ def _case_id(value: object) -> str:
     if not isinstance(value, str) or not CASE_ID_PATTERN.fullmatch(value):
         raise ConfigurationError("case_id 只能包含小写字母、数字、'-' 或 '_'")
     return value
+
+
+def _jaw(value: object) -> Jaw:
+    """校验上下颌标记。"""
+
+    try:
+        return Jaw(value)
+    except (TypeError, ValueError) as error:
+        raise ConfigurationError("jaw 必须为 'upper' 或 'lower'") from error
 
 
 def _path(value: object, base_directory: Path, name: str) -> Path:
@@ -286,9 +287,7 @@ def _parse_sleeve(raw: dict[str, object]) -> SleeveParameters:
             "sleeve.outer_diameter_mm",
             positive=True,
         ),
-        height_mm=_number(
-            _required(raw, "height_mm"), "sleeve.height_mm", positive=True
-        ),
+        height_mm=_number(_required(raw, "height_mm"), "sleeve.height_mm", positive=True),
         platform_width_mm=_number(
             _required(raw, "platform_width_mm"),
             "sleeve.platform_width_mm",
@@ -316,9 +315,7 @@ def _parse_sleeve(raw: dict[str, object]) -> SleeveParameters:
         ),
     )
     if parameters.outer_diameter_mm <= parameters.inner_diameter_mm:
-        raise ConfigurationError(
-            "sleeve.outer_diameter_mm 必须大于 sleeve.inner_diameter_mm"
-        )
+        raise ConfigurationError("sleeve.outer_diameter_mm 必须大于 sleeve.inner_diameter_mm")
     for name, angle in (
         ("inner_arc_angle_degrees", parameters.inner_arc_angle_degrees),
         ("outer_arc_angle_degrees", parameters.outer_arc_angle_degrees),
@@ -332,8 +329,7 @@ def _parse_sleeve(raw: dict[str, object]) -> SleeveParameters:
         < parameters.height_mm
     ):
         raise ConfigurationError(
-            "sleeve 高度必须满足 0 < closed_bore_height_mm < "
-            "platform_height_mm < height_mm"
+            "sleeve 高度必须满足 0 < closed_bore_height_mm < platform_height_mm < height_mm"
         )
     return parameters
 
@@ -389,52 +385,4 @@ def _parse_render(raw: dict[str, object]) -> RenderParameters:
     return RenderParameters(
         width_px=_positive_integer(_required(raw, "width_px"), "render.width_px"),
         height_px=_positive_integer(_required(raw, "height_px"), "render.height_px"),
-    )
-
-
-def _parse_validation(raw: dict[str, object], base_directory: Path) -> ValidationParameters:
-    """解析手机网格、净距、倾斜角和撤离距离的独立验证参数。"""
-
-    _reject_unknown(raw, {"handpiece"}, "validation")
-    handpiece = _section(raw, "handpiece")
-    fields = {
-        "mesh",
-        "head_crop_radius_mm",
-        "minimum_clearance_mm",
-        "maximum_tilt_degrees",
-        "withdrawal_distances_mm",
-    }
-    _reject_unknown(handpiece, fields, "validation.handpiece")
-    withdrawal_value = _required(handpiece, "withdrawal_distances_mm")
-    if not isinstance(withdrawal_value, list) or not withdrawal_value:
-        raise ConfigurationError("validation.handpiece.withdrawal_distances_mm 必须为非空数组")
-    withdrawal_distances = tuple(
-        _number(value, f"validation.handpiece.withdrawal_distances_mm[{index}]")
-        for index, value in enumerate(withdrawal_value)
-    )
-    if not any(abs(distance) < 1e-9 for distance in withdrawal_distances):
-        raise ConfigurationError("validation.handpiece.withdrawal_distances_mm 必须包含 0")
-    maximum_tilt = _number(
-        _required(handpiece, "maximum_tilt_degrees"),
-        "validation.handpiece.maximum_tilt_degrees",
-    )
-    if maximum_tilt >= 90:
-        raise ConfigurationError("validation.handpiece.maximum_tilt_degrees 必须小于 90")
-    return ValidationParameters(
-        handpiece=HandpieceValidationParameters(
-            mesh_path=_stl_reference(
-                _required(handpiece, "mesh"), base_directory, "validation.handpiece.mesh"
-            ),
-            head_crop_radius_mm=_number(
-                _required(handpiece, "head_crop_radius_mm"),
-                "validation.handpiece.head_crop_radius_mm",
-                positive=True,
-            ),
-            minimum_clearance_mm=_number(
-                _required(handpiece, "minimum_clearance_mm"),
-                "validation.handpiece.minimum_clearance_mm",
-            ),
-            maximum_tilt_degrees=maximum_tilt,
-            withdrawal_distances_mm=withdrawal_distances,
-        )
     )

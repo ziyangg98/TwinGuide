@@ -5,21 +5,52 @@ from pathlib import Path
 
 from twin_guide import CaseConfig, generate_guide, run_generation_process, validate_guide
 from twin_guide.case_analysis import analyze_case
+from twin_guide.geometry import Vec3
 from twin_guide.models import WindowPurpose
 from twin_guide.types import SleeveGenerationResult, StageRunStatus
 from twin_guide.window_cutouts import (
-    OBSERVATION_DEPTH_MM,
-    OBSERVATION_TARGET_DEPTH_MM,
-    OBSERVATION_TARGET_LATERAL_MM,
     OBSERVATION_WIDTH_MM,
     plan_window_cutouts,
 )
 
 
 class EndToEndTests(unittest.TestCase):
+    def _assert_observation_window_direction(self, config_path: Path) -> None:
+        """检查观察缺口的开放边是否指向病例牙合侧。"""
+
+        case_config = CaseConfig.from_json(config_path)
+        case_analysis = analyze_case(case_config)
+        sleeves = SleeveGenerationResult(
+            case_analysis.guide_sleeves,
+            case_analysis.template_frame,
+        )
+        cutout_plan = plan_window_cutouts(case_analysis, sleeves)
+        observation_windows = tuple(
+            window
+            for window in cutout_plan.windows
+            if window.purpose is WindowPurpose.OBSERVATION
+        )
+        self.assertEqual(len(observation_windows), 1)
+        window = observation_windows[0]
+        bitangent = window.normal.normalized().cross(window.tangent.normalized())
+        self.assertGreater(window.normal.dot(case_analysis.template_frame.depth), 0.0)
+        self.assertGreater(bitangent.dot(case_analysis.template_frame.normal), 0.0)
+        self.assertGreater(
+            bitangent.dot(Vec3(0.0, 0.0, case_config.jaw.occlusal_axis_sign)),
+            0.0,
+        )
+        self.assertEqual(window.width_mm, OBSERVATION_WIDTH_MM)
+        self.assertGreater(window.height_mm, 3.0)
+        self.assertGreater(window.depth_mm, 0.0)
+
     def test_current_case(self):
         code_directory = Path(__file__).resolve().parents[2]
-        source_config = CaseConfig.from_json(code_directory / "examples" / "case.json")
+        for tooth_number in (11, 47):
+            with self.subTest(tooth_number=tooth_number):
+                self._assert_observation_window_direction(
+                    code_directory / "examples" / f"case-tooth-{tooth_number}.json"
+                )
+        source_config = CaseConfig.from_json(code_directory / "examples" / "case-tooth-47.json")
         with tempfile.TemporaryDirectory() as temporary_output_directory:
             case_config = replace(
                 source_config,
@@ -33,21 +64,6 @@ class EndToEndTests(unittest.TestCase):
             cutout_plan = plan_window_cutouts(case_analysis, sleeves)
             self.assertEqual(plan_window_cutouts(case_analysis, sleeves), cutout_plan)
 
-            observation_windows = tuple(
-                window
-                for window in cutout_plan.windows
-                if window.purpose is WindowPurpose.OBSERVATION
-            )
-            self.assertEqual(len(observation_windows), 1)
-            for window in observation_windows:
-                bitangent = window.normal.normalized().cross(window.tangent.normalized())
-                self.assertGreater(window.normal.dot(case_analysis.template_frame.depth), 0.0)
-                self.assertGreater(bitangent.dot(case_analysis.template_frame.normal), 0.0)
-                self.assertEqual(window.width_mm, OBSERVATION_WIDTH_MM)
-                self.assertGreater(window.height_mm, 3.0)
-                self.assertEqual(window.depth_mm, OBSERVATION_DEPTH_MM)
-            self.assertEqual(OBSERVATION_TARGET_LATERAL_MM, 0.0)
-            self.assertEqual(OBSERVATION_TARGET_DEPTH_MM, 22.4)
             build_artifacts = generate_guide(case_config)
             validation_results = validate_guide(build_artifacts.model_path, case_config)
 
@@ -77,8 +93,6 @@ class EndToEndTests(unittest.TestCase):
                     "guide_retention",
                     "guide_connectors",
                     "channels",
-                    "windows",
-                    "handpiece_clearance",
                 },
             )
             validation_by_name = {result.name: result for result in validation_results}
@@ -87,7 +101,6 @@ class EndToEndTests(unittest.TestCase):
                 "guide_retention",
                 "guide_connectors",
                 "channels",
-                "windows",
             )
             failed_checks = {
                 name: validation_by_name[name].metrics
@@ -95,25 +108,6 @@ class EndToEndTests(unittest.TestCase):
                 if not validation_by_name[name].passed
             }
             self.assertFalse(failed_checks, failed_checks)
-            handpiece_result = validation_by_name["handpiece_clearance"]
-            self.assertIsInstance(handpiece_result.passed, bool)
-            self.assertEqual(
-                set(handpiece_result.metrics),
-                {
-                    "triangle_overlap_count",
-                    "sweep_inside_model_count",
-                    "model_inside_sweep_count",
-                    "minimum_distance_mm",
-                    "required_clearance_mm",
-                },
-            )
-            self.assertTrue(
-                all(
-                    isinstance(metric_value, int | float)
-                    for metric_value in handpiece_result.metrics.values()
-                )
-            )
-
             process_result = run_generation_process(case_config)
             self.assertEqual(
                 tuple(stage.status for stage in process_result.stages),

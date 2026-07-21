@@ -14,19 +14,19 @@ blender --version
 ## 生成 STL
 
 ```bash
-blender -b --python run.py -- generate --config examples/case.json
+blender -b --python run.py -- generate --config examples/case-tooth-47.json
 ```
 
 `generate` 读取病例网格，完成导套重建、导孔与窗口规划、联建锚点选择和
 八条曲线连接管生成，再执行实体化、布尔运算、固定孔复切、网格清理和 STL 导出。
-观察缺口的位置由前牙牙位确定，当前病例使用临时估计坐标；
+观察缺口对准前牙牙面，下缘刚好露出牙齿；
 按压结构和净距调整不在本次生成中。
 具体数据流见[生成过程](../process/index.md)。
 
 ## 查看计算过程
 
 ```bash
-blender -b --python run.py -- process --config examples/case.json
+blender -b --python run.py -- process --config examples/case-tooth-47.json
 ```
 
 `process` 在命令行输出所有已声明阶段的运行状态。导套重建、切口规划、
@@ -37,9 +37,12 @@ blender -b --python run.py -- process --config examples/case.json
 
 ```bash
 blender -b --python run.py -- validate \
-  --config examples/case.json \
-  --model output/twin_guide/twin_guide.stl
+  --config examples/case-tooth-47.json \
+  --model output/tooth_47/twin_guide.stl
 ```
+
+`validate` 当前检查拓扑、导套保留、连接管、导孔和窗口。
+牙科手机净距仍是第 7 步占位，不在当前命令中执行。
 
 ## 输出文件
 

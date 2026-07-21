@@ -47,6 +47,10 @@ Python API 参考
 .. autoclass:: twin_guide.SleeveGenerationResult
    :members:
 
+每个 ``GuideSleeve.parameters`` 使用 ``SleeveEstimate`` 保存轴线、世界坐标中的
+``c_opening_direction`` 单位向量和八个标量尺寸参数。两个 C 口分别指向对侧导柱，
+八个标量尺寸由病例配置提供。
+
 第 2 步：牙位识别（待实现）
 ----------------------------------------
 
@@ -58,7 +62,7 @@ Python API 参考
 ----------------------------------------
 
 现有接口读取病例分析和导套重建结果，生成导孔、操作窗和前牙观察缺口。
-观察缺口的位置由牙位确定，当前病例使用临时估计坐标。
+观察缺口对准前牙牙面，下缘刚好露出牙齿。
 
 .. autofunction:: twin_guide.plan_window_cutouts
 

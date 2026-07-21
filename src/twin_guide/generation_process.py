@@ -141,9 +141,7 @@ def run_generation_process(config: CaseConfig) -> GenerationProcessResult:
             context.sleeve_generation,
             context.window_cutouts,
         ),
-        TemplatePointSelectionConfig(
-            connector_radius_mm=config.geometry.connector_radius_mm
-        ),
+        TemplatePointSelectionConfig(connector_radius_mm=config.geometry.connector_radius_mm),
     )
     results.append(StageResult(STAGES[3], StageRunStatus.COMPLETED, context.template_link_points))
 

@@ -23,9 +23,7 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     generate_command = commands.add_parser("generate", help="构建牙科导板并输出诊断图")
     generate_command.add_argument("--config", required=True, type=Path)
-    process_command = commands.add_parser(
-        "process", help="运行已实现的生成阶段"
-    )
+    process_command = commands.add_parser("process", help="运行已实现的生成阶段")
     process_command.add_argument("--config", required=True, type=Path)
     validate_command = commands.add_parser("validate", help="检查已导出的牙科导板 STL")
     validate_command.add_argument("--config", required=True, type=Path)

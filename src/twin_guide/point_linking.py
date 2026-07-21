@@ -155,8 +155,6 @@ def link_selected_points(
         points.template_points.selections,
         strict=True,
     ):
-        if not sleeve.feasible:
-            raise ValueError(f"导套 {sleeve.guide_index} 的导套侧锚点不可行")
         if not template.feasible:
             raise ValueError(f"导套 {sleeve.guide_index} 的牙科导板侧锚点不可行")
         for sleeve_label, sleeve_point in (

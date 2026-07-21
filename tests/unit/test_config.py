@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from twin_guide.config import CaseConfig
+from twin_guide.config import CaseConfig, Jaw
 from twin_guide.errors import ConfigurationError
 
 
@@ -16,7 +16,6 @@ class CaseConfigTests(unittest.TestCase):
             "template.stl",
             "guide_sleeve_assembly.stl",
             "patient_dentition.stl",
-            "handpiece.stl",
         ):
             (self.case_directory / filename).touch()
 
@@ -26,6 +25,7 @@ class CaseConfigTests(unittest.TestCase):
     def _valid_config_data(self) -> dict[str, object]:
         return {
             "case_id": "case_01",
+            "jaw": "upper",
             "inputs": {
                 "template": "template.stl",
                 "guide_sleeve_assembly": "guide_sleeve_assembly.stl",
@@ -51,15 +51,6 @@ class CaseConfigTests(unittest.TestCase):
                 "operation_bitangent_margin_mm": 0.5,
             },
             "render": {"width_px": 640, "height_px": 480},
-            "validation": {
-                "handpiece": {
-                    "mesh": "handpiece.stl",
-                    "head_crop_radius_mm": 10.0,
-                    "minimum_clearance_mm": 1.0,
-                    "maximum_tilt_degrees": 5.0,
-                    "withdrawal_distances_mm": [0.0, 4.0, 8.0],
-                }
-            },
             "output_directory": "output",
         }
 
@@ -72,6 +63,9 @@ class CaseConfigTests(unittest.TestCase):
         config = CaseConfig.from_json(self._write_config(self._valid_config_data()))
 
         self.assertEqual(config.case_id, "case_01")
+        self.assertEqual(config.jaw.value, "upper")
+        self.assertEqual(config.jaw.occlusal_axis_sign, -1.0)
+        self.assertEqual(Jaw.LOWER.occlusal_axis_sign, 1.0)
         self.assertEqual(config.sleeve.inner_diameter_mm, 2.10)
         self.assertEqual(config.sleeve.inner_radius_mm, 1.05)
         self.assertEqual(config.sleeve.outer_diameter_mm, 4.3)
@@ -84,27 +78,12 @@ class CaseConfigTests(unittest.TestCase):
         self.assertEqual(config.sleeve.outer_arc_angle_degrees, 211.684)
         self.assertEqual(config.geometry.connector_diameter_mm, 2.3)
         self.assertEqual(config.geometry.connector_radius_mm, 1.15)
-        self.assertIsNotNone(config.validation)
-        if config.validation is None:
-            self.fail("Expected validation configuration")
-        self.assertEqual(
-            config.validation.handpiece.withdrawal_distances_mm,
-            (0.0, 4.0, 8.0),
-        )
         self.assertEqual(config.inputs.template, (self.case_directory / "template.stl").resolve())
         self.assertEqual(
             config.inputs.patient_dentition,
             (self.case_directory / "patient_dentition.stl").resolve(),
         )
         self.assertEqual(config.output_directory, (self.case_directory / "output").resolve())
-
-    def test_loads_generation_config_without_validation(self):
-        config_data = self._valid_config_data()
-        del config_data["validation"]
-
-        config = CaseConfig.from_json(self._write_config(config_data))
-
-        self.assertIsNone(config.validation)
 
     def test_rejects_unknown_fields(self):
         config_data = self._valid_config_data()
@@ -115,21 +94,23 @@ class CaseConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ConfigurationError, "geometry 包含未知字段"):
             CaseConfig.from_json(self._write_config(config_data))
 
-    def test_rejects_invalid_numbers_and_motion_samples(self):
+    def test_rejects_missing_or_invalid_jaw(self):
+        config_data = self._valid_config_data()
+        del config_data["jaw"]
+        with self.assertRaisesRegex(ConfigurationError, "缺少必填字段：jaw"):
+            CaseConfig.from_json(self._write_config(config_data))
+
+        config_data = self._valid_config_data()
+        config_data["jaw"] = "maxilla"
+        with self.assertRaisesRegex(ConfigurationError, "upper.*lower"):
+            CaseConfig.from_json(self._write_config(config_data))
+
+    def test_rejects_invalid_numbers(self):
         config_data = self._valid_config_data()
         geometry_data = config_data["geometry"]
         self.assertIsInstance(geometry_data, dict)
         geometry_data["fusion_voxel_size_mm"] = math.inf
         with self.assertRaisesRegex(ConfigurationError, "必须为有限数"):
-            CaseConfig.from_json(self._write_config(config_data))
-
-        config_data = self._valid_config_data()
-        validation_data = config_data["validation"]
-        self.assertIsInstance(validation_data, dict)
-        handpiece_data = validation_data["handpiece"]
-        self.assertIsInstance(handpiece_data, dict)
-        handpiece_data["withdrawal_distances_mm"] = [4.0, 8.0]
-        with self.assertRaisesRegex(ConfigurationError, "必须包含 0"):
             CaseConfig.from_json(self._write_config(config_data))
 
     def test_rejects_outer_guide_diameter_not_larger_than_inner(self):

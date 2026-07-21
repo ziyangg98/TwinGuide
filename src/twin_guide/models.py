@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 from twin_guide.config import CaseConfig
 from twin_guide.geometry import Vec3
-from twin_guide.sleeve_estimation.types import ReconstructionValidation, SleeveEstimationReport
+from twin_guide.sleeve_estimation.types import SleeveEstimate
 
 if TYPE_CHECKING:
     import bpy
@@ -30,11 +30,9 @@ class GuideSleeve:
 
     guide_index: int
     guide_mesh: bpy.types.Object
-    parameters: SleeveEstimationReport
+    parameters: SleeveEstimate
     axial_min_mm: float
     axial_max_mm: float
-    template_intersection: Vec3
-    reconstruction_validation: ReconstructionValidation | None = None
 
     @property
     def center(self) -> Vec3:
@@ -44,7 +42,7 @@ class GuideSleeve:
 
     @property
     def axis(self) -> Vec3:
-        """返回拟合固定孔的轴向。"""
+        """返回从导柱顶部指向底部的内在轴向。"""
 
         return self.parameters.axis
 
@@ -119,14 +117,6 @@ class OperationFeature:
 
 
 @dataclass(frozen=True, slots=True)
-class HandpieceReference:
-    """已识别的牙科手机机头及其初始姿态所对应的导套。"""
-
-    source_guide_index: int
-    head_center: Vec3
-
-
-@dataclass(frozen=True, slots=True)
 class CaseAnalysis:
     """单次构建所需的病例几何分析和保留网格。"""
 
@@ -137,6 +127,7 @@ class CaseAnalysis:
     operation_feature: OperationFeature
     template_frame: TemplateFrame
     template_samples: tuple[SurfaceSample, ...]
+    dentition_samples: tuple[SurfaceSample, ...]
 
 
 @dataclass(frozen=True, slots=True)

@@ -37,10 +37,6 @@
 | `curve_resolution` | 24 | Blender 曲线轴向细分 |
 | `recut_sleeve_bore` | `True` | 是否复切导套固定孔 |
 
-## 异常与诊断
-
-参数校验和连接端点诊断由 `PointLinkingPlan` 汇总。
-
 ## 结果示例
 
 ![光滑连接管生成与固定孔复切](../images/point-linking.png)
