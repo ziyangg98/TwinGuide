@@ -9,8 +9,10 @@ from pathlib import Path
 import bpy
 from mathutils.bvhtree import BVHTree
 
+from twin_guide.blender.mesh_builders import MINIMUM_CONFORMAL_FOOTPRINT_SCALE
 from twin_guide.blender.mesh_queries import (
     build_bvh,
+    build_local_aligned_bvh,
     duplicate_triangle_count,
     mesh_component_vertex_counts,
     nearest_mesh_distance,
@@ -479,7 +481,7 @@ def _guide_terminal_u_extension_result(
 
 def _press_beam_result(
     model_bvh: BVHTree,
-    template_bvh: BVHTree,
+    template_mesh: bpy.types.Object,
     case: CaseAnalysis,
     connector_plan: PointLinkingPlan,
 ) -> ValidationResult:
@@ -501,8 +503,8 @@ def _press_beam_result(
             math.pi
             * endpoint.foot_major_radius_mm
             * endpoint.foot_minor_radius_mm
-            * 0.77
-            * 0.77
+            * MINIMUM_CONFORMAL_FOOTPRINT_SCALE
+            * MINIMUM_CONFORMAL_FOOTPRINT_SCALE
         ),
     }
     passed = True
@@ -553,11 +555,20 @@ def _press_beam_result(
         tangent = link.end - link.start
         tangent = (tangent - normal * tangent.dot(normal)).normalized()
         bitangent = normal.cross(tangent).normalized()
+        local_surface_bvh = build_local_aligned_bvh(
+            template_mesh,
+            link.surface_anchor,
+            normal,
+            tangent,
+            bitangent,
+            endpoint.foot_major_radius_mm,
+            endpoint.foot_minor_radius_mm,
+        )
         foot_probes = []
         # 生成器允许足印按局部曲率最多缩到 77%；以配置足印的 44% 采样，
         # 即使达到最小尺寸也只对应实际足印的 57%。
         rho = 0.44
-        maximum_relative_rho = rho / 0.77
+        maximum_relative_rho = rho / MINIMUM_CONFORMAL_FOOTPRINT_SCALE
         for angle_index in range(8):
             angle = math.tau * angle_index / 8
             query = (
@@ -565,7 +576,7 @@ def _press_beam_result(
                 + tangent * (rho * endpoint.foot_major_radius_mm * math.cos(angle))
                 + bitangent * (rho * endpoint.foot_minor_radius_mm * math.sin(angle))
             )
-            location, local_normal, _, _ = template_bvh.find_nearest(
+            location, local_normal, _, _ = local_surface_bvh.find_nearest(
                 to_blender_vector(query)
             )
             if location is None or local_normal is None:
@@ -601,7 +612,7 @@ def _press_beam_result(
 
 def _connector_endpoint_reinforcement_result(
     model_bvh: BVHTree,
-    template_bvh: BVHTree,
+    template_mesh: bpy.types.Object,
     case: CaseAnalysis,
     connector_plan: PointLinkingPlan,
 ) -> ValidationResult:
@@ -689,8 +700,19 @@ def _connector_endpoint_reinforcement_result(
             tangent = incident
         tangent = tangent.normalized()
         bitangent = normal.cross(tangent).normalized()
+        local_surface_bvh = build_local_aligned_bvh(
+            template_mesh,
+            surface_anchor,
+            normal,
+            tangent,
+            bitangent,
+            endpoint.foot_major_radius_mm,
+            endpoint.foot_minor_radius_mm,
+        )
+        # 与生成器允许的最小足印比例使用同一常量。此前这里按 80%
+        # 采样，而生成器可缩至 77%，会把真实足印内的边界点误判为缺失。
         rho = 0.44
-        maximum_relative_rho = rho / 0.80
+        maximum_relative_rho = rho / MINIMUM_CONFORMAL_FOOTPRINT_SCALE
         height = (
             endpoint.foot_peak_height_mm
             * (1.0 - maximum_relative_rho * maximum_relative_rho) ** 2
@@ -703,7 +725,7 @@ def _connector_endpoint_reinforcement_result(
                 + tangent * (rho * endpoint.foot_major_radius_mm * math.cos(angle))
                 + bitangent * (rho * endpoint.foot_minor_radius_mm * math.sin(angle))
             )
-            location, local_normal, _, _ = template_bvh.find_nearest(
+            location, local_normal, _, _ = local_surface_bvh.find_nearest(
                 to_blender_vector(query)
             )
             if location is None or local_normal is None:
@@ -869,14 +891,19 @@ def validate_guide(
         results.append(
             _connector_endpoint_reinforcement_result(
                 model_bvh,
-                template_bvh,
+                case.input_meshes.template_mesh,
                 case,
                 connector_plan,
             )
         )
     if connector_plan.press_beam_links:
         results.append(
-            _press_beam_result(model_bvh, template_bvh, case, connector_plan)
+            _press_beam_result(
+                model_bvh,
+                case.input_meshes.template_mesh,
+                case,
+                connector_plan,
+            )
         )
     if connector_plan.terminal_distal_common_node is not None:
         results.append(

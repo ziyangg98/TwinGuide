@@ -320,19 +320,21 @@ def remove_excess_components(
 def remove_subvoxel_components(
     mesh_object: bpy.types.Object,
     voxel_size_mm: float,
-    minimum_voxel_fraction: float = 0.25,
+    minimum_voxel_count: float = 1.5,
 ) -> bpy.types.Object:
-    """删除体积小于指定体素比例的封闭离散碎片。
+    """删除体积小于指定体素数量的封闭离散碎片。
 
-    该清理仅用于体素融合后的数值薄片，不限制最终连通体数量。具有实际
-    几何体积的独立输入导管或附件会保留，因此不等价于“只留最大连通体”。
+    Blender 体素重建偶尔会在接触边界留下一个完整体素大小的闭合立方体，
+    因而仅清理“亚体素”不足以覆盖这类数值碎片。默认删除小于 1.5 个体素
+    体积的分量；具有实际几何体积的独立输入导管或附件仍会保留，因此不
+    等价于“只留最大连通体”。
     """
 
     if voxel_size_mm <= 0.0:
         raise ValueError("体素尺寸必须为正")
-    if not 0.0 < minimum_voxel_fraction <= 1.0:
-        raise ValueError("最小体素体积比例必须位于 (0, 1] 内")
-    minimum_volume = voxel_size_mm**3 * minimum_voxel_fraction
+    if minimum_voxel_count <= 0.0:
+        raise ValueError("最小体素体积数量必须为正")
+    minimum_volume = voxel_size_mm**3 * minimum_voxel_count
     editable_mesh = bmesh.new()
     editable_mesh.from_mesh(mesh_object.data)
     components = _vertex_components(editable_mesh)

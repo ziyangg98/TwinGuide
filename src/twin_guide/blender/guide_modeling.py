@@ -46,6 +46,11 @@ from twin_guide.models import (
 from twin_guide.point_linking import PointLinkingPlan
 from twin_guide.types import ConnectorEndpointSource
 
+
+# 最终输入导管融合会使刚完成的切口边界向内回缩约半个体素。观察窗的
+# 独立验证要求轴线到实体保持 0.2 mm 净距，因此复切时显式预留该净距。
+OBSERVATION_WINDOW_CLEARANCE_MM = 0.2
+
 GENERATED_SUFFIXES = {".png", ".stl"}
 MAIN_CONNECTOR_PREFIXES = (
     "point_link_",
@@ -822,11 +827,6 @@ def build_guide_from_links(
         if point_links.recut_sleeve_bore
         else profile_window_cutters
     )
-    input_base_recut_cutters = (
-        (*channel_cutters, *profile_window_cutters)
-        if point_links.recut_sleeve_bore
-        else profile_window_cutters
-    )
     generated_mode = (
         case.config.sleeve_geometry_mode is SleeveGeometryMode.GENERATED
     )
@@ -876,20 +876,28 @@ def build_guide_from_links(
             case.config.geometry.fusion_voxel_size_mm,
             materials["final"],
         )
-        # input 模式只复切尚未包含输入导管的基础结构：channel cutter 删除
-        # 连接梁侵入导孔的部分，profile cutter 恢复观察窗。原始导管随后
-        # 才作为受保护实体加入，因此不会被这些 cutter 削弱。
-        if input_base_recut_cutters:
-            # 最后一次体素融合会使已切边界回缩约半个体素。这里按统一
-            # 融合分辨率补偿数值离散误差，不接触随后加入的受保护输入导管。
+        voxel_size_mm = case.config.geometry.fusion_voxel_size_mm
+        # input 模式只复切尚未包含输入导管的基础结构。导孔只补偿半个
+        # 体素；观察窗还需满足最终 0.2 mm 轴线净距，因此两类 cutter
+        # 分开执行，避免无谓扩大导孔。
+        if point_links.recut_sleeve_bore and channel_cutters:
             protected_base = apply_manifold3d_differences(
                 protected_base,
-                input_base_recut_cutters,
+                channel_cutters,
+                cutter_clearance_mm=0.5 * voxel_size_mm,
+            )
+        if profile_window_cutters:
+            protected_base = apply_manifold3d_differences(
+                protected_base,
+                profile_window_cutters,
                 cutter_clearance_mm=(
-                    0.5 * case.config.geometry.fusion_voxel_size_mm
+                    OBSERVATION_WINDOW_CLEARANCE_MM + 0.5 * voxel_size_mm
                 ),
             )
-        else:
+        if (
+            not (point_links.recut_sleeve_bore and channel_cutters)
+            and not profile_window_cutters
+        ):
             clean_mesh(protected_base)
         for avoidance in handpiece_avoidance or ():
             handpiece_cutter = import_polygon_mesh(
@@ -906,12 +914,12 @@ def build_guide_from_links(
         final_mesh = voxel_union(
             (protected_base, *sleeve_meshes),
             "twin_guide_with_protected_input_sleeves",
-            case.config.geometry.fusion_voxel_size_mm,
+            voxel_size_mm,
             materials["final"],
         )
         remove_subvoxel_components(
             final_mesh,
-            case.config.geometry.fusion_voxel_size_mm,
+            voxel_size_mm,
         )
         clean_mesh(final_mesh)
         requires_serialized_repair = False

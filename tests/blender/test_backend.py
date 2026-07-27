@@ -22,6 +22,7 @@ from twin_guide.blender.mesh_queries import (
     nearest_mesh_surface_side,
     point_inside_mesh,
     remove_excess_components,
+    remove_subvoxel_components,
     topology_edge_counts,
 )
 from twin_guide.blender.scene import clear_scene, set_active_object
@@ -218,6 +219,24 @@ class BlenderBackendTests(unittest.TestCase):
         remove_excess_components(main_mesh, 1)
 
         self.assertEqual(len(mesh_component_vertex_counts(main_mesh)), 1)
+
+    def test_microscopic_component_cleanup_removes_single_voxel_artifact(self):
+        """单体素碎片应删除，具有实际体积的独立实体应保留。"""
+
+        bpy.ops.mesh.primitive_cube_add(size=2.0, location=(0.0, 0.0, 0.0))
+        main_mesh = bpy.context.object
+        bpy.ops.mesh.primitive_cube_add(size=0.2, location=(3.0, 0.0, 0.0))
+        artifact_mesh = bpy.context.object
+        bpy.ops.mesh.primitive_cube_add(size=0.6, location=(5.0, 0.0, 0.0))
+        retained_mesh = bpy.context.object
+        set_active_object(main_mesh)
+        artifact_mesh.select_set(True)
+        retained_mesh.select_set(True)
+        bpy.ops.object.join()
+
+        self.assertEqual(len(mesh_component_vertex_counts(main_mesh)), 3)
+        remove_subvoxel_components(main_mesh, voxel_size_mm=0.2)
+        self.assertEqual(len(mesh_component_vertex_counts(main_mesh)), 2)
 
     def test_boolean_preserves_cutter(self):
         target_mesh = create_axis_cylinder("target", Vec3(0.0, 0.0, -2.0), Vec3(0.0, 0.0, 2.0), 2.0)

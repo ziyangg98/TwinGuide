@@ -25,6 +25,7 @@ from twin_guide.models import WindowCutout
 # TwinGuide 内部 trimesh 算法阈值为 1.50 mm；Blender 将原多边形重新三角化后，
 # 同一足印的最近点最大偏差约增加 0.05 mm，预留 0.06 mm 离散容差。
 FOOT_PROJECTION_LIMIT_MM = 1.560
+MINIMUM_CONFORMAL_FOOTPRINT_SCALE = 0.77
 
 
 def assign_material(
@@ -355,7 +356,7 @@ def create_conformal_fusion_foot(
         0.80,
         0.79,
         0.78,
-        0.77,
+        MINIMUM_CONFORMAL_FOOTPRINT_SCALE,
     ):
         candidate_top = []
         candidate_bottom = []
