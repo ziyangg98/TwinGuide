@@ -34,6 +34,7 @@ class ConnectorEndpointSource(StrEnum):
     """主连接梁端点的解剖来源，避免使用无约束字符串。"""
 
     TEMPLATE = "template"
+    SLEEVE = "sleeve"
     DISTAL_COMMON_NODE = "distal_common_node"
 
 

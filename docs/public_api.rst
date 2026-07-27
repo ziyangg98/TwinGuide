@@ -18,6 +18,15 @@ Python API 参考
 .. autoclass:: twin_guide.CaseConfig
    :members:
 
+.. autoclass:: twin_guide.AlgorithmParameters
+   :members:
+
+.. autoclass:: twin_guide.AlgorithmProfile
+
+.. autoclass:: twin_guide.ObservationWindowMode
+
+.. autoclass:: twin_guide.ConnectorMode
+
 .. autoclass:: twin_guide.SleeveParameters
    :members:
 
@@ -62,8 +71,8 @@ Python API 参考
 第 3 步：导孔与窗口规划
 ----------------------------------------
 
-现有接口读取病例分析、当前模式导管和牙位映射结果，生成导孔、操作窗及
-按 FDI 区间构造的轴扫掠观察窗。
+现有接口读取病例分析、当前模式导管和牙位映射结果，按算法预设生成导孔、
+操作窗及 FDI 轴扫掠观察窗或兼容表面缺口。
 
 .. autofunction:: twin_guide.plan_window_cutouts
 
@@ -99,7 +108,8 @@ Python API 参考
 第 6 步：光滑连接管生成
 ----------------------------------------
 
-当前接口对每个导套生成上下两根连续导套—牙科导板梁，总数为四根。
+当前预设对每个导套生成上下两根连续导套—牙科导板梁，总数为四根；
+兼容预设对每个导套生成四根独立 Bézier 梁。
 配置按压梁时，当前接口同时生成三根 Y 型按压梁及汇合球计划。
 
 .. autofunction:: twin_guide.link_selected_points

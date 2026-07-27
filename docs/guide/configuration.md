@@ -2,7 +2,7 @@
 
 `CaseConfig.from_json()` 读取 JSON 运行配置，并直接读取
 `tooth_identification.case_yaml` 指向的病例 YAML。JSON 保存网格路径、
-尺寸、融合和输出参数；YAML 的 `design` 保存牙位、锚点站位和
+尺寸、融合和输出参数；YAML 的 `design` 保存算法预设、牙位、锚点站位和
 旋转角度，`planning.operation_windows` 保存病例级操作窗范围。
 两者加载后在内存中按字段融合，不生成转换后的 JSON。设计字段若
 同时存在于两个文件中则配置失败；操作窗参数是明确的例外，YAML
@@ -28,6 +28,37 @@
 | `press_beam` | Y 型按压梁工程参数；模式、牙位与角度推荐放在 YAML |
 | `render` | 过程图和结果图的像素尺寸 |
 | `output_directory` | STL 和过程图的输出目录 |
+
+## YAML 算法预设
+
+融合后的项目用同一个入口运行两套实现。病例 YAML 通过以下字段选择预设：
+
+```yaml
+design:
+  algorithms:
+    profile: current
+```
+
+- `current`：默认流程，使用 FDI 牙位映射驱动的轴扫掠观察窗，以及跨站位的
+  连续 Hermite 梁架。规范病例均显式使用此预设，融合前后的结果语义不变。
+- `legacy_merge`：TwinGuideMerge 对照流程，使用固定 7.0 mm 宽的导板表面开放
+  缺口，以及每个导管四根独立三次 Bézier 梁。该连接策略从导管真实外壁 Q 点
+  起始，并保留旧实现“不做牙列裁切、不加导板端强化”的行为。
+
+也可以在预设基础上只替换某一阶段：
+
+```yaml
+design:
+  algorithms:
+    profile: current
+    observation_window: surface_notch
+    connector: independent_bezier
+```
+
+`observation_window` 可选 `fdi_axis_sweep`、`surface_notch`；`connector` 可选
+`continuous_frame`、`independent_bezier`。显式阶段值优先于 `profile` 默认值。
+独立 Bézier 只适用于每个种植位可独立连接的病例；连续多种植位路径无法用旧
+拓扑表达时程序会明确停止。生产建模仍推荐 `current`，旧预设主要用于算法对照。
 
 ## 完整示例
 
@@ -177,10 +208,11 @@ planning:
 另一候选至少近 3 mm，否则停止病例。选择依据和两方向距离写入
 `coordinate_system.missing_to_surgical_site_consistency`。
 
-全局高度固定为 0.2 mm、扫掠角为 90°。完整 QA 失败时，只对失败轴行
+在 `fdi_axis_sweep` 策略下，全局高度固定为 0.2 mm、扫掠角为 90°。完整 QA 失败时，只对失败轴行
 依次尝试 0.5、1.0、2.0 mm 的有效高度；通过即停止，全部失败时保留
 2.0 mm 最后一次结果和失败标记。未配置牙位映射时不生成观察窗，且不再
-回退到无 FDI 语义的 7.0 mm 矩形缺口。
+自动回退到无 FDI 语义的 7.0 mm 矩形缺口。只有显式选择
+`surface_notch` 或 `legacy_merge` 时才生成该表面缺口。
 
 `handpiece_avoidance` 启用第 7 步；可以是单个对象，也可以是带唯一 `id` 的
 对象数组。`handpiece` 是当前装配位姿的手机 STL，

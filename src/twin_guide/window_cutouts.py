@@ -9,7 +9,7 @@ from twin_guide.models import (
     WindowCutout,
     WindowPurpose,
 )
-from twin_guide.observation_window_opening import build_observation_window_opening
+from twin_guide.strategies.observation_windows import plan_observation_windows
 from twin_guide.tooth_identification import ToothIdentificationResult
 from twin_guide.types import SleeveGenerationResult
 
@@ -114,8 +114,8 @@ def plan_window_cutouts(
 
     算法说明:
         始终生成两个导孔和一个操作窗。配置第 2 步报告时，
-        使用其 FDI 端点在本阶段生成轴扫掠组合 cutter。未配置牙位映射
-        时不再生成旧版“最近表面 7 mm 矩形缺口”，仅保留操作窗。
+        当前策略使用其 FDI 端点生成轴扫掠组合 cutter；显式选择兼容策略时
+        改为最近表面 7 mm 开放缺口。当前策略未配置牙位映射时仅保留操作窗。
     """
 
     if case.guide_sleeves != sleeves.sleeves:
@@ -128,17 +128,12 @@ def plan_window_cutouts(
             1,
         )
     )
-    if tooth_identification is not None:
-        profile_window = build_observation_window_opening(
-            case.config,
-            tooth_identification,
-        )
-        return CutoutPlan(
-            channels=_plan_channels(case),
-            windows=operation_windows,
-            profile_windows=(profile_window,),
-        )
+    observation_windows, profile_windows = plan_observation_windows(
+        case,
+        tooth_identification,
+    )
     return CutoutPlan(
         channels=_plan_channels(case),
-        windows=operation_windows,
+        windows=(*operation_windows, *observation_windows),
+        profile_windows=profile_windows,
     )

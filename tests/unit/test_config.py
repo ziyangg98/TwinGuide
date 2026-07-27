@@ -5,8 +5,11 @@ import unittest
 from pathlib import Path
 
 from twin_guide.config import (
+    AlgorithmProfile,
     CaseConfig,
+    ConnectorMode,
     Jaw,
+    ObservationWindowMode,
     SleeveGeometryMode,
     case_occlusal_axis,
     require_production_review,
@@ -79,6 +82,12 @@ class CaseConfigTests(unittest.TestCase):
         self.assertEqual(config.sleeve.outer_diameter_mm, 4.3)
         self.assertEqual(config.sleeve.outer_radius_mm, 2.15)
         self.assertIs(config.sleeve_geometry_mode, SleeveGeometryMode.GENERATED)
+        self.assertIs(config.algorithms.profile, AlgorithmProfile.CURRENT)
+        self.assertIs(
+            config.algorithms.observation_window,
+            ObservationWindowMode.FDI_AXIS_SWEEP,
+        )
+        self.assertIs(config.algorithms.connector, ConnectorMode.CONTINUOUS_FRAME)
         self.assertEqual(config.sleeve.height_mm, 16.373)
         self.assertEqual(config.sleeve.platform_width_mm, 2.036)
         self.assertEqual(config.sleeve.platform_height_mm, 9.875)
@@ -155,6 +164,64 @@ design:
         config_data["tooth_identification"] = {"case_yaml": "case.yaml"}
 
         with self.assertRaisesRegex(ConfigurationError, "generated 或 input"):
+            CaseConfig.from_json(self._write_config(config_data))
+
+    def test_loads_legacy_merge_algorithm_profile_from_case_yaml(self):
+        (self.case_directory / "case.yaml").write_text(
+            """
+design:
+  algorithms:
+    profile: legacy_merge
+""",
+            encoding="utf-8",
+        )
+        config_data = self._valid_config_data()
+        config_data["tooth_identification"] = {"case_yaml": "case.yaml"}
+
+        config = CaseConfig.from_json(self._write_config(config_data))
+
+        self.assertIs(config.algorithms.profile, AlgorithmProfile.LEGACY_MERGE)
+        self.assertIs(
+            config.algorithms.observation_window,
+            ObservationWindowMode.SURFACE_NOTCH,
+        )
+        self.assertIs(config.algorithms.connector, ConnectorMode.INDEPENDENT_BEZIER)
+
+    def test_algorithm_profile_allows_explicit_stage_override(self):
+        (self.case_directory / "case.yaml").write_text(
+            """
+design:
+  algorithms:
+    profile: legacy_merge
+    observation_window: fdi_axis_sweep
+    connector: continuous_frame
+""",
+            encoding="utf-8",
+        )
+        config_data = self._valid_config_data()
+        config_data["tooth_identification"] = {"case_yaml": "case.yaml"}
+
+        config = CaseConfig.from_json(self._write_config(config_data))
+
+        self.assertIs(
+            config.algorithms.observation_window,
+            ObservationWindowMode.FDI_AXIS_SWEEP,
+        )
+        self.assertIs(config.algorithms.connector, ConnectorMode.CONTINUOUS_FRAME)
+
+    def test_rejects_unknown_algorithm_profile(self):
+        (self.case_directory / "case.yaml").write_text(
+            """
+design:
+  algorithms:
+    profile: experimental_unknown
+""",
+            encoding="utf-8",
+        )
+        config_data = self._valid_config_data()
+        config_data["tooth_identification"] = {"case_yaml": "case.yaml"}
+
+        with self.assertRaisesRegex(ConfigurationError, "current 或 legacy_merge"):
             CaseConfig.from_json(self._write_config(config_data))
 
     def test_connector_diameter_defaults_to_4_60_mm(self):

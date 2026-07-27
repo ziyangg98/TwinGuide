@@ -78,6 +78,23 @@ class CaseDataLayoutTests(unittest.TestCase):
                 self.assertEqual(len(sleeves["files"]), 2)
                 self.assertEqual(len(sleeves["active_ids"]), 2)
 
+    def test_all_cases_explicitly_select_current_algorithm_profile(self) -> None:
+        """正式病例必须显式锁定当前算法，避免融合后默认值漂移。"""
+
+        datasets = (
+            (self.dataset, self.case_names),
+            (self.multiple_dataset, self.multiple_case_names),
+        )
+        for dataset, case_names in datasets:
+            for case_name in case_names:
+                with self.subTest(case=case_name):
+                    case_yaml = dataset / case_name / "case.yaml"
+                    content = yaml.safe_load(case_yaml.read_text(encoding="utf-8"))
+                    self.assertEqual(
+                        content["design"]["algorithms"],
+                        {"profile": "current"},
+                    )
+
     def test_multiple_cases_define_continuous_frame_placeholders(self) -> None:
         """多颗 YAML 统一预留跨两个种植位的连接梁和 Y 梁参数。"""
 

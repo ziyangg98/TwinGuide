@@ -7,8 +7,9 @@ from twin_guide.clearance_adjustment import adjust_clearance
 from twin_guide.config import CaseConfig, PressBeamMode
 from twin_guide.guide_component_bridge import select_guide_component_bridge
 from twin_guide.guide_terminal_u_extension import select_guide_terminal_u_extension
-from twin_guide.point_linking import PointLinkingConfig, link_selected_points
+from twin_guide.point_linking import PointLinkingConfig
 from twin_guide.press_beam_points import select_press_beam_points
+from twin_guide.strategies.connectors import build_point_linking_plan
 from twin_guide.template_anchors import TemplatePointSelectionConfig
 from twin_guide.template_link_points import (
     TemplateLinkPointContext,
@@ -189,7 +190,8 @@ def run_generation_process(config: CaseConfig) -> GenerationProcessResult:
         results.append(
             StageResult(STAGES[4], StageRunStatus.COMPLETED, context.press_beam_points)
         )
-    context.point_linking = link_selected_points(
+    context.point_linking = build_point_linking_plan(
+        config.algorithms.connector,
         context.template_link_points,
         PointLinkingConfig(
             radius_mm=config.geometry.connector_radius_mm,

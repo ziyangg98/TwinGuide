@@ -96,6 +96,36 @@ class SleeveGeometryMode(StrEnum):
     INPUT = "input"
 
 
+class AlgorithmProfile(StrEnum):
+    """一组经过成套验证的流程算法预设。"""
+
+    CURRENT = "current"
+    LEGACY_MERGE = "legacy_merge"
+
+
+class ObservationWindowMode(StrEnum):
+    """观察窗规划算法。"""
+
+    FDI_AXIS_SWEEP = "fdi_axis_sweep"
+    SURFACE_NOTCH = "surface_notch"
+
+
+class ConnectorMode(StrEnum):
+    """导管—导板主连接结构算法。"""
+
+    CONTINUOUS_FRAME = "continuous_frame"
+    INDEPENDENT_BEZIER = "independent_bezier"
+
+
+@dataclass(frozen=True, slots=True)
+class AlgorithmParameters:
+    """当前病例采用的观察窗与主连接梁策略。"""
+
+    profile: AlgorithmProfile = AlgorithmProfile.CURRENT
+    observation_window: ObservationWindowMode = ObservationWindowMode.FDI_AXIS_SWEEP
+    connector: ConnectorMode = ConnectorMode.CONTINUOUS_FRAME
+
+
 @dataclass(frozen=True, slots=True)
 class InputMeshPaths:
     """病例的牙科导板、导套装配体和患者牙列网格路径。"""
@@ -430,6 +460,7 @@ class CaseConfig:
     inputs: InputMeshPaths
     sleeve: SleeveParameters
     sleeve_geometry_mode: SleeveGeometryMode
+    algorithms: AlgorithmParameters
     geometry: GeometryParameters
     windows: WindowParameters
     tooth_identification: ToothIdentificationInputs | None
@@ -510,6 +541,7 @@ class CaseConfig:
             sleeve_geometry_mode=_parse_sleeve_geometry_mode(
                 yaml_design.get("sleeve_geometry")
             ),
+            algorithms=_parse_algorithms(yaml_design.get("algorithms")),
             geometry=geometry,
             windows=_parse_windows(
                 window_raw,
@@ -1165,6 +1197,57 @@ def _parse_sleeve_geometry_mode(raw_value: object) -> SleeveGeometryMode:
         raise ConfigurationError(
             "case.yaml design.sleeve_geometry.mode 必须为 generated 或 input"
         ) from error
+
+
+def _parse_algorithms(raw_value: object) -> AlgorithmParameters:
+    """解析病例 YAML 中的融合算法预设及可选逐阶段覆盖。"""
+
+    if raw_value is None:
+        return AlgorithmParameters()
+    section = "case.yaml design.algorithms"
+    raw = _mapping(raw_value, section)
+    _reject_unknown(
+        raw,
+        {"profile", "observation_window", "connector"},
+        section,
+    )
+    try:
+        profile = AlgorithmProfile(
+            str(raw.get("profile", AlgorithmProfile.CURRENT.value))
+        )
+    except ValueError as error:
+        raise ConfigurationError(
+            f"{section}.profile 必须为 current 或 legacy_merge"
+        ) from error
+
+    defaults = {
+        AlgorithmProfile.CURRENT: (
+            ObservationWindowMode.FDI_AXIS_SWEEP,
+            ConnectorMode.CONTINUOUS_FRAME,
+        ),
+        AlgorithmProfile.LEGACY_MERGE: (
+            ObservationWindowMode.SURFACE_NOTCH,
+            ConnectorMode.INDEPENDENT_BEZIER,
+        ),
+    }
+    default_observation, default_connector = defaults[profile]
+    try:
+        observation = ObservationWindowMode(
+            str(raw.get("observation_window", default_observation.value))
+        )
+    except ValueError as error:
+        raise ConfigurationError(
+            f"{section}.observation_window 必须为 fdi_axis_sweep 或 surface_notch"
+        ) from error
+    try:
+        connector = ConnectorMode(
+            str(raw.get("connector", default_connector.value))
+        )
+    except ValueError as error:
+        raise ConfigurationError(
+            f"{section}.connector 必须为 continuous_frame 或 independent_bezier"
+        ) from error
+    return AlgorithmParameters(profile, observation, connector)
 
 
 def _merge_operation_window_parameters(

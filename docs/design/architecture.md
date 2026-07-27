@@ -17,6 +17,11 @@ Blender 建模层将几何计划转换为网格并导出 STL，检查层再以�
 联建锚点选择、曲线连接和可选手机包络构造，将输出写入 `GenerationContext`。
 `generate_guide()` 随后调用 Blender 建模层。
 
+`twin_guide.strategies` 是融合层：观察窗和连接梁分别通过稳定分派接口选择
+当前 TwinGuide 实现或 TwinGuideMerge 兼容实现。选择只来自
+`case.yaml design.algorithms`，后续实体化和验证消费同一份策略结果，避免生成与
+检查使用不同算法。
+
 ## 几何计算
 
 病例分析负责读取 Blender 网格并建立公用的 `CaseAnalysis`。

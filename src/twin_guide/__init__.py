@@ -4,12 +4,16 @@ from pathlib import Path
 
 from twin_guide.clearance_adjustment import HandpieceAvoidancePlan, adjust_clearance
 from twin_guide.config import (
+    AlgorithmParameters,
+    AlgorithmProfile,
     CaseConfig,
+    ConnectorMode,
     GuideAnchorLocation,
     GuideAnchorParameters,
     GuideAnchorSide,
     HandpieceAvoidanceParameters,
     Jaw,
+    ObservationWindowMode,
     PressBeamGuideEndpointParameters,
     PressBeamMode,
     PressBeamParameters,
@@ -70,8 +74,11 @@ from twin_guide.window_cutouts import (
 )
 
 __all__ = [
+    "AlgorithmParameters",
+    "AlgorithmProfile",
     "BuildArtifacts",
     "CaseConfig",
+    "ConnectorMode",
     "GenerationContext",
     "GenerationProcessResult",
     "GuideAnchorLocation",
@@ -81,6 +88,7 @@ __all__ = [
     "HandpieceAvoidancePlan",
     "Jaw",
     "ObservationWindowMapping",
+    "ObservationWindowMode",
     "PointLink",
     "PointLinkingConfig",
     "PointLinkingPlan",

@@ -68,6 +68,7 @@ class PointLink:
     guide_indices: tuple[int, ...] = ()
     tube_contacts: tuple[Vec3, ...] = ()
     contact_indices: tuple[int, ...] = ()
+    link_label: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +105,7 @@ class PointLinkingPlan:
     guide_component_bridge: GuideComponentBridgePlan | None = None
     guide_terminal_u_extension: GuideTerminalUExtensionPlan | None = None
     terminal_distal_common_node: TerminalDistalCommonNodePlan | None = None
+    trim_against_dentition: bool = True
 
 
 def _projected_direction(vector: Vec3, normal: Vec3) -> Vec3:

@@ -24,7 +24,12 @@ from twin_guide.blender.mesh_queries import (
 from twin_guide.blender.stl_io import import_stl_mesh
 from twin_guide.blender.sleeve_reconstruction import create_closed_sleeve_object
 from twin_guide.case_analysis import analyze_case
-from twin_guide.config import CaseConfig, PressBeamMode, SleeveGeometryMode
+from twin_guide.config import (
+    CaseConfig,
+    ObservationWindowMode,
+    PressBeamMode,
+    SleeveGeometryMode,
+)
 from twin_guide.geometry import Vec3, point_axis_coordinates
 from twin_guide.guide_component_bridge import select_guide_component_bridge
 from twin_guide.guide_terminal_u_extension import select_guide_terminal_u_extension
@@ -33,9 +38,11 @@ from twin_guide.models import (
     CylinderCutout,
     ProfileWindowCutout,
     ValidationResult,
+    WindowPurpose,
 )
-from twin_guide.point_linking import PointLinkingConfig, PointLinkingPlan, link_selected_points
+from twin_guide.point_linking import PointLinkingConfig, PointLinkingPlan
 from twin_guide.press_beam_points import select_press_beam_points
+from twin_guide.strategies.connectors import build_point_linking_plan
 from twin_guide.template_anchors import TemplatePointSelectionConfig
 from twin_guide.template_link_points import (
     TemplateLinkPointContext,
@@ -137,7 +144,7 @@ def _connector_result(
     connector_plan: PointLinkingPlan,
     connector_radius_mm: float,
 ) -> ValidationResult:
-    """检查每根连续梁中心线、导管 P 点和导板 A 点的保留情况。"""
+    """检查每根主梁中心线及其导管和导板端点的保留情况。"""
 
     voxel_tolerance_mm = case.config.geometry.fusion_voxel_size_mm
     metrics: dict[str, int | float] = {
@@ -178,7 +185,8 @@ def _connector_result(
             if connector.right_source is ConnectorEndpointSource.TEMPLATE
             else 0.0
         )
-        metric_prefix = f"guide_{connector.guide_index}_{connector.sleeve_label}"
+        link_label = connector.link_label or connector.sleeve_label
+        metric_prefix = f"guide_{connector.guide_index}_{link_label}"
         metrics[f"{metric_prefix}_sample_count"] = len(connector.centerline)
         metrics[f"{metric_prefix}_retained_sample_count"] = len(retained_centerline)
         metrics[f"{metric_prefix}_inside_fraction"] = inside_fraction
@@ -802,7 +810,8 @@ def validate_guide(
     press_beam_points = None
     if config.press_beam.mode is not PressBeamMode.DISABLED:
         press_beam_points = select_press_beam_points(selection_context)
-    connector_plan = link_selected_points(
+    connector_plan = build_point_linking_plan(
+        config.algorithms.connector,
         link_points,
         PointLinkingConfig(
             radius_mm=config.geometry.connector_radius_mm,
@@ -855,13 +864,16 @@ def validate_guide(
             connector_plan,
             config.geometry.connector_radius_mm,
         ),
-        _connector_endpoint_reinforcement_result(
-            model_bvh,
-            template_bvh,
-            case,
-            connector_plan,
-        ),
     ]
+    if connector_plan.connector_guide_endpoint is not None:
+        results.append(
+            _connector_endpoint_reinforcement_result(
+                model_bvh,
+                template_bvh,
+                case,
+                connector_plan,
+            )
+        )
     if connector_plan.press_beam_links:
         results.append(
             _press_beam_result(model_bvh, template_bvh, case, connector_plan)
@@ -942,8 +954,30 @@ def validate_guide(
             channel_metrics,
         )
     )
-    if tooth_identification is not None:
+    if (
+        config.algorithms.observation_window
+        is ObservationWindowMode.FDI_AXIS_SWEEP
+        and tooth_identification is not None
+    ):
         results.append(
             _observation_window_result(model_bvh, cutout_plan.profile_windows)
+        )
+    elif (
+        config.algorithms.observation_window
+        is ObservationWindowMode.SURFACE_NOTCH
+    ):
+        notch_count = sum(
+            window.purpose is WindowPurpose.OBSERVATION
+            for window in cutout_plan.windows
+        )
+        results.append(
+            ValidationResult(
+                "observation_windows",
+                notch_count > 0,
+                {
+                    "window_count": notch_count,
+                    "surface_notch_strategy": 1,
+                },
+            )
         )
     return tuple(results)

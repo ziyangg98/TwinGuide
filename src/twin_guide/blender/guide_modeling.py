@@ -189,18 +189,18 @@ def create_point_link_meshes(
     material: bpy.types.Material,
     template_mesh: bpy.types.Object | None = None,
 ) -> tuple[bpy.types.Object, ...]:
-    """将第 6 步计划实体化为尚未复切固定孔的连续扫掠梁。
+    """将第 6 步计划实体化为尚未复切固定孔的扫掠梁。
 
     参数:
         plan: 第 6 步纯几何连接计划。
         material: 赋给连接管的 Blender 材质。
 
     返回:
-        四根连接梁、可选的三根 Y 型按压梁及其显式汇合球网格。
+        当前四根连续梁或兼容独立梁、可选的三根 Y 型按压梁及汇合球网格。
 
     算法说明:
-        对每条已经过导管 P 点的连续中心线，使用平行输运标架扫掠圆形
-        截面并封闭两端。固定孔不能在单条梁上提前复切，否则全直径预埋
+        对每条已规划中心线使用平行输运标架扫掠圆形截面并封闭两端。
+        固定孔不能在单条梁上提前复切，否则全直径预埋
         的下梁可能在融合前被切断；``build_guide_from_links`` 在全部正向
         融合完成后统一复切最终整体。
     """
@@ -791,13 +791,14 @@ def build_guide_from_links(
         materials["connector"],
         template_mesh,
     )
-    link_meshes = _trim_main_connectors_against_dentition(
-        link_meshes,
-        case.input_meshes.patient_dentition_mesh,
-        case.config.geometry.connector_dental_clearance_mm,
-        case.config.geometry.fusion_voxel_size_mm,
-        materials["connector"],
-    )
+    if point_links.trim_against_dentition:
+        link_meshes = _trim_main_connectors_against_dentition(
+            link_meshes,
+            case.input_meshes.patient_dentition_mesh,
+            case.config.geometry.connector_dental_clearance_mm,
+            case.config.geometry.fusion_voxel_size_mm,
+            materials["connector"],
+        )
     sleeve_point_markers, template_point_markers = _create_link_point_markers(
         point_links, materials
     )

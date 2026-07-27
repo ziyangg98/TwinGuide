@@ -39,6 +39,11 @@ TwinGuide 面向双导套牙科导板的自动化建模，负责输入导管识�
 > 可选生成 Y 型按压梁；配置手机 STL 与止挡报告时，第 7 步生成当前深度
 > `-5°～+5°` 左右摆动包络，并在最终整体上直接切除避障空间。
 
+`case.yaml` 的 `design.algorithms.profile` 选择融合后的算法预设。`current` 是
+默认且经现有病例验证的 TwinGuide 流程；`legacy_merge` 保留 TwinGuideMerge 的
+7 mm 表面缺口观察窗和每导管四根独立三次 Bézier 梁，便于同一输入直接对照。
+观察窗和连接梁也可分别覆盖选择，详见“病例配置”。
+
 ## 功能与结果
 
 <table>
