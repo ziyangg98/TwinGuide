@@ -7,7 +7,16 @@ name = "twin-guide"
 version = "0.2.0"
 description = "基于三维模型的双导套牙科导板自动构建工具"
 requires-python = ">=3.13,<3.15"
-dependencies = []
+dependencies = [
+    "manifold3d>=3.5,<4",
+    "matplotlib>=3.10,<4",
+    "numpy>=2.2,<3",
+    "PyYAML>=6.0,<7",
+    "scikit-image>=0.25,<1",
+    "scikit-learn>=1.6,<2",
+    "scipy>=1.15,<2",
+    "trimesh>=4.6,<5",
+]
 
 [project.optional-dependencies]
 docs = [

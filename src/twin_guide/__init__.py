@@ -2,20 +2,40 @@
 
 from pathlib import Path
 
-from twin_guide.clearance_adjustment import adjust_clearance
-from twin_guide.config import CaseConfig, Jaw, SleeveParameters
+from twin_guide.clearance_adjustment import HandpieceAvoidancePlan, adjust_clearance
+from twin_guide.config import (
+    CaseConfig,
+    GuideAnchorLocation,
+    GuideAnchorParameters,
+    GuideAnchorSide,
+    HandpieceAvoidanceParameters,
+    Jaw,
+    PressBeamGuideEndpointParameters,
+    PressBeamMode,
+    PressBeamParameters,
+    PressBeamSleeveAnchorSelectionParameters,
+    SleeveGeometryMode,
+    SleeveParameters,
+    ToothIdentificationInputs,
+)
 from twin_guide.models import BuildArtifacts, ValidationResult
 from twin_guide.point_linking import (
     PointLink,
     PointLinkingConfig,
     PointLinkingPlan,
+    PressBeamLink,
     link_selected_points,
 )
-from twin_guide.press_beam_points import select_press_beam_points
+from twin_guide.press_beam_points import (
+    PressBeamJunctionHeightMode,
+    PressBeamPointPlan,
+    select_press_beam_points,
+)
 from twin_guide.sleeve_anchors import (
     SleeveAnchorPlan,
     SleeveAnchorPoint,
     SleeveAnchorSelection,
+    SleeveAnchorSelectionConfig,
     select_sleeve_anchors,
 )
 from twin_guide.template_anchors import (
@@ -30,7 +50,12 @@ from twin_guide.template_link_points import (
     TemplateLinkPointPlan,
     select_template_link_points,
 )
-from twin_guide.tooth_identification import identify_tooth_positions
+from twin_guide.tooth_identification import (
+    ObservationWindowMapping,
+    ToothIdentificationResult,
+    ToothPosition,
+    identify_tooth_positions,
+)
 from twin_guide.types import (
     GenerationContext,
     GenerationProcessResult,
@@ -49,14 +74,29 @@ __all__ = [
     "CaseConfig",
     "GenerationContext",
     "GenerationProcessResult",
+    "GuideAnchorLocation",
+    "GuideAnchorParameters",
+    "GuideAnchorSide",
+    "HandpieceAvoidanceParameters",
+    "HandpieceAvoidancePlan",
     "Jaw",
+    "ObservationWindowMapping",
     "PointLink",
     "PointLinkingConfig",
     "PointLinkingPlan",
+    "PressBeamLink",
+    "PressBeamGuideEndpointParameters",
+    "PressBeamMode",
+    "PressBeamParameters",
+    "PressBeamSleeveAnchorSelectionParameters",
+    "PressBeamJunctionHeightMode",
+    "PressBeamPointPlan",
     "SleeveAnchorPlan",
     "SleeveAnchorPoint",
     "SleeveAnchorSelection",
+    "SleeveAnchorSelectionConfig",
     "SleeveGenerationInputs",
+    "SleeveGeometryMode",
     "SleeveGenerationResult",
     "SleeveParameters",
     "StageMaturity",
@@ -68,6 +108,9 @@ __all__ = [
     "TemplatePointPlan",
     "TemplatePointSelection",
     "TemplatePointSelectionConfig",
+    "ToothIdentificationInputs",
+    "ToothIdentificationResult",
+    "ToothPosition",
     "ValidationResult",
     "WindowCutoutPlan",
     "adjust_clearance",
@@ -135,7 +178,8 @@ def validate_guide(model_path: str | Path, config: CaseConfig) -> tuple[Validati
     算法说明:
         读取导出 STL 和病例基准，分别计算网格拓扑、导套保留、连接管、
         导孔和窗口指标，每项检查返回独立的 ``ValidationResult``。
-        牙科手机净距属于待实现的第 7 步，当前不执行。
+        当前验证命令不重复执行手机包络差集；手机避障已在配置启用时由
+        第 7 步和最终实体化阶段执行。
     """
 
     from twin_guide.guide_validation import validate_guide as run_validation
@@ -156,8 +200,8 @@ def run_generation_process(config: CaseConfig) -> GenerationProcessResult:
         TwinGuideError: 病例读取或任一已执行几何步骤失败。
 
     算法说明:
-        分析病例后依次执行第 1、3、4、6 步，将输出写入 ``GenerationContext``；
-        第 2、5、7 步记录为 ``skipped``。每一步均生成一个 ``StageResult``。
+        分析病例后依次执行导管、牙位、开窗、锚点和联建步骤；Y 梁与
+        手机避障按病例配置执行，未配置的可选步骤记录为 ``skipped``。
     """
 
     from twin_guide.generation_process import run_generation_process as execute

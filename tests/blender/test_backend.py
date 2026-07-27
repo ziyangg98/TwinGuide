@@ -1,17 +1,25 @@
 import math
 import unittest
+from types import SimpleNamespace
 
 import bpy
 
-from twin_guide.blender.booleans import apply_boolean
+from twin_guide.blender.booleans import (
+    apply_boolean,
+    apply_manifold3d_difference,
+    apply_manifold3d_differences,
+)
 from twin_guide.blender.mesh_builders import (
     create_axis_cylinder,
+    create_centerline_tube,
     voxel_union,
 )
 from twin_guide.blender.mesh_queries import (
     build_bvh,
     duplicate_triangle_count,
     mesh_component_vertex_counts,
+    nearest_mesh_distance,
+    nearest_mesh_surface_side,
     point_inside_mesh,
     remove_excess_components,
     topology_edge_counts,
@@ -25,7 +33,10 @@ from twin_guide.blender.sleeve_reconstruction import (
 from twin_guide.errors import GeometryError
 from twin_guide.geometry import Vec3
 from twin_guide.guide_validation import _point_is_retained
+from twin_guide.models import GuideSleeve, TemplateFrame
+from twin_guide.sleeve_anchors import SleeveAnchorSelectionConfig, select_sleeve_anchors
 from twin_guide.sleeve_estimation.types import SleeveEstimate
+from twin_guide.types import SleeveGenerationResult
 
 
 class BlenderBackendTests(unittest.TestCase):
@@ -38,6 +49,26 @@ class BlenderBackendTests(unittest.TestCase):
         )
 
         self.assertEqual(topology_edge_counts(cylinder_mesh), (0, 0))
+
+    def test_continuous_centerline_sweep_is_closed_and_manifold(self):
+        """平行输运扫掠的弯曲梁应保持封闭、流形且无重复三角形。"""
+
+        beam = create_centerline_tube(
+            "continuous_beam",
+            (
+                Vec3(-5.0, 0.0, 0.0),
+                Vec3(-2.5, 1.0, 1.0),
+                Vec3(0.0, 1.5, -1.0),
+                Vec3(2.5, 1.0, 1.0),
+                Vec3(5.0, 0.0, 0.0),
+            ),
+            2.3,
+            ring_segments=32,
+        )
+
+        self.assertEqual(topology_edge_counts(beam), (0, 0))
+        self.assertEqual(len(mesh_component_vertex_counts(beam)), 1)
+        self.assertEqual(duplicate_triangle_count(beam), 0)
 
     def test_sleeve_reconstruction_rejects_zero_width_slot_inputs(self):
         estimate = SleeveEstimate(
@@ -81,6 +112,53 @@ class BlenderBackendTests(unittest.TestCase):
         self.assertAlmostEqual(min(axial), 0.0, delta=1e-6)
         self.assertAlmostEqual(max(axial), estimate.height, delta=1e-6)
 
+    def test_generated_sleeve_parameters_drive_q_and_wall_thickness(self):
+        estimates = tuple(
+            SleeveEstimate(
+                axis_origin=Vec3(x, 0.0, 0.0),
+                axis=Vec3(0.0, 0.0, 1.0),
+                c_opening_direction=Vec3(1.0 if x < 0.0 else -1.0, 0.0, 0.0),
+                height=16.0,
+                platform_height=6.0,
+                closed_bore_height=4.0,
+                platform_width=2.0,
+                inner_radius=1.0,
+                outer_radius=2.5,
+                inner_arc_angle=math.radians(264.934),
+                outer_arc_angle=math.radians(211.684),
+            )
+            for x in (-5.0, 5.0)
+        )
+        sleeves = tuple(
+            GuideSleeve(
+                index,
+                create_closed_sleeve_object(estimate, f"input_sleeve_{index}"),
+                estimate,
+                0.0,
+                estimate.height,
+            )
+            for index, estimate in enumerate(estimates, 1)
+        )
+        frame = TemplateFrame(
+            Vec3(0.0, 0.0, 0.0),
+            Vec3(1.0, 0.0, 0.0),
+            Vec3(0.0, 1.0, 0.0),
+            Vec3(0.0, 0.0, 1.0),
+        )
+
+        plan = select_sleeve_anchors(
+            SimpleNamespace(guide_sleeves=sleeves),
+            SleeveGenerationResult(sleeves, frame),
+            SleeveAnchorSelectionConfig(connector_radius_mm=2.3),
+        )
+
+        for sleeve, selection in zip(sleeves, plan.selections, strict=True):
+            sleeve_bvh = build_bvh(sleeve.guide_mesh)
+            for anchor in (selection.lower, selection.upper):
+                self.assertLess(nearest_mesh_distance(sleeve_bvh, anchor.surface_contact), 1e-5)
+                self.assertGreater(anchor.surface_normal.dot(selection.radial_direction), 0.99)
+                self.assertAlmostEqual(anchor.local_wall_thickness_mm, 1.5, delta=0.02)
+
     def test_point_inside_uses_stable_multi_direction_vote(self):
         cylinder_mesh = create_axis_cylinder(
             "solid", Vec3(0.0, 0.0, -2.0), Vec3(0.0, 0.0, 2.0), 1.0
@@ -89,6 +167,8 @@ class BlenderBackendTests(unittest.TestCase):
 
         self.assertTrue(point_inside_mesh(cylinder_bvh, Vec3(0.0, 0.0, 0.0)))
         self.assertFalse(point_inside_mesh(cylinder_bvh, Vec3(3.0, 0.0, 0.0)))
+        self.assertLess(nearest_mesh_surface_side(cylinder_bvh, Vec3(0.0, 0.0, 0.0)), 0.0)
+        self.assertGreater(nearest_mesh_surface_side(cylinder_bvh, Vec3(3.0, 0.0, 0.0)), 0.0)
 
     def test_retention_accepts_contained_and_near_surface_points(self):
         model = create_axis_cylinder(
@@ -147,6 +227,41 @@ class BlenderBackendTests(unittest.TestCase):
 
         self.assertIn(cutter_mesh, bpy.data.objects.values())
         self.assertEqual(topology_edge_counts(difference_mesh), (0, 0))
+
+    def test_manifold3d_difference_returns_closed_mesh_and_preserves_cutter(self):
+        target_mesh = create_axis_cylinder(
+            "target", Vec3(0.0, 0.0, -2.0), Vec3(0.0, 0.0, 2.0), 2.0
+        )
+        cutter_mesh = create_axis_cylinder(
+            "cutter", Vec3(0.0, 0.0, -3.0), Vec3(0.0, 0.0, 3.0), 0.5
+        )
+
+        difference_mesh = apply_manifold3d_difference(target_mesh, cutter_mesh)
+
+        self.assertIn(cutter_mesh, bpy.data.objects.values())
+        self.assertEqual(topology_edge_counts(difference_mesh), (0, 0))
+        self.assertEqual(len(mesh_component_vertex_counts(difference_mesh)), 1)
+        self.assertEqual(duplicate_triangle_count(difference_mesh), 0)
+
+    def test_manifold3d_multiple_differences_convert_only_final_mesh(self):
+        target_mesh = create_axis_cylinder(
+            "target", Vec3(0.0, 0.0, -2.0), Vec3(0.0, 0.0, 2.0), 3.0
+        )
+        first_cutter = create_axis_cylinder(
+            "first_cutter", Vec3(-1.0, 0.0, -3.0), Vec3(-1.0, 0.0, 3.0), 0.5
+        )
+        second_cutter = create_axis_cylinder(
+            "second_cutter", Vec3(1.0, 0.0, -3.0), Vec3(1.0, 0.0, 3.0), 0.5
+        )
+
+        difference_mesh = apply_manifold3d_differences(
+            target_mesh, (first_cutter, second_cutter)
+        )
+
+        self.assertIn(first_cutter, bpy.data.objects.values())
+        self.assertIn(second_cutter, bpy.data.objects.values())
+        self.assertEqual(topology_edge_counts(difference_mesh), (0, 0))
+        self.assertEqual(len(mesh_component_vertex_counts(difference_mesh)), 1)
 
     def test_detects_geometrically_duplicate_triangles(self):
         mesh = bpy.data.meshes.new("duplicates")

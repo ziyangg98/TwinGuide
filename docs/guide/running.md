@@ -2,47 +2,72 @@
 
 ## 环境
 
-TwinGuide 支持 Python 3.13–3.14。Blender 建模和集成测试使用 Blender 5.2 LTS。
+TwinGuide 使用 Blender 5.2 LTS 自带的 Python 3.13。科学计算依赖安装到项目内的
+`.blender-site-packages`，不修改 Blender 应用本身。
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -e .
-blender --version
+./setup-blender-env.sh
+./blender-env.sh --background --factory-startup --python verify-blender-env.py
 ```
+
+依赖的精确版本记录在 `requirements-blender.lock.txt`。后续命令统一通过
+`blender-env.sh` 运行。脚本只把项目内依赖目录、`src/` 和项目根目录加入
+`PYTHONPATH`；牙位识别、导板映射和观察窗算法均从 TwinGuide 内部加载。
 
 ## 生成 STL
 
 ```bash
-blender -b --python run.py -- generate --config examples/case-tooth-47.json
+./blender-env.sh --background --python run.py -- \
+  generate --config examples/case-tooth-11.json
 ```
 
-`generate` 读取病例网格，完成导套重建、导孔与窗口规划、联建锚点选择和
-八条曲线连接管生成，再执行实体化、布尔运算、固定孔复切、网格清理和 STL 导出。
-观察缺口对准前牙牙面，下缘刚好露出牙齿；
-按压结构和净距调整不在本次生成中。
+`generate` 读取病例网格和 `case.yaml` 人工牙位约束，现场完成牙位识别与导板映射、
+输入导管识别与位姿分析，并按 YAML 选择重建标准导管或直接保留输入导管，
+FDI 变截面观察窗、联建锚点选择、连续曲线梁和可选 Y 型按压梁生成，
+再执行融合、固定孔/观察窗复切以及可选的手机运动包络直接差集，最后导出 STL。
 具体数据流见[生成过程](../process/index.md)。
+
+`generate` 默认拒绝 `case.yaml` 中仍明确标记为
+`pending_user_input`、`pending` 或 `unreviewed` 的病例。这个安全门只影响生产生成；
+`process` 和 `validate` 仍可用于诊断。需要在未审核状态下临时生成时，必须显式加上
+`--allow-unreviewed`。
+
+每个病例只保留一个 `case-tooth-<FDI>.json` 正式配置；该配置统一接入
+`case.yaml` 和对应手机避让，不再维护无手机避让或仅执行部分阶段的重复 JSON。
+
+需要在生成后立即验收最终 STL 时，可使用：
+
+```bash
+./blender-env.sh --background --python run.py -- \
+  generate --config examples/case-tooth-14.json --validate
+```
+
+`--validate` 复用本次生成的中间语义并对最终 STL 执行独立几何检查；
+任一检查失败时命令返回非零状态。对末端 U 型延伸梁和末端远中公共节点这类
+特殊拓扑模式，建议使用该选项。
 
 ## 查看计算过程
 
 ```bash
-blender -b --python run.py -- process --config examples/case-tooth-47.json
+./blender-env.sh --background --python run.py -- \
+  process --config examples/case-tooth-11.json
 ```
 
-`process` 在命令行输出所有已声明阶段的运行状态。导套重建、切口规划、
-联建锚点选择和曲线连接为 `completed`，预留扩展为 `skipped`。
+`process` 在命令行输出所有已声明阶段的运行状态。集成配置中，
+可选步骤按配置显示为 `completed` 或 `skipped`；配置手机避障时第 7 步
+会生成或复用运动包络，但 `process` 不实体化最终导板。
 该命令计算几何结果，但不执行 STL 实体化与导出。
 
 ## 检查 STL
 
 ```bash
-blender -b --python run.py -- validate \
-  --config examples/case-tooth-47.json \
-  --model output/tooth_47/twin_guide.stl
+./blender-env.sh --background --python run.py -- validate \
+  --config examples/case-tooth-11.json \
+  --model output/tooth_11/twin_guide.stl
 ```
 
-`validate` 当前检查拓扑、导套保留、连接管、导孔和窗口。
-牙科手机净距仍是第 7 步占位，不在当前命令中执行。
+`validate` 当前检查拓扑、导套保留、连接管、导孔和窗口。手机包络差集在
+`generate` 中执行；`validate` 不重复构造包络。
 
 ## 输出文件
 
@@ -52,9 +77,12 @@ blender -b --python run.py -- validate \
 | `input_template.png` | 牙科导板输入网格 |
 | `input_sleeves.png` | 导套装配体输入网格 |
 | `input_patient_dentition.png` | 患者牙列输入网格 |
-| `reconstructed_sleeves.png` | 导套参数化重建 |
-| `guide_assembly.png` | 牙科导板、重建导套和保留附件的装配关系 |
-| `cutouts.png` | 导孔、操作窗和前牙开放观察缺口 |
+| `selected_input_sleeves.png` | `input` 模式识别并直接采用的原始导管 |
+| `generated_sleeves.png` | `generated` 模式按参数重建的标准导管 |
+| `guide_assembly.png` | 牙科导板与当前模式导管的装配关系 |
+| `cutouts.png` | 导孔、操作窗和 FDI 变截面观察窗 |
 | `link_points.png` | 导套侧和牙科导板侧锚点 |
-| `guide_connectors.png` | 曲线连接管 |
+| `guide_connectors.png` | 四根连续曲线梁 |
 | `guide_*.png` | 最终网格的标准视图 |
+| `handpiece_avoidance/[<id>/]handpiece_current_depth_lr_sweep_envelope.ply` | 手机左右摆动包络；多手机时按编号分目录 |
+| `handpiece_avoidance/[<id>/]handpiece_avoidance.json` | 手机避障运动模型与缓存报告；多手机时按编号分目录 |

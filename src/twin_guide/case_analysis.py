@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import bpy
 
 from twin_guide.blender.mesh_queries import (
@@ -13,7 +15,7 @@ from twin_guide.blender.mesh_queries import (
 from twin_guide.blender.scene import clear_scene, duplicate_mesh_object
 from twin_guide.blender.sleeve_estimation_adapter import mesh_object_to_triangle_data
 from twin_guide.blender.stl_io import import_stl_mesh
-from twin_guide.config import CaseConfig
+from twin_guide.config import CaseConfig, case_occlusal_axis
 from twin_guide.errors import GeometryError
 from twin_guide.geometry import (
     Vec3,
@@ -40,8 +42,9 @@ def _load_generation_meshes(config: CaseConfig) -> GenerationMeshes:
 
     return GenerationMeshes(
         template_mesh=import_stl_mesh(config.inputs.template, "template_mesh"),
-        guide_sleeve_assembly_mesh=import_stl_mesh(
-            config.inputs.guide_sleeve_assembly, "guide_sleeve_assembly_mesh"
+        guide_sleeve_assembly_meshes=tuple(
+            import_stl_mesh(path, f"guide_sleeve_assembly_mesh_{index:02d}")
+            for index, path in enumerate(config.inputs.guide_sleeve_assemblies, 1)
         ),
         patient_dentition_mesh=import_stl_mesh(
             config.inputs.patient_dentition, "patient_dentition_mesh"
@@ -67,7 +70,7 @@ def _template_center(
 
 def _select_accessory_meshes(
     components: tuple[bpy.types.Object, ...],
-    guide_sleeves: tuple[GuideSleeve, GuideSleeve],
+    guide_sleeves: tuple[GuideSleeve, ...],
 ) -> tuple[bpy.types.Object, ...]:
     """只保留后续构建需要的装配体分量。"""
     del components, guide_sleeves
@@ -108,6 +111,28 @@ def _measure_operation_feature(
     return OperationFeature(center, diameter_mm)
 
 
+def _orient_sleeve_into_guide(
+    guide: GuideSleeve,
+    template_frame: object,
+) -> GuideSleeve:
+    """统一拟合轴符号，使每个种植位均指向导板内部。
+
+    圆柱拟合轴存在正负二义性。TwinGuide 将 ``axis_origin`` 定义在 C 口
+    几何高端，并将正 ``axis`` 定义为指向闭合孔几何低端；若输入装配体
+    相反，除反转轴外还需将原点移到另一个物理端面。
+    """
+
+    inward = -template_frame.normal
+    if guide.axis.dot(inward) >= 0.0:
+        return guide
+    parameters = replace(
+        guide.parameters,
+        axis_origin=guide.center + guide.axis * guide.length_mm,
+        axis=-guide.axis,
+    )
+    return replace(guide, parameters=parameters)
+
+
 def analyze_case(config: CaseConfig) -> CaseAnalysis:
     """读取病例网格，并计算后续阶段共用的几何数据。"""
 
@@ -119,30 +144,64 @@ def analyze_case(config: CaseConfig) -> CaseAnalysis:
     dentition_samples = sample_mesh_surface(input_meshes.patient_dentition_mesh)
     if not dentition_samples:
         raise GeometryError("患者牙列网格不存在可采样表面")
-    assembly_working_mesh = duplicate_mesh_object(
-        input_meshes.guide_sleeve_assembly_mesh,
-        "guide_sleeve_assembly_components",
-    )
-    components = separate_connected_components(assembly_working_mesh)
     center = _template_center(input_meshes.template_mesh, template_samples)
-    sleeve_generation = recognize_and_build_sleeves(
-        SleeveGenerationInputs(
-            components=components,
-            template_samples=template_samples,
-            template_center=center,
-            sleeve_parameters=config.sleeve,
-            jaw=config.jaw,
-        )
+    raw_occlusal_axis = case_occlusal_axis(config)
+    occlusal_axis = (
+        None if raw_occlusal_axis is None else Vec3(*raw_occlusal_axis).normalized()
     )
-    selected_guides = sleeve_generation.sleeves
-    template_frame = sleeve_generation.template_frame
-    operation_feature = _measure_operation_feature(components, selected_guides)
+    all_components = []
+    all_guides = []
+    operation_features = []
+    template_frame = None
+    for assembly_index, source_mesh in enumerate(
+        input_meshes.guide_sleeve_assembly_meshes,
+        1,
+    ):
+        assembly_working_mesh = duplicate_mesh_object(
+            source_mesh,
+            f"guide_sleeve_assembly_components_{assembly_index:02d}",
+        )
+        components = separate_connected_components(assembly_working_mesh)
+        all_components.extend(components)
+        sleeve_generation = recognize_and_build_sleeves(
+            SleeveGenerationInputs(
+                components=components,
+                template_samples=template_samples,
+                template_center=center,
+                sleeve_parameters=config.sleeve,
+                sleeve_geometry_mode=config.sleeve_geometry_mode,
+                jaw=config.jaw,
+                occlusal_axis=occlusal_axis,
+            )
+        )
+        offset = len(all_guides)
+        pair = tuple(
+            replace(guide, guide_index=offset + local_index)
+            for local_index, guide in enumerate(sleeve_generation.sleeves, 1)
+        )
+        if template_frame is None:
+            template_frame = sleeve_generation.template_frame
+        pair = tuple(
+            _orient_sleeve_into_guide(guide, template_frame) for guide in pair
+        )
+        if occlusal_axis is not None and any(
+            guide.axis.dot(occlusal_axis) >= 0.0 for guide in pair
+        ):
+            raise GeometryError(
+                "导管轴没有指向病例牙合轴的反方向；请检查 case.yaml "
+                "anatomy.orientation.occlusal_axis"
+            )
+        all_guides.extend(pair)
+        operation_features.append(_measure_operation_feature(components, pair))
+    if template_frame is None:
+        raise GeometryError("病例没有可识别的导管装配体")
+    selected_guides = tuple(all_guides)
     return CaseAnalysis(
         config=config,
         input_meshes=input_meshes,
         guide_sleeves=selected_guides,
-        retained_accessory_meshes=_select_accessory_meshes(components, selected_guides),
-        operation_feature=operation_feature,
+        retained_accessory_meshes=_select_accessory_meshes(tuple(all_components), selected_guides),
+        operation_features=tuple(operation_features),
         template_frame=template_frame,
         template_samples=template_samples,
         dentition_samples=dentition_samples,

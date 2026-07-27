@@ -33,6 +33,8 @@ class GuideSleeve:
     parameters: SleeveEstimate
     axial_min_mm: float
     axial_max_mm: float
+    source_component_index: int | None = None
+    axial_bore_clear_fraction: float | None = None
 
     @property
     def center(self) -> Vec3:
@@ -104,8 +106,16 @@ class GenerationMeshes:
     """一个病例中已读取的 Blender 输入网格。"""
 
     template_mesh: bpy.types.Object
-    guide_sleeve_assembly_mesh: bpy.types.Object
+    guide_sleeve_assembly_meshes: tuple[bpy.types.Object, ...]
     patient_dentition_mesh: bpy.types.Object
+
+    @property
+    def guide_sleeve_assembly_mesh(self) -> bpy.types.Object:
+        """为旧版单种植调用方返回唯一导管装配体网格。"""
+
+        if len(self.guide_sleeve_assembly_meshes) != 1:
+            raise ValueError("多种植位病例必须逐导管装配体处理")
+        return self.guide_sleeve_assembly_meshes[0]
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,12 +132,31 @@ class CaseAnalysis:
 
     config: CaseConfig
     input_meshes: GenerationMeshes
-    guide_sleeves: tuple[GuideSleeve, GuideSleeve]
+    guide_sleeves: tuple[GuideSleeve, ...]
     retained_accessory_meshes: tuple[bpy.types.Object, ...]
-    operation_feature: OperationFeature
+    operation_features: tuple[OperationFeature, ...]
     template_frame: TemplateFrame
     template_samples: tuple[SurfaceSample, ...]
     dentition_samples: tuple[SurfaceSample, ...]
+
+    @property
+    def operation_feature(self) -> OperationFeature:
+        """为旧版单种植调用方返回唯一操作特征。"""
+
+        if len(self.operation_features) != 1:
+            raise ValueError("多种植位病例包含多个独立操作特征")
+        return self.operation_features[0]
+
+    @property
+    def guide_sleeve_pairs(self) -> tuple[tuple[GuideSleeve, GuideSleeve], ...]:
+        """按种植位返回每个装配体所属的两根导管。"""
+
+        if len(self.guide_sleeves) % 2:
+            raise ValueError("导管数量必须为偶数")
+        return tuple(
+            (self.guide_sleeves[index], self.guide_sleeves[index + 1])
+            for index in range(0, len(self.guide_sleeves), 2)
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,11 +192,24 @@ class WindowCutout:
 
 
 @dataclass(frozen=True, slots=True)
+class ProfileWindowCutout:
+    """第 3 阶段由本次牙位映射生成的观察窗组合切割体。"""
+
+    name: str
+    cutter_mesh_path: Path
+    report_path: Path
+    window_ids: tuple[str, ...]
+    crest_points: tuple[Vec3, ...]
+    window_crest_points: tuple[tuple[Vec3, ...], ...]
+
+
+@dataclass(frozen=True, slots=True)
 class CutoutPlan:
     """导孔和窗口的纯几何计划，不包含 Blender 切割对象。"""
 
     channels: tuple[CylinderCutout, CylinderCutout]
     windows: tuple[WindowCutout, ...]
+    profile_windows: tuple[ProfileWindowCutout, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

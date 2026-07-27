@@ -2,9 +2,9 @@
   "case_id": "tooth_47",
   "jaw": "lower",
   "inputs": {
-    "template": "../../data/cases/single/tooth-47/input/ring-guide.stl",
-    "guide_sleeve_assembly": "../../data/cases/single/tooth-47/input/guide-sleeve-47-34-10-12-s-40s.stl",
-    "patient_dentition": "../../data/cases/single/tooth-47/input/lbk.stl"
+    "template": "../data/cases/single/tooth-47/input/guide-template.stl",
+    "guide_sleeve_assembly": "../data/cases/single/tooth-47/input/sleeve-assembly.stl",
+    "patient_dentition": "../data/cases/single/tooth-47/input/dentition.stl"
   },
   "sleeve": {
     "inner_diameter_mm": 2.10,
@@ -18,12 +18,42 @@
   },
   "geometry": {
     "channel_axial_margin_mm": 5.0,
-    "connector_diameter_mm": 2.3,
-    "fusion_voxel_size_mm": 0.2
+    "connector_diameter_mm": 4.6,
+    "fusion_voxel_size_mm": 0.2,
+    "connector_dental_clearance_mm": 0.2
   },
   "windows": {
     "operation_tangent_margin_mm": 1.0,
-    "operation_bitangent_margin_mm": 0.5
+    "operation_bitangent_margin_mm": 3.0,
+    "observation_axis_drop_mm": 0.5,
+    "observation_local_failure_drop_targets_mm": [1.0, 2.0, 3.0]
+  },
+  "tooth_identification": {
+    "case_yaml": "../data/cases/single/tooth-47/case.yaml"
+  },
+  "handpiece_avoidance": {
+    "id": "handpiece_01",
+    "handpiece": "../data/cases/single/tooth-47/input/handpiece-01.stl",
+    "stop_report": "../data/cases/single/tooth-47/input/handpiece-stop-01.json",
+    "maximum_angle_degrees": 5.0,
+    "pose_samples": 41,
+    "union_batch_size": 7,
+    "extra_clearance_mm": 0.0
+  },
+  "press_beam": {
+    "diameter_mm": 4.6,
+    "guide_overlap_mm": 0.3,
+    "junction_axial_lift_mm": 2.0,
+    "guide_endpoint": {
+      "root_radius_factor": 1.08,
+      "transition_length_mm": 3.0,
+      "bulb_radius_factor": 1.08,
+      "bulb_forward_offset_mm": 0.08,
+      "foot_major_radius_mm": 3.0,
+      "foot_minor_radius_mm": 2.2,
+      "foot_peak_height_mm": 2.55,
+      "foot_embed_depth_mm": 0.25
+    }
   },
   "render": {
     "width_px": 1600,

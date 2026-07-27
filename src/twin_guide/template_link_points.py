@@ -5,13 +5,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from twin_guide.models import CaseAnalysis, CutoutPlan
-from twin_guide.sleeve_anchors import SleeveAnchorPlan, select_sleeve_anchors
+from twin_guide.sleeve_anchors import (
+    SleeveAnchorPlan,
+    SleeveAnchorSelectionConfig,
+    select_sleeve_anchors,
+)
 from twin_guide.template_anchors import (
     TemplatePointPlan,
     TemplatePointSelectionConfig,
     select_template_points,
 )
 from twin_guide.types import SleeveGenerationResult
+from twin_guide.tooth_identification import ToothIdentificationResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +32,7 @@ class TemplateLinkPointContext:
     case: CaseAnalysis
     sleeves: SleeveGenerationResult
     cutouts: CutoutPlan
+    tooth_identification: ToothIdentificationResult | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,8 +65,17 @@ def select_template_link_points(
         依次计算导套侧锚点和牙科导板侧锚点。
     """
 
-    sleeve_anchors = select_sleeve_anchors(context.case, context.sleeves)
+    sleeve_anchors = select_sleeve_anchors(
+        context.case,
+        context.sleeves,
+        SleeveAnchorSelectionConfig(connector_radius_mm=config.connector_radius_mm),
+    )
     template_points = select_template_points(
-        context.case, context.sleeves, context.cutouts, sleeve_anchors, config
+        context.case,
+        context.sleeves,
+        context.cutouts,
+        sleeve_anchors,
+        config,
+        context.tooth_identification,
     )
     return TemplateLinkPointPlan(sleeve_anchors, template_points)

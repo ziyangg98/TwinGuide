@@ -8,8 +8,29 @@
 | `inputs.guide_sleeve_assembly` | 导套装配体 STL | 识别导套、操作结构和装配关系 |
 | `inputs.patient_dentition` | 患者牙列扫描 STL | 定位观察缺口并用于装配参照和渲染 |
 
+导管装配体可以包含多个连通分量，但每个需要作为导管识别的组件必须具有真实
+轴孔。程序沿拟合轴线检查七个位置，孔道通过率低于 0.60 的实心长杆或导孔
+占位 cutter 不参与导管配对。每个种植位必须至少提供两个通过该检查的导管组件。
+
 三个网格必须使用同一世界坐标系，长度单位为毫米。
 文件中的转换矩阵应在导出 STL 前应用，避免几何位置与表面顶点不一致。
+
+项目内实验病例统一保存在 `data/cases/single/tooth-<FDI>/`。病例 YAML
+位于病例根目录，输入文件放在 `input/`：
+
+```text
+data/cases/single/tooth-11/
+  case.yaml
+  input/
+    dentition.stl
+    guide-template.stl
+    sleeve-assembly.stl
+    handpiece-01.stl
+    handpiece-stop-01.json
+```
+
+生成结果统一写入项目的 `output/`，不写回病例数据目录。完整文件角色和
+迁移来源见 [`data/cases/single/README.md`](../../data/cases/single/README.md)。
 
 `jaw` 是必填病例参数，只用于将导板法向和观察窗开放边定向到牙合侧。
 导柱轴向由输入 STL 的平台端确定；两个 C 口分别沿两导柱中心连线指向对侧导柱。
@@ -21,4 +42,6 @@
 - 导套装配体的各结构应为可分离的连通分量。
 - 严重的自相交、重复面和退化三角形应在导入前修复。
 
-第 7 步当前仅为占位，不读取手机 STL。
+启用 `handpiece_avoidance` 时还需提供与病例处于同一世界坐标系的手机 STL，
+以及已经匹配双侧止挡面的 JSON 报告。当前只采用手机最大面积连通分量，且不做
+轴向下压。

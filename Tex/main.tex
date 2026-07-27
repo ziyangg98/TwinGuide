@@ -1,0 +1,130 @@
+\documentclass[UTF8,12pt,a4paper,openany,fontset=none]{ctexrep}
+
+\usepackage[a4paper,margin=2.35cm,headheight=15pt]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{amsmath,amssymb}
+\usepackage{listings}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{fancyhdr}
+\usepackage{hyperref}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,fit}
+
+\setCJKmainfont{Songti SC}
+\setCJKsansfont{PingFang SC}
+\setCJKmonofont{Songti SC}
+\emergencystretch=2em
+\Urlmuskip=0mu plus 1mu
+
+\definecolor{TGBlue}{HTML}{245B78}
+\definecolor{TGLightBlue}{HTML}{EAF3F8}
+\definecolor{TGGold}{HTML}{B58B2A}
+\definecolor{TGRed}{HTML}{A43D38}
+\definecolor{TGGray}{HTML}{56616A}
+\definecolor{TGCode}{HTML}{F5F7F8}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=TGBlue,
+  urlcolor=TGBlue,
+  citecolor=TGBlue,
+  pdftitle={TwinGuide 双导管牙科导板半自动建模技术报告},
+  % pdfauthor={TwinGuide 项目技术梳理}
+}
+
+\graphicspath{{figures/}}
+\captionsetup{font=small,labelfont=bf,labelsep=quad}
+\setlist{nosep,leftmargin=2em}
+\setlength{\parindent}{2em}
+\setlength{\parskip}{0.25em}
+\renewcommand{\arraystretch}{1.25}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{TwinGuide 技术报告}
+% \fancyhead[R]{研发技术汇报 / 项目交接}
+\fancyfoot[C]{\thepage}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{TGCode},
+  frame=single,
+  rulecolor=\color{TGLightBlue},
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  keywordstyle=\color{TGBlue}\bfseries,
+  commentstyle=\color{TGGray},
+  stringstyle=\color{TGRed}
+}
+
+\newcommand{\projectpath}[1]{\nolinkurl{#1}}
+\newcommand{\term}[1]{\textbf{#1}}
+\newcommand{\risk}[1]{\textcolor{TGRed}{\textbf{#1}}}
+\newcommand{\highlight}[1]{\textcolor{TGBlue}{\textbf{#1}}}
+
+\newenvironment{takeaway}
+  {\begin{center}\begin{minipage}{0.93\textwidth}\color{TGBlue}\hrule\vspace{0.5em}\textbf{注意：}\color{black}}
+  {\vspace{0.5em}\color{TGBlue}\hrule\end{minipage}\end{center}}
+
+\title{\Huge\bfseries TwinGuide 双导管牙科导板\\[0.35em]
+自动建模技术报告\\[0.9em]
+\Large 项目结构、建模流程、技术原理与风险梳理}
+\author{面向研发技术汇报与项目交接}
+\date{2026 年 7 月 27 日}
+
+\begin{document}
+
+\begin{titlepage}
+  \centering
+  \vspace*{2.6cm}
+  {\color{TGBlue}\rule{\textwidth}{1.2pt}}\\[1.1cm]
+  {\Huge\bfseries TwinGuide 双导管牙科导板\par}
+  \vspace{0.4cm}
+  {\Huge\bfseries 自动建模技术报告\par}
+  \vspace{0.8cm}
+  {\Large 项目结构、完整流程、建模方法与潜在难点\par}
+  \vspace{1.0cm}
+  {\color{TGBlue}\rule{\textwidth}{1.2pt}}\\[1.6cm]
+  \begin{tabular}{rl}
+    报告定位：& 研发技术汇报 / 项目交接\\
+    案例主线：& 单颗缺失牙 tooth-47（FDI 47）\\
+    资料范围：& TwinGuide 源码、配置、文档、测试及现有输出\\
+    报告日期：& 2026 年 7 月 27 日
+  \end{tabular}
+  \vfill
+  {\small 本报告只解释项目内部实际采用的方法，不扩展项目之外的临床或学术文献。\par}
+\end{titlepage}
+
+\pagenumbering{Roman}
+\input{chapters/00_scope}
+\tableofcontents
+\clearpage
+\listoffigures
+\clearpage
+\listoftables
+\clearpage
+
+\pagenumbering{arabic}
+\input{chapters/01_overview}
+\input{chapters/02_architecture}
+\input{chapters/03_workflow}
+\input{chapters/04_case47}
+\input{chapters/05_quality}
+\input{chapters/06_risks}
+\input{chapters/07_handoff}
+
+\appendix
+\input{chapters/appendix_modules}
+\input{chapters/appendix_parameters}
+
+\end{document}

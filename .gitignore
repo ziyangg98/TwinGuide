@@ -10,9 +10,26 @@ htmlcov/
 
 .venv/
 venv/
+.blender-site-packages/
 
 output/
+output_sleeve_modes/
 docs/_build/
+
+# LaTeX build products; keep source files and the named release report PDF.
+Tex/build/
+Tex/tmp/
+Tex/main.aux
+Tex/main.fdb_latexmk
+Tex/main.fls
+Tex/main.lof
+Tex/main.log
+Tex/main.lot
+Tex/main.out
+Tex/main.pdf
+Tex/main.synctex.gz
+Tex/main.toc
+Tex/main.xdv
 
 *.log
 *.tmp

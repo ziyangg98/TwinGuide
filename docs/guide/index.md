@@ -7,6 +7,7 @@
 
 inputs
 configuration
+technical-modeling-workflow
 running
 validation
 ```

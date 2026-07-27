@@ -1,0 +1,149 @@
+\chapter{tooth-47 案例复盘}
+
+\section{病例定位}
+
+规范病例目录为 \projectpath{data/cases/single/tooth-47}，来源是旧数据中的“初始案例”，
+现被定义为黄金回归病例。它是下颌病例，FDI 顺序覆盖 48 到 37；47 缺失，38 排除，实际
+识别到 14 颗现存牙。牙合方向为 $+Z$，患者右到左为 $+X$，前到后为 $+Y$。
+
+\begin{table}[H]
+\centering
+\begin{tabularx}{\textwidth}{p{0.29\textwidth}X}
+  \toprule
+  项目 & tooth-47 当前配置\\
+  \midrule
+  病例角色 & 单颗缺牙黄金回归；\texttt{validated\_current\_workflow}\\
+  导管实体模式 & \texttt{input}，直接采用识别出的输入导管\\
+  现存/缺失/排除 & 14 颗现存牙；缺失 47；排除 38\\
+  主梁锚点站位 & 48，以及 46/45 双牙中点；U 侧 70°、背 U 侧 90°\\
+  Y 梁模式 & \texttt{three\_tooth\_anchors\_y}\\
+  Y 梁三个站位 & 45/44（75°）、31/32（45°）、34/35（75°）\\
+  观察窗 & 42--32 前牙窗；34--35 左前磨牙窗\\
+  观察窗几何 & 轴向下移 0.5 mm，扫掠 90°，高度 5 mm，顶部开放\\
+  梁直径 / 体素尺寸 & 4.60 mm / 0.20 mm\\
+  手机运动 & 当前深度，$-5^\circ$ 到 $+5^\circ$，41 姿态\\
+  \bottomrule
+\end{tabularx}
+\caption{tooth-47 的主要病例和工程参数。}
+\end{table}
+
+\section{牙位与牙弓映射结果}
+
+映射报告状态为 \texttt{tooth\_guide\_mapping\_complete}，全部 16 项 QA 为真。最终牙中心
+来自批准接触弦轮廓的均匀面积质心；有向牙弓由这些质心的参数化 PCHIP 曲线及末端轮廓支撑
+扩展构成。现存牙平均支持证据为 0.5334，缺失槽位平均支持为 0.0019，说明缺失 47 的语义
+与实际表面支持有明显区分。
+
+由于病例 YAML 已确认三条坐标轴，当前映射没有启用“缺失牙到手术位”二选一安全门；这并非
+安全门失效，而是人工确认轴优先于自动候选比较。
+
+\section{两个观察窗的实际结果}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabularx}{\textwidth}{lrrrrX}
+  \toprule
+  窗口 & 轴长/mm & 轴截面 & cutter 体积/mm$^3$ & 最小轴净空/mm & 牙面可见性\\
+  \midrule
+  42--32 前牙窗 & 13.323 & 24 & 519.062 & 0.2023 & 24/24 轴行可见\\
+  34--35 前磨牙窗 & 6.615 & 13 & 116.842 & 0.1992 & 12/13 轴行可见\\
+  \bottomrule
+\end{tabularx}
+\caption{tooth-47 观察窗过程报告中的关键数据。}
+\end{table}
+
+两个窗的连续清晰走廊比例均为 1.0。前牙窗实际测得壁厚约 3.00--7.28 mm，中位数 3.73 mm；
+前磨牙窗约 2.96--5.30 mm，中位数 3.45 mm。源导板体积为 $6364.52\,\mathrm{mm^3}$，切窗后
+为 $5881.56\,\mathrm{mm^3}$，实际移除 $482.96\,\mathrm{mm^3}$。布尔体积恒等误差仅
+$0.00167\,\mathrm{mm^3}$，残余 cutter 重叠约 $4.81\times10^{-6}\,\mathrm{mm^3}$。
+
+初始 0.5 mm 轴下移已经通过全部 QA，因此没有应用 1/2/3 mm 的局部回退。这里必须以
+tooth-47 实际 JSON/报告为准：项目部分文档仍写着 0.2 mm 和 0.5/1/2 mm 回退，属于文档与
+当前病例参数的漂移。
+
+\section{连接结构与结果外观}
+
+图 \ref{fig:connectors} 已展示融合前新增梁架。tooth-47 的四根主梁均为 4.60 mm 直径，并在
+导板端采用 1.08 倍根部半径、3 mm 过渡、球头和曲面贴合脚。Y 梁三个端点全部来自牙位 U 侧
+射线，汇合点沿 $+Z$ 抬高 2 mm。
+
+\begin{figure}[H]
+  \centering
+  \begin{subfigure}[t]{0.48\textwidth}
+    \includegraphics[width=\linewidth]{11_final_iso.png}
+    \caption{等轴视图}
+  \end{subfigure}\hfill
+  \begin{subfigure}[t]{0.48\textwidth}
+    \includegraphics[width=\linewidth]{12_final_top.png}
+    \caption{顶视图}
+  \end{subfigure}
+  \caption{tooth-47 最终结果的整体形态。可见四根环绕导管的主梁和中部三臂 Y 梁。}
+  \label{fig:final-upper}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \begin{subfigure}[t]{0.48\textwidth}
+    \includegraphics[width=\linewidth]{13_final_bottom.png}
+    \caption{底视图：牙列贴合面与观察窗}
+  \end{subfigure}\hfill
+  \begin{subfigure}[t]{0.48\textwidth}
+    \includegraphics[width=\linewidth]{14_final_side.png}
+    \caption{侧视图：导管、梁架和导板高度关系}
+  \end{subfigure}
+  \caption{tooth-47 最终结果的底视与侧视。}
+  \label{fig:final-lower}
+\end{figure}
+
+从图中可以直观看到几个设计意图：双导管 C 口仍开放；主梁以较大弧度绕开操作区；Y 梁把
+导板的三个牙位区域连成三角支撑；观察窗在贴合面形成局部开口。也能看到体素融合后的边界
+不再像输入三角网格那样锐利，这是 0.2 mm 重网格带来的预期离散效果。
+
+\section{手机避让包络}
+
+手机旋转轴为 $(0.4439,-0.0138,0.8960)$，枢轴位于
+$(-17.1631,13.7691,2.6937)$ mm。41 个姿态的角度步长为 0.25°，估算最大半步未采样位移约
+0.0996 mm。最终包络为封闭体，体积约 $6660.45\,\mathrm{mm^3}$，含 1,590,056 个顶点和
+3,180,108 个三角面。这个网格远比最终导板更密，是当前生成时间和内存占用的主要来源之一。
+
+\section{最终 STL 的独立静态统计}
+
+对现有 \projectpath{output/tooth_47/twin_guide.stl} 进行独立 Trimesh 读取，结果如下：
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lr}
+  \toprule
+  指标 & 结果\\
+  \midrule
+  顶点 / 三角面 & 138,861 / 277,774\\
+  是否封闭 & 是\\
+  绕序是否一致 & 是\\
+  是否有效体积 & 是\\
+  连通体数量 & 1\\
+  体积 & $6670.718\,\mathrm{mm^3}$\\
+  表面积 & $5981.815\,\mathrm{mm^2}$\\
+  包围盒尺寸 & $59.954\times53.871\times23.953$ mm\\
+  \bottomrule
+\end{tabular}
+\caption{现有 tooth-47 最终 STL 的静态网格统计。}
+\end{table}
+
+这些数据证明文件本身是单一闭合体，但不能替代当前配置下的完整
+\texttt{generate --validate}。静态封闭并不自动证明每条梁都保留、每个孔都通畅或手机包络
+已经正确切除。
+
+\section{案例产物的版本边界}
+
+现有最终图和 STL 的修改时间约为 2026-07-26 21:59；当前
+\projectpath{blender/guide_modeling.py} 的修改时间为 2026-07-27 13:10，病例 YAML 也在
+2026-07-27 00:33 更新。输出中仍名为 \projectpath{generated_sleeves.png}，而当前 YAML 已
+明确为 \texttt{input} 模式；当前代码在 input 模式应输出
+\projectpath{selected_input_sleeves.png}。这进一步说明现有产物与当前源码并非严格同一快照。
+
+\begin{takeaway}
+tooth-47 的中间结果足以生动解释算法，观察窗 QA 和最终 STL 静态拓扑也表现良好；正式交接
+前仍应在冻结版本上重新生成一次，并把源码版本、配置摘要和验证报告与 STL 一起归档。
+\end{takeaway}
+

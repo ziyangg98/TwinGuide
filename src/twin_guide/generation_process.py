@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 from twin_guide.case_analysis import analyze_case
-from twin_guide.config import CaseConfig
+from twin_guide.clearance_adjustment import adjust_clearance
+from twin_guide.config import CaseConfig, PressBeamMode
+from twin_guide.guide_component_bridge import select_guide_component_bridge
+from twin_guide.guide_terminal_u_extension import select_guide_terminal_u_extension
 from twin_guide.point_linking import PointLinkingConfig, link_selected_points
+from twin_guide.press_beam_points import select_press_beam_points
 from twin_guide.template_anchors import TemplatePointSelectionConfig
 from twin_guide.template_link_points import (
     TemplateLinkPointContext,
     select_template_link_points,
 )
+from twin_guide.tooth_identification import identify_tooth_positions
 from twin_guide.types import (
     GenerationContext,
     GenerationProcessResult,
@@ -25,7 +30,7 @@ STAGES = (
     StageDefinition(
         1,
         "sleeve_generation",
-        "导套识别与重建",
+        "输入导管识别与位姿分析",
         StageMaturity.STABLE,
         "1.0",
         ("source_meshes",),
@@ -35,9 +40,9 @@ STAGES = (
         2,
         "tooth_identification",
         "牙位识别",
-        StageMaturity.PENDING,
-        None,
-        ("source_meshes",),
+        StageMaturity.EXPERIMENTAL,
+        "0.4",
+        ("source_meshes", "case_yaml_tooth_constraints"),
         "tooth_identification",
     ),
     StageDefinition(
@@ -45,7 +50,7 @@ STAGES = (
         "window_cutouts",
         "操作窗与观察窗规划",
         StageMaturity.EXPERIMENTAL,
-        "0.1",
+        "0.2",
         ("template_analysis", "sleeve_generation"),
         "window_cutouts",
     ),
@@ -62,9 +67,9 @@ STAGES = (
         5,
         "press_beam_points",
         "按压梁柱锚点选择",
-        StageMaturity.PENDING,
-        None,
-        ("tooth_identification", "window_cutouts"),
+        StageMaturity.EXPERIMENTAL,
+        "0.1",
+        ("tooth_identification", "window_cutouts", "template_link_points"),
         "press_beam_points",
     ),
     StageDefinition(
@@ -80,15 +85,15 @@ STAGES = (
         7,
         "clearance_adjustment",
         "器械避让与净距优化",
-        StageMaturity.PENDING,
-        None,
+        StageMaturity.EXPERIMENTAL,
+        "0.1",
         ("linked_structure",),
         "final_geometry_plan",
     ),
 )
 
 
-def _skipped(definition: StageDefinition) -> StageResult:
+def _skipped(definition: StageDefinition, reason: str | None = None) -> StageResult:
     """构造阶段跳过记录。
 
     参数:
@@ -101,7 +106,7 @@ def _skipped(definition: StageDefinition) -> StageResult:
     return StageResult(
         definition,
         StageRunStatus.SKIPPED,
-        reason=f"阶段状态为 {definition.maturity.value}",
+        reason=reason or f"阶段状态为 {definition.maturity.value}",
     )
 
 
@@ -115,8 +120,9 @@ def run_generation_process(config: CaseConfig) -> GenerationProcessResult:
         包含七个阶段状态和已完成输出的 ``GenerationProcessResult``。
 
     算法说明:
-        执行顺序为：第 1 步完成、第 2 步跳过、第 3 步完成、
-        第 4 步完成、第 5 步跳过、第 6 步完成、第 7 步跳过。
+        执行顺序为：第 1 步完成、第 2 步按配置执行或跳过、第 3 步完成、
+        第 4 步完成、第 5 步按配置执行或跳过、第 6 步完成、第 7 步按
+        手机避障配置执行或跳过。
         跳过阶段只写入 ``StageResult.reason``，对应上下文字段保持 ``None``。
     """
 
@@ -130,26 +136,75 @@ def run_generation_process(config: CaseConfig) -> GenerationProcessResult:
         case.template_frame,
     )
     results.append(StageResult(STAGES[0], StageRunStatus.COMPLETED, context.sleeve_generation))
-    results.append(_skipped(STAGES[1]))
+    if config.tooth_identification is None:
+        results.append(
+            _skipped(STAGES[1], "病例未配置牙位工作流 case.yaml；不生成 FDI 观察窗")
+        )
+    else:
+        context.tooth_identification = identify_tooth_positions(
+            config,
+            regenerate=True,
+        )
+        results.append(
+            StageResult(STAGES[1], StageRunStatus.COMPLETED, context.tooth_identification)
+        )
 
-    context.window_cutouts = plan_window_cutouts(case, context.sleeve_generation)
+    context.window_cutouts = plan_window_cutouts(
+        case,
+        context.sleeve_generation,
+        context.tooth_identification,
+    )
     results.append(StageResult(STAGES[2], StageRunStatus.COMPLETED, context.window_cutouts))
+
+    if config.guide_component_bridge.enabled:
+        context.guide_component_bridge = select_guide_component_bridge(context)
+
+    if config.guide_terminal_u_extension.enabled:
+        context.guide_terminal_u_extension = select_guide_terminal_u_extension(context)
 
     context.template_link_points = select_template_link_points(
         TemplateLinkPointContext(
             case,
             context.sleeve_generation,
             context.window_cutouts,
+            context.tooth_identification,
         ),
-        TemplatePointSelectionConfig(connector_radius_mm=config.geometry.connector_radius_mm),
+        TemplatePointSelectionConfig(
+            template_clearance_mm=(
+                config.geometry.connector_radius_mm
+                + config.geometry.fusion_voxel_size_mm
+            ),
+            connector_radius_mm=config.geometry.connector_radius_mm,
+        ),
+    )
+    context.terminal_distal_common_node = (
+        context.template_link_points.template_points.terminal_distal_common_node
     )
     results.append(StageResult(STAGES[3], StageRunStatus.COMPLETED, context.template_link_points))
 
-    results.append(_skipped(STAGES[4]))
+    if config.press_beam.mode is PressBeamMode.DISABLED:
+        results.append(_skipped(STAGES[4], "病例未启用 Y 型按压梁"))
+    else:
+        context.press_beam_points = select_press_beam_points(context)
+        results.append(
+            StageResult(STAGES[4], StageRunStatus.COMPLETED, context.press_beam_points)
+        )
     context.point_linking = link_selected_points(
         context.template_link_points,
-        PointLinkingConfig(radius_mm=config.geometry.connector_radius_mm),
+        PointLinkingConfig(
+            radius_mm=config.geometry.connector_radius_mm,
+            connector_guide_endpoint=config.geometry.connector_guide_endpoint,
+        ),
+        context.press_beam_points,
+        context.guide_component_bridge,
+        context.guide_terminal_u_extension,
     )
     results.append(StageResult(STAGES[5], StageRunStatus.COMPLETED, context.point_linking))
-    results.append(_skipped(STAGES[6]))
+    if not config.handpiece_avoidance:
+        results.append(_skipped(STAGES[6], "病例未配置牙科手机避障"))
+    else:
+        context.clearance_adjustment = adjust_clearance(context)
+        results.append(
+            StageResult(STAGES[6], StageRunStatus.COMPLETED, context.clearance_adjustment)
+        )
     return GenerationProcessResult(context, tuple(results))

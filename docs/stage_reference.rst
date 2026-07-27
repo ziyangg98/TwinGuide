@@ -14,7 +14,7 @@
 
 .. automodule:: twin_guide.guide_generation
 
-导套识别与参数化重建
+导管识别与实体模式选择
 ----------------------------------------
 
 .. automodule:: twin_guide.sleeve_generation
@@ -57,7 +57,7 @@
 .. automodule:: twin_guide.blender.guide_modeling
    :no-index:
 
-待实现接口（第 2、5、7 步）
+牙位、按压梁与手机避障阶段
 ----------------------------------------
 
 .. automodule:: twin_guide.tooth_identification

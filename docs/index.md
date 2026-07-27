@@ -7,6 +7,7 @@
 ## 文档
 
 - [使用指南](guide/index.md)
+- [完整建模技术说明](guide/technical-modeling-workflow.md)
 - [生成过程](process/index.md)
 - [程序设计](design/index.md)
 - [Python API 参考](public_api.rst)

@@ -11,6 +11,7 @@ from mathutils import Vector
 from mathutils.bvhtree import BVHTree
 
 from twin_guide.blender.scene import set_active_object
+from twin_guide.errors import GeometryError
 from twin_guide.geometry import Vec3
 from twin_guide.models import SurfaceSample
 
@@ -154,6 +155,52 @@ def build_bvh(mesh_object: bpy.types.Object) -> BVHTree:
     return tree
 
 
+def build_local_aligned_bvh(
+    mesh_object: bpy.types.Object,
+    anchor: Vec3,
+    normal: Vec3,
+    tangent: Vec3,
+    bitangent: Vec3,
+    major_radius_mm: float,
+    minor_radius_mm: float,
+) -> BVHTree:
+    """构建锚点附近与目标外法向同向的椭圆局部表面 BVH。"""
+
+    dependency_graph = bpy.context.evaluated_depsgraph_get()
+    evaluated = mesh_object.evaluated_get(dependency_graph)
+    mesh = evaluated.to_mesh()
+    world_matrix = evaluated.matrix_world
+    normal_matrix = world_matrix.to_3x3().inverted_safe().transposed()
+    vertices = [world_matrix @ vertex.co for vertex in mesh.vertices]
+    polygons = []
+    unit_normal = normal.normalized()
+    unit_tangent = tangent.normalized()
+    unit_bitangent = bitangent.normalized()
+    for polygon in mesh.polygons:
+        indices = tuple(polygon.vertices)
+        if len(indices) < 3:
+            continue
+        center = sum(
+            (vertices[index] for index in indices),
+            Vector((0.0, 0.0, 0.0)),
+        ) / len(indices)
+        relative = to_vec3(center) - anchor
+        u = relative.dot(unit_tangent)
+        v = relative.dot(unit_bitangent)
+        w = abs(relative.dot(unit_normal))
+        ellipse = (
+            (u / (major_radius_mm + 1.5)) ** 2
+            + (v / (minor_radius_mm + 1.5)) ** 2
+        )
+        polygon_normal = to_vec3(normal_matrix @ polygon.normal).normalized()
+        if ellipse <= 1.0 and w <= 3.0 and polygon_normal.dot(unit_normal) >= 0.15:
+            polygons.append(indices)
+    evaluated.to_mesh_clear()
+    if len(polygons) < 20:
+        raise GeometryError("按压梁贴合脚附近同向导板面数量不足 20")
+    return BVHTree.FromPolygons(vertices, polygons, all_triangles=False)
+
+
 def ray_cast_mesh(mesh_tree: BVHTree, ray_origin: Vec3, ray_direction: Vec3) -> Vec3 | None:
     """返回射线与网格的第一个交点。"""
 
@@ -170,6 +217,21 @@ def nearest_mesh_distance(mesh_tree: BVHTree, point: Vec3) -> float:
 
     location, _, _, distance = mesh_tree.find_nearest(to_blender_vector(point))
     return math.inf if location is None else float(distance)
+
+
+def nearest_mesh_surface_side(mesh_tree: BVHTree, point: Vec3) -> float | None:
+    """返回点相对最近有向表面的法向侧别。
+
+    返回值为正表示点位于最近表面的外法向一侧，为负表示位于实体侧；
+    找不到最近表面时返回 ``None``。该局部判据可辅助识别空腔中射线奇偶
+    检查因三角交线产生的少量误投票。
+    """
+
+    query = to_blender_vector(point)
+    location, normal, _, _ = mesh_tree.find_nearest(query)
+    if location is None or normal is None:
+        return None
+    return float((query - location).dot(normal))
 
 
 def point_inside_mesh(mesh_tree: BVHTree, point: Vec3) -> bool:
@@ -255,6 +317,59 @@ def remove_excess_components(
     return mesh_object
 
 
+def remove_subvoxel_components(
+    mesh_object: bpy.types.Object,
+    voxel_size_mm: float,
+    minimum_voxel_fraction: float = 0.25,
+) -> bpy.types.Object:
+    """删除体积小于指定体素比例的封闭离散碎片。
+
+    该清理仅用于体素融合后的数值薄片，不限制最终连通体数量。具有实际
+    几何体积的独立输入导管或附件会保留，因此不等价于“只留最大连通体”。
+    """
+
+    if voxel_size_mm <= 0.0:
+        raise ValueError("体素尺寸必须为正")
+    if not 0.0 < minimum_voxel_fraction <= 1.0:
+        raise ValueError("最小体素体积比例必须位于 (0, 1] 内")
+    minimum_volume = voxel_size_mm**3 * minimum_voxel_fraction
+    editable_mesh = bmesh.new()
+    editable_mesh.from_mesh(mesh_object.data)
+    components = _vertex_components(editable_mesh)
+
+    def component_volume(component: set[bmesh.types.BMVert]) -> float:
+        """以有向三角面四面体和计算单个封闭分量体积。"""
+
+        faces = {
+            face
+            for vertex in component
+            for face in vertex.link_faces
+            if all(face_vertex in component for face_vertex in face.verts)
+        }
+        signed_volume = 0.0
+        for face in faces:
+            vertices = tuple(vertex.co for vertex in face.verts)
+            for index in range(1, len(vertices) - 1):
+                signed_volume += vertices[0].dot(
+                    vertices[index].cross(vertices[index + 1])
+                ) / 6.0
+        return abs(signed_volume)
+
+    measured = tuple((component_volume(component), component) for component in components)
+    removable = [
+        vertex
+        for volume, component in measured
+        if volume < minimum_volume
+        for vertex in component
+    ]
+    if removable and len(removable) < len(editable_mesh.verts):
+        bmesh.ops.delete(editable_mesh, geom=removable, context="VERTS")
+    editable_mesh.to_mesh(mesh_object.data)
+    editable_mesh.free()
+    mesh_object.data.update()
+    return mesh_object
+
+
 def topology_edge_counts(mesh_object: bpy.types.Object) -> tuple[int, int]:
     """返回边界边数和非流形边数。"""
 
@@ -266,8 +381,8 @@ def topology_edge_counts(mesh_object: bpy.types.Object) -> tuple[int, int]:
     return boundary_edges, non_manifold_edges
 
 
-def duplicate_triangle_count(mesh_object: bpy.types.Object, precision: int = 6) -> int:
-    """统计经坐标舍入后完全重合的三角形数。"""
+def duplicate_triangle_count(mesh_object: bpy.types.Object, precision: int = 7) -> int:
+    """统计经坐标舍入后完全重合的三角形，避免误判微米级封闭折边。"""
 
     mesh_object.data.calc_loop_triangles()
     world_matrix = mesh_object.matrix_world

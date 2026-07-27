@@ -2,9 +2,9 @@
   "case_id": "tooth_13",
   "jaw": "lower",
   "inputs": {
-    "template": "../../data/cases/single/tooth-13/input/taohuandaoban.stl",
-    "guide_sleeve_assembly": "../../data/cases/single/tooth-13/input/sleeve#13_34.5_11.5_11#S.stl",
-    "patient_dentition": "../../data/cases/single/tooth-13/input/lbk.stl"
+    "template": "../data/cases/single/tooth-13/input/guide-template.stl",
+    "guide_sleeve_assembly": "../data/cases/single/tooth-13/input/sleeve-assembly.stl",
+    "patient_dentition": "../data/cases/single/tooth-13/input/dentition.stl"
   },
   "sleeve": {
     "inner_diameter_mm": 2.10,
@@ -18,12 +18,28 @@
   },
   "geometry": {
     "channel_axial_margin_mm": 5.0,
-    "connector_diameter_mm": 2.3,
+    "connector_diameter_mm": 4.6,
     "fusion_voxel_size_mm": 0.2
   },
   "windows": {
     "operation_tangent_margin_mm": 1.0,
-    "operation_bitangent_margin_mm": 0.5
+    "operation_bitangent_margin_mm": 3.0,
+    "observation_axis_drop_mm": 0.2,
+    "observation_sweep_angle_degrees": 90.0,
+    "observation_local_failure_drop_targets_mm": [0.5, 1.0, 2.0],
+    "observation_local_failure_transition_rows": 1
+  },
+  "tooth_identification": {
+    "case_yaml": "../data/cases/single/tooth-13/case.yaml"
+  },
+  "handpiece_avoidance": {
+    "id": "handpiece_01",
+    "handpiece": "../data/cases/single/tooth-13/input/handpiece-01.stl",
+    "stop_report": "../data/cases/single/tooth-13/input/handpiece-stop-01.json",
+    "maximum_angle_degrees": 5.0,
+    "pose_samples": 41,
+    "union_batch_size": 7,
+    "extra_clearance_mm": 0.0
   },
   "render": {
     "width_px": 1600,

@@ -9,10 +9,16 @@ from typing import TYPE_CHECKING
 from twin_guide.models import CaseAnalysis, GuideSleeve, TemplateFrame
 
 if TYPE_CHECKING:
+    from twin_guide.clearance_adjustment import HandpieceAvoidancePlan
     from twin_guide.config import CaseConfig
+    from twin_guide.guide_component_bridge import GuideComponentBridgePlan
+    from twin_guide.guide_terminal_u_extension import GuideTerminalUExtensionPlan
     from twin_guide.models import CutoutPlan
     from twin_guide.point_linking import PointLinkingPlan
+    from twin_guide.press_beam_points import PressBeamPointPlan
     from twin_guide.template_link_points import TemplateLinkPointPlan
+    from twin_guide.terminal_distal_common_node import TerminalDistalCommonNodePlan
+    from twin_guide.tooth_identification import ToothIdentificationResult
 
 
 class StageMaturity(StrEnum):
@@ -22,6 +28,13 @@ class StageMaturity(StrEnum):
     EXPERIMENTAL = "experimental"
     PENDING = "pending"
     TODO = "todo"
+
+
+class ConnectorEndpointSource(StrEnum):
+    """主连接梁端点的解剖来源，避免使用无约束字符串。"""
+
+    TEMPLATE = "template"
+    DISTAL_COMMON_NODE = "distal_common_node"
 
 
 class StageRunStatus(StrEnum):
@@ -69,7 +82,7 @@ class StageResult:
 class SleeveGenerationResult:
     """第 1 步输出，与牙位、切窗和后续连建无关。"""
 
-    sleeves: tuple[GuideSleeve, GuideSleeve]
+    sleeves: tuple[GuideSleeve, ...]
     template_frame: TemplateFrame
 
 
@@ -83,12 +96,15 @@ class GenerationContext:
     config: CaseConfig
     case: CaseAnalysis | None = None
     sleeve_generation: SleeveGenerationResult | None = None
-    tooth_identification: object | None = None
+    tooth_identification: ToothIdentificationResult | None = None
     window_cutouts: CutoutPlan | None = None
     template_link_points: TemplateLinkPointPlan | None = None
-    press_beam_points: object | None = None
+    guide_component_bridge: GuideComponentBridgePlan | None = None
+    guide_terminal_u_extension: GuideTerminalUExtensionPlan | None = None
+    terminal_distal_common_node: TerminalDistalCommonNodePlan | None = None
+    press_beam_points: PressBeamPointPlan | None = None
     point_linking: PointLinkingPlan | None = None
-    clearance_adjustment: object | None = None
+    clearance_adjustment: tuple[HandpieceAvoidancePlan, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from twin_guide.config import CaseConfig
+from twin_guide.config import CaseConfig, require_production_review
 from twin_guide.guide_generation import generate_guide
 
 
@@ -23,6 +23,16 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     generate_command = commands.add_parser("generate", help="构建牙科导板并输出诊断图")
     generate_command.add_argument("--config", required=True, type=Path)
+    generate_command.add_argument(
+        "--validate",
+        action="store_true",
+        help="生成后立即运行同一配置的最终 STL 验证",
+    )
+    generate_command.add_argument(
+        "--allow-unreviewed",
+        action="store_true",
+        help="允许生成 case.yaml 中仍明确标记为待审核的病例",
+    )
     process_command = commands.add_parser("process", help="运行已实现的生成阶段")
     process_command.add_argument("--config", required=True, type=Path)
     validate_command = commands.add_parser("validate", help="检查已导出的牙科导板 STL")
@@ -37,10 +47,21 @@ def main() -> None:
     arguments = _parser().parse_args(_blender_arguments())
     config = CaseConfig.from_json(arguments.config)
     if arguments.command == "generate":
+        if not arguments.allow_unreviewed:
+            require_production_review(config)
         artifacts = generate_guide(config)
         print(f"MODEL {artifacts.model_path}")
         for image_path in artifacts.image_paths:
             print(f"IMAGE {image_path}")
+        if arguments.validate:
+            from twin_guide.guide_validation import validate_guide
+
+            results = validate_guide(artifacts.model_path, config)
+            for result in results:
+                status = "通过" if result.passed else "失败"
+                print(f"{status} {result.name} {result.metrics}")
+            if not all(result.passed for result in results):
+                raise SystemExit(1)
         return
     if arguments.command == "process":
         from twin_guide import run_generation_process
