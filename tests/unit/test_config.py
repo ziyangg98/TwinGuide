@@ -8,7 +8,6 @@ import yaml
 from twin_guide.config import (
     CaseConfig,
     Jaw,
-    SleeveGeometryMode,
     case_occlusal_axis,
     require_production_review,
 )
@@ -88,12 +87,7 @@ class CaseConfigTests(unittest.TestCase):
             )
             if key in config_data and config_data[key] is not None
         }
-        design = {
-            "sleeve_geometry": {
-                "mode": config_data.get("sleeve_geometry_mode", "generated")
-            },
-            **dict(existing.get("design", {})),
-        }
+        design = dict(existing.get("design", {}))
         for key in (
             "guide_anchors",
             "guide_component_bridge",
@@ -154,7 +148,6 @@ class CaseConfigTests(unittest.TestCase):
         self.assertEqual(config.sleeve.inner_radius_mm, 1.05)
         self.assertEqual(config.sleeve.outer_diameter_mm, 4.3)
         self.assertEqual(config.sleeve.outer_radius_mm, 2.15)
-        self.assertIs(config.sleeve_geometry_mode, SleeveGeometryMode.GENERATED)
         self.assertEqual(config.sleeve.height_mm, 16.373)
         self.assertEqual(config.sleeve.platform_width_mm, 2.036)
         self.assertEqual(config.sleeve.platform_height_mm, 9.875)
@@ -230,7 +223,7 @@ class CaseConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ConfigurationError, "必须使用相对病例目录"):
             CaseConfig.from_yaml(self._write_config(config_data))
 
-    def test_loads_input_sleeve_geometry_mode_from_case_yaml(self):
+    def test_rejects_removed_sleeve_geometry_field(self):
         (self.case_directory / "case.yaml").write_text(
             """
 design:
@@ -242,38 +235,8 @@ design:
         config_data = self._valid_config_data()
         config_data["tooth_identification"] = {"case_yaml": "case.yaml"}
 
-        config = CaseConfig.from_yaml(self._write_config(config_data))
-
-        self.assertIs(config.sleeve_geometry_mode, SleeveGeometryMode.INPUT)
-
-    def test_rejects_unknown_sleeve_geometry_mode(self):
-        (self.case_directory / "case.yaml").write_text(
-            """
-design:
-  sleeve_geometry:
-    mode: legacy
-""",
-            encoding="utf-8",
-        )
-        config_data = self._valid_config_data()
-        config_data["tooth_identification"] = {"case_yaml": "case.yaml"}
-
-        with self.assertRaisesRegex(ConfigurationError, "generated 或 input"):
-            CaseConfig.from_yaml(self._write_config(config_data))
-
-    def test_rejects_missing_sleeve_geometry_mode(self):
-        """导管实体来源不得依赖兼容默认值。"""
-
-        path = self._write_config(self._valid_config_data())
-        content = yaml.safe_load(path.read_text(encoding="utf-8"))
-        del content["design"]["sleeve_geometry"]
-        path.write_text(
-            yaml.safe_dump(content, allow_unicode=True, sort_keys=False),
-            encoding="utf-8",
-        )
-
         with self.assertRaisesRegex(ConfigurationError, "sleeve_geometry"):
-            CaseConfig.from_yaml(path)
+            CaseConfig.from_yaml(self._write_config(config_data))
 
     def test_connector_diameter_defaults_to_4_60_mm(self):
         config_data = self._valid_config_data()

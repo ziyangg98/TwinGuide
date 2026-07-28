@@ -33,8 +33,6 @@ class GuideSleeve:
     parameters: SleeveEstimate
     axial_min_mm: float
     axial_max_mm: float
-    source_component_index: int | None = None
-    axial_bore_clear_fraction: float | None = None
 
     @property
     def center(self) -> Vec3:

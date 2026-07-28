@@ -28,13 +28,13 @@ from twin_guide.blender.stl_io import import_stl_mesh
 from twin_guide.config import (
     CaseConfig,
     PressBeamMode,
-    SleeveGeometryMode,
 )
 from twin_guide.generation_process import run_generation_process
 from twin_guide.geometry import Vec3, point_axis_coordinates
 from twin_guide.models import (
     CaseAnalysis,
     CylinderCutout,
+    GuideSleeve,
     ProfileWindowCutout,
     ValidationResult,
 )
@@ -53,6 +53,31 @@ def _point_is_retained(model_bvh: BVHTree, point: Vec3, distance_tolerance_mm: f
 
     return point_inside_mesh(model_bvh, point) or (
         nearest_mesh_distance(model_bvh, point) <= distance_tolerance_mm
+    )
+
+
+def _point_is_outside_guide_bores(
+    point: Vec3,
+    guides: tuple[GuideSleeve, ...],
+) -> bool:
+    """返回梁中心点是否位于全部关联导管的计划导孔之外。"""
+
+    return all(
+        point_axis_coordinates(point, guide.center, guide.axis)[0]
+        >= guide.bore_radius_mm
+        for guide in guides
+    )
+
+
+def _point_is_outside_dental_trim(
+    dentition_bvh: BVHTree,
+    point: Vec3,
+    clearance_mm: float,
+) -> bool:
+    """返回梁中心点是否位于生成端牙列裁剪空间之外。"""
+
+    return not point_inside_mesh(dentition_bvh, point) and (
+        nearest_mesh_distance(dentition_bvh, point) > clearance_mm
     )
 
 
@@ -89,7 +114,7 @@ def _guide_retention_result(
     case: CaseAnalysis,
     reference_sleeves: tuple[bpy.types.Object, ...],
 ) -> ValidationResult:
-    """按所选模式以输入或参数化导管表面验证最终实体保留率。"""
+    """以标准重建导管表面验证最终实体保留率。"""
 
     voxel_size_mm = case.config.geometry.fusion_voxel_size_mm
     distance_tolerance_mm = voxel_size_mm * 2.0
@@ -110,14 +135,6 @@ def _guide_retention_result(
         retained_fraction = retained_count / len(reference_points) if reference_points else 0.0
         metrics[f"guide_{guide.guide_index}_reference_count"] = len(reference_points)
         metrics[f"guide_{guide.guide_index}_retained_fraction"] = retained_fraction
-        if guide.source_component_index is not None:
-            metrics[f"guide_{guide.guide_index}_source_component_index"] = (
-                guide.source_component_index
-            )
-        if guide.axial_bore_clear_fraction is not None:
-            metrics[f"guide_{guide.guide_index}_axial_bore_clear_fraction"] = (
-                guide.axial_bore_clear_fraction
-            )
         passed &= retained_fraction >= RETAINED_FRACTION_MINIMUM
     return ValidationResult("guide_retention", passed, metrics)
 
@@ -125,6 +142,7 @@ def _guide_retention_result(
 def _connector_result(
     model_bvh: BVHTree,
     template_bvh: BVHTree,
+    dentition_bvh: BVHTree,
     sleeve_bvhs: tuple[BVHTree, ...],
     case: CaseAnalysis,
     connector_plan: PointLinkingPlan,
@@ -139,11 +157,20 @@ def _connector_result(
     }
     passed = True
     for connector in connector_plan.links:
-        guide = case.guide_sleeves[connector.guide_index - 1]
+        guide_indices = connector.guide_indices or (connector.guide_index,)
+        guides = tuple(case.guide_sleeves[index - 1] for index in guide_indices)
         retained_centerline = tuple(
             point
             for point in connector.centerline
-            if point_axis_coordinates(point, guide.center, guide.axis)[0] >= guide.bore_radius_mm
+            if _point_is_outside_guide_bores(point, guides)
+            and (
+                not connector_plan.trim_against_dentition
+                or _point_is_outside_dental_trim(
+                    dentition_bvh,
+                    point,
+                    case.config.geometry.connector_dental_clearance_mm,
+                )
+            )
         )
         inside_count = sum(
             _point_is_retained(model_bvh, point, voxel_tolerance_mm)
@@ -152,7 +179,6 @@ def _connector_result(
         inside_fraction = (
             inside_count / len(retained_centerline) if retained_centerline else 0.0
         )
-        guide_indices = connector.guide_indices or (connector.guide_index,)
         tube_contacts = connector.tube_contacts or (connector.tube_contact,)
         tube_contact_distances = tuple(
             nearest_mesh_distance(sleeve_bvhs[guide_index - 1], contact)
@@ -771,20 +797,17 @@ def validate_guide(
     cutout_plan = context.window_cutouts
     connector_plan = context.point_linking
     tooth_identification = context.tooth_identification
-    reference_sleeves = (
-        tuple(guide.guide_mesh for guide in case.guide_sleeves)
-        if config.sleeve_geometry_mode is SleeveGeometryMode.INPUT
-        else tuple(
-            create_closed_sleeve_object(
-                guide.parameters,
-                f"validation_generated_sleeve_{guide.guide_index}",
-            )
-            for guide in case.guide_sleeves
+    reference_sleeves = tuple(
+        create_closed_sleeve_object(
+            guide.parameters,
+            f"validation_generated_sleeve_{guide.guide_index}",
         )
+        for guide in case.guide_sleeves
     )
     model_mesh = import_stl_mesh(model_path.resolve(), "validated_twin_guide_mesh")
     model_bvh = build_bvh(model_mesh)
     template_bvh = build_bvh(case.input_meshes.template_mesh)
+    dentition_bvh = build_bvh(case.input_meshes.patient_dentition_mesh)
     sleeve_bvhs = tuple(build_bvh(sleeve) for sleeve in reference_sleeves)
     boundary_edge_count, non_manifold_edge_count = topology_edge_counts(model_mesh)
     duplicate_face_count = duplicate_triangle_count(model_mesh)
@@ -808,6 +831,7 @@ def validate_guide(
         _connector_result(
             model_bvh,
             template_bvh,
+            dentition_bvh,
             sleeve_bvhs,
             case,
             connector_plan,
@@ -884,19 +908,11 @@ def validate_guide(
         )
         for point in channel_probe_points
     )
-    input_geometry_mode = config.sleeve_geometry_mode is SleeveGeometryMode.INPUT
     channel_metrics: dict[str, int | float] = {
         "sample_count": len(channel_probe_points),
         "blocked_sample_count": blocked_channel_count,
-        "input_geometry_preserved": int(input_geometry_mode),
         "global_bore_recut_applied": int(
-            not input_geometry_mode and connector_plan.recut_sleeve_bore
-        ),
-        "connector_bore_recut_before_input_sleeves": int(
-            input_geometry_mode and connector_plan.recut_sleeve_bore
-        ),
-        "blocked_input_geometry_requires_source_bore_review": int(
-            input_geometry_mode and blocked_channel_count > 0
+            connector_plan.recut_sleeve_bore
         ),
     }
     for guide, radius in zip(case.guide_sleeves, usable_bore_radii, strict=True):

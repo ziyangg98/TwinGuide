@@ -22,7 +22,7 @@ TwinGuide 使用 Blender 5.2 LTS 自带的 Python 3.13。科学计算依赖安�
 ```
 
 `generate` 读取病例网格和 `case.yaml` 人工牙位约束，现场完成牙位识别与导板映射、
-输入导管识别与位姿分析，并按 YAML 选择重建标准导管或直接保留输入导管，
+导管装配体识别与位姿分析，再按 `runtime.sleeve` 的标准尺寸重建导管，
 FDI 变截面观察窗、联建锚点选择、连续曲线梁和可选 Y 型按压梁生成，
 再执行融合、固定孔/观察窗复切以及可选的手机运动包络直接差集，最后导出 STL。
 具体数据流见[生成过程](../process/index.md)。
@@ -85,9 +85,8 @@ Blender 后端与端到端测试、全部病例回归分别使用：
 | `input_template.png` | 牙科导板输入网格 |
 | `input_sleeves.png` | 导管装配体输入网格 |
 | `input_patient_dentition.png` | 患者牙列输入网格 |
-| `selected_input_sleeves.png` | `input` 模式识别并直接采用的原始导管 |
-| `generated_sleeves.png` | `generated` 模式按参数重建的标准导管 |
-| `guide_assembly.png` | 牙科导板与当前模式导管的装配关系 |
+| `generated_sleeves.png` | 按识别位姿和配置参数重建的标准导管 |
+| `guide_assembly.png` | 牙科导板与标准导管的装配关系 |
 | `cutouts.png` | 导孔、操作窗和 FDI 变截面观察窗 |
 | `link_points.png` | 导管侧和牙科导板侧锚点 |
 | `press_beam.png` | 按压梁轨迹与实体计划 |

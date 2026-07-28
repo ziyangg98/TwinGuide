@@ -24,7 +24,6 @@ from twin_guide.blender.mesh_builders import (
 from twin_guide.blender.mesh_queries import (
     clean_mesh,
     remove_excess_components,
-    remove_subvoxel_components,
 )
 from twin_guide.blender.rendering import create_materials, render_objects
 from twin_guide.blender.scene import duplicate_mesh_object, remove_object
@@ -35,7 +34,6 @@ from twin_guide.blender.stl_io import (
     import_stl_mesh,
 )
 from twin_guide.clearance_adjustment import HandpieceAvoidancePlan
-from twin_guide.config import SleeveGeometryMode
 from twin_guide.geometry import Vec3
 from twin_guide.models import (
     BuildArtifacts,
@@ -45,10 +43,6 @@ from twin_guide.models import (
 )
 from twin_guide.point_linking import PointLinkingPlan
 from twin_guide.types import ConnectorEndpointSource
-
-# 最终输入导管融合会使刚完成的切口边界向内回缩约半个体素。观察窗的
-# 独立验证要求轴线到实体保持 0.2 mm 净距，因此复切时显式预留该净距。
-OBSERVATION_WINDOW_CLEARANCE_MM = 0.2
 
 GENERATED_SUFFIXES = {".png", ".stl"}
 MAIN_CONNECTOR_PREFIXES = (
@@ -84,25 +78,6 @@ def _create_channel_cutters(
         )
         for channel in cutout_plan.channels
     )
-
-
-def _create_selected_input_sleeves(
-    case: CaseAnalysis,
-    material: bpy.types.Material,
-) -> tuple[bpy.types.Object, ...]:
-    """复制输入装配体中识别出的原始导管，不做参数化重建。"""
-
-    sleeves = tuple(
-        assign_material(
-            duplicate_mesh_object(
-                guide.guide_mesh,
-                f"selected_input_sleeve_{guide.guide_index}",
-            ),
-            material,
-        )
-        for guide in case.guide_sleeves
-    )
-    return sleeves
 
 
 def _create_generated_sleeves(
@@ -693,7 +668,7 @@ def _render_process_images(
     anchor_trajectory_meshes: tuple[bpy.types.Object, ...],
     press_beam_trajectory_meshes: tuple[bpy.types.Object, ...],
 ) -> tuple[Path, ...]:
-    """渲染输入、当前模式导管、切口、选点和连接结果。"""
+    """渲染输入、标准重建导管、切口、选点和连接结果。"""
 
     template_mesh = case.input_meshes.template_mesh
     source_assemblies = case.input_meshes.guide_sleeve_assembly_meshes
@@ -711,14 +686,7 @@ def _render_process_images(
         ("input_template.png", (template_mesh,)),
         ("input_sleeves.png", source_assemblies),
         ("input_patient_dentition.png", (patient_dentition,)),
-        (
-            (
-                "selected_input_sleeves.png"
-                if case.config.sleeve_geometry_mode is SleeveGeometryMode.INPUT
-                else "generated_sleeves.png"
-            ),
-            sleeve_meshes,
-        ),
+        ("generated_sleeves.png", sleeve_meshes),
         ("guide_assembly.png", (template_mesh, *sleeve_meshes, *accessory_meshes)),
         (
             "link_points.png",
@@ -812,10 +780,8 @@ def build_guide_from_links(
         最终 STL 路径和全部渲染图路径。
 
     算法说明:
-        ``generated`` 模式重建标准导管，将其与导板、附件和连接梁整体
-        融合后统一复切固定孔，并保留旧版最大连通体清理。``input`` 模式
-        先完成导板、附件和连接梁的所有切割，再将输入导管作为受保护实体
-        最后融合；之后不再全局复切固定孔，也不删除非最大连通体。
+        重建标准导管，将其与导板、附件和连接梁整体融合后
+        统一复切导孔和观察窗，再执行手机避让与最终修复。
     """
 
     output_directory = case.config.output_directory
@@ -831,11 +797,7 @@ def build_guide_from_links(
         assign_material(guide.guide_mesh, materials["sleeve"])
     for accessory_mesh in accessory_meshes:
         assign_material(accessory_mesh, materials["sleeve"])
-    sleeve_meshes = (
-        _create_selected_input_sleeves(case, materials["sleeve"])
-        if case.config.sleeve_geometry_mode is SleeveGeometryMode.INPUT
-        else _create_generated_sleeves(case, materials["sleeve"])
-    )
+    sleeve_meshes = _create_generated_sleeves(case, materials["sleeve"])
     channel_cutters = _create_channel_cutters(cutout_plan, materials["channel"])
     analytic_window_cutters = _create_window_cutters(cutout_plan, materials)
     profile_window_cutters = _create_profile_window_cutters(
@@ -886,107 +848,45 @@ def build_guide_from_links(
     if handpiece_image is not None:
         process_image_paths = (*process_image_paths, handpiece_image)
     cut_template_mesh = subtract_cutters(template_mesh, (*channel_cutters, *window_cutters))
-    generated_recut_cutters = (
+    recut_cutters = (
         (*channel_cutters, *profile_window_cutters)
         if point_links.recut_sleeve_bore
         else profile_window_cutters
     )
-    generated_mode = (
-        case.config.sleeve_geometry_mode is SleeveGeometryMode.GENERATED
+    final_mesh = voxel_union(
+        (cut_template_mesh, *sleeve_meshes, *accessory_meshes, *link_meshes),
+        "twin_guide_mesh",
+        case.config.geometry.fusion_voxel_size_mm,
+        materials["final"],
     )
-    if generated_mode:
+    if recut_cutters:
         final_mesh = voxel_union(
-            (cut_template_mesh, *sleeve_meshes, *accessory_meshes, *link_meshes),
-            "twin_guide_mesh",
+            (final_mesh,),
+            "twin_guide_pre_recut_mesh",
             case.config.geometry.fusion_voxel_size_mm,
             materials["final"],
         )
-        if generated_recut_cutters:
-            final_mesh = voxel_union(
-                (final_mesh,),
-                "twin_guide_pre_recut_mesh",
-                case.config.geometry.fusion_voxel_size_mm,
-                materials["final"],
-            )
-            final_mesh = apply_manifold3d_differences(
-                final_mesh,
-                generated_recut_cutters,
-            )
-            remove_excess_components(final_mesh, 1)
-        else:
-            clean_mesh(final_mesh)
-        for avoidance in handpiece_avoidance or ():
-            handpiece_cutter = import_polygon_mesh(
-                avoidance.envelope_mesh_path,
-                f"handpiece_{avoidance.avoidance_id}_current_depth_lr_sweep_cutter",
-            )
-            final_mesh = apply_manifold3d_differences(
-                final_mesh,
-                (handpiece_cutter,),
-                cutter_clearance_mm=avoidance.extra_clearance_mm,
-                simplify_tolerance_mm=0.0,
-            )
-            remove_excess_components(final_mesh, 1)
-            remove_object(handpiece_cutter)
-        requires_serialized_repair = bool(
-            generated_recut_cutters or handpiece_avoidance
-        )
-    else:
-        # 输入导管是受保护实体。所有功能切割先作用于导板、附件和连接梁，
-        # 输入导管最后融合；之后不再做全局复切或最大连通体删除。
-        protected_base = voxel_union(
-            (cut_template_mesh, *accessory_meshes, *link_meshes),
-            "twin_guide_without_input_sleeves",
-            case.config.geometry.fusion_voxel_size_mm,
-            materials["final"],
-        )
-        voxel_size_mm = case.config.geometry.fusion_voxel_size_mm
-        # input 模式只复切尚未包含输入导管的基础结构。导孔只补偿半个
-        # 体素；观察窗还需满足最终 0.2 mm 轴线净距，因此两类 cutter
-        # 分开执行，避免无谓扩大导孔。
-        if point_links.recut_sleeve_bore and channel_cutters:
-            protected_base = apply_manifold3d_differences(
-                protected_base,
-                channel_cutters,
-                cutter_clearance_mm=0.5 * voxel_size_mm,
-            )
-        if profile_window_cutters:
-            protected_base = apply_manifold3d_differences(
-                protected_base,
-                profile_window_cutters,
-                cutter_clearance_mm=(
-                    OBSERVATION_WINDOW_CLEARANCE_MM + 0.5 * voxel_size_mm
-                ),
-            )
-        if (
-            not (point_links.recut_sleeve_bore and channel_cutters)
-            and not profile_window_cutters
-        ):
-            clean_mesh(protected_base)
-        for avoidance in handpiece_avoidance or ():
-            handpiece_cutter = import_polygon_mesh(
-                avoidance.envelope_mesh_path,
-                f"handpiece_{avoidance.avoidance_id}_current_depth_lr_sweep_cutter",
-            )
-            protected_base = apply_manifold3d_differences(
-                protected_base,
-                (handpiece_cutter,),
-                cutter_clearance_mm=avoidance.extra_clearance_mm,
-                simplify_tolerance_mm=0.0,
-            )
-            remove_object(handpiece_cutter)
-        final_mesh = voxel_union(
-            (protected_base, *sleeve_meshes),
-            "twin_guide_with_protected_input_sleeves",
-            voxel_size_mm,
-            materials["final"],
-        )
-        remove_subvoxel_components(
+        final_mesh = apply_manifold3d_differences(
             final_mesh,
-            voxel_size_mm,
+            recut_cutters,
         )
+        remove_excess_components(final_mesh, 1)
+    else:
         clean_mesh(final_mesh)
-        requires_serialized_repair = False
+    for avoidance in handpiece_avoidance or ():
+        handpiece_cutter = import_polygon_mesh(
+            avoidance.envelope_mesh_path,
+            f"handpiece_{avoidance.avoidance_id}_current_depth_lr_sweep_cutter",
+        )
+        final_mesh = apply_manifold3d_differences(
+            final_mesh,
+            (handpiece_cutter,),
+            cutter_clearance_mm=avoidance.extra_clearance_mm,
+            simplify_tolerance_mm=0.0,
+        )
+        remove_excess_components(final_mesh, 1)
+        remove_object(handpiece_cutter)
+    requires_serialized_repair = bool(recut_cutters or handpiece_avoidance)
     assign_material(final_mesh, materials["final"])
     model_path = output_directory / "twin_guide.stl"
     export_stl_mesh(model_path, final_mesh)

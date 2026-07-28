@@ -1,4 +1,4 @@
-"""第 1 步：识别两个导管，并按配置保留输入实体或重建标准实体。"""
+"""第 1 步：从装配体识别两个导管并重建标准实体。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from twin_guide.config import Jaw, SleeveGeometryMode, SleeveParameters
+from twin_guide.config import Jaw, SleeveParameters
 from twin_guide.errors import GeometryError
 from twin_guide.geometry import (
     Vec3,
@@ -19,14 +19,14 @@ from twin_guide.geometry import (
 )
 from twin_guide.models import GuideSleeve, SurfaceSample, TemplateFrame
 from twin_guide.sleeve_estimation import c_opening_toward, estimate_sleeve_axis
-from twin_guide.sleeve_estimation.types import SleeveEstimate
+from twin_guide.sleeve_estimation.types import SleeveAxis, SleeveEstimate
 from twin_guide.types import SleeveGenerationResult
 
 if TYPE_CHECKING:
     import bpy
 
 BORE_PROBE_FRACTIONS = (0.15, 0.25, 0.35, 0.50, 0.65, 0.75, 0.85)
-MINIMUM_AXIAL_BORE_CLEAR_FRACTION = 0.60
+MINIMUM_CLEAR_BORE_PROBES = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,7 +37,6 @@ class SleeveGenerationInputs:
     template_samples: tuple[SurfaceSample, ...]
     template_center: Vec3
     sleeve_parameters: SleeveParameters
-    sleeve_geometry_mode: SleeveGeometryMode
     jaw: Jaw
     occlusal_axis: Vec3 | None = None
 
@@ -48,13 +47,15 @@ class _GuideCandidate:
 
     component_index: int
     guide_mesh: bpy.types.Object
-    samples: tuple[SurfaceSample, ...]
     center: Vec3
     axis: Vec3
     axial_min_mm: float
     axial_max_mm: float
     outer_radius_mm: float
-    axial_bore_clear_fraction: float
+    fitted_pose: SleeveAxis
+    fitted_axial_min_mm: float
+    fitted_axial_max_mm: float
+    clear_bore_probe_count: int
 
     @property
     def length_mm(self) -> float:
@@ -62,8 +63,30 @@ class _GuideCandidate:
 
         return self.axial_max_mm - self.axial_min_mm
 
+    @property
+    def has_axial_bore(self) -> bool:
+        """返回候选分量是否具有连续轴向导孔。"""
 
-def _analyze_component(mesh: bpy.types.Object, component_index: int) -> _GuideCandidate:
+        return self.clear_bore_probe_count >= MINIMUM_CLEAR_BORE_PROBES
+
+
+def _orient_axis_against_occlusal(
+    pose: SleeveAxis,
+    vertices: tuple[Vec3, ...],
+    occlusal_outward: Vec3,
+) -> SleeveAxis:
+    """按病例牙合外向统一轴向，并把原点放在外向一端。"""
+
+    axis = pose.axis if pose.axis.dot(occlusal_outward) <= 0.0 else -pose.axis
+    coordinates = tuple((point - pose.axis_origin).dot(axis) for point in vertices)
+    return SleeveAxis(pose.axis_origin + axis * min(coordinates), axis)
+
+
+def _analyze_component(
+    mesh: bpy.types.Object,
+    component_index: int,
+    occlusal_outward: Vec3,
+) -> _GuideCandidate:
     """将连通分量转为导管候选。
 
     参数:
@@ -71,7 +94,7 @@ def _analyze_component(mesh: bpy.types.Object, component_index: int) -> _GuideCa
         component_index: 分量索引。
 
     返回:
-        包含表面样本、主轴、轴向范围和外径估计的候选。
+        包含 PCA 包络、精确轴线、轴向范围和导孔检查的候选。
     """
 
     from twin_guide.blender.mesh_queries import (
@@ -90,7 +113,11 @@ def _analyze_component(mesh: bpy.types.Object, component_index: int) -> _GuideCa
     coordinates = tuple(point_axis_coordinates(point, center, axis) for point in points)
     source = mesh_object_to_triangle_data(mesh)
     try:
-        fitted_axis = estimate_sleeve_axis(source)
+        fitted_axis = _orient_axis_against_occlusal(
+            estimate_sleeve_axis(source),
+            source.vertices,
+            occlusal_outward,
+        )
     except ValueError as error:
         raise GeometryError(
             f"导管候选分量 {component_index} 无法估计轴向孔道"
@@ -111,20 +138,30 @@ def _analyze_component(mesh: bpy.types.Object, component_index: int) -> _GuideCa
         * (fitted_minimum + fitted_span * fraction)
         for fraction in BORE_PROBE_FRACTIONS
     )
-    axial_bore_clear_fraction = sum(
+    clear_bore_probe_count = sum(
         not point_inside_mesh(mesh_tree, point) for point in bore_probe_points
-    ) / len(bore_probe_points)
+    )
     return _GuideCandidate(
         component_index,
         mesh,
-        samples,
         center,
         axis,
         min(axial for _, axial in coordinates),
         max(axial for _, axial in coordinates),
         quantile([radial for radial, _ in coordinates], 0.90),
-        axial_bore_clear_fraction,
+        fitted_axis,
+        fitted_minimum,
+        fitted_maximum,
+        clear_bore_probe_count,
     )
+
+
+def _filter_bore_candidates(
+    candidates: tuple[_GuideCandidate, ...],
+) -> tuple[_GuideCandidate, ...]:
+    """仅保留七个轴向探测点中至少五个位于导孔的分量。"""
+
+    return tuple(candidate for candidate in candidates if candidate.has_axial_bore)
 
 
 def _pair_key(
@@ -158,6 +195,7 @@ def _pair_key(
 def _select_pair(
     candidates: tuple[_GuideCandidate, ...],
     configured: SleeveParameters,
+    rejected_components: tuple[str, ...] = (),
 ) -> tuple[_GuideCandidate, _GuideCandidate]:
     """选择最接近已知尺寸且轴线最平行的导管对。
 
@@ -171,12 +209,7 @@ def _select_pair(
         GeometryError: 可用连通分量少于两个。
     """
 
-    bore_candidates = tuple(
-        candidate
-        for candidate in candidates
-        if candidate.axial_bore_clear_fraction
-        >= MINIMUM_AXIAL_BORE_CLEAR_FRACTION
-    )
+    bore_candidates = _filter_bore_candidates(candidates)
     pairs = tuple(
         (first, second)
         for index, first in enumerate(bore_candidates)
@@ -185,12 +218,14 @@ def _select_pair(
     if not pairs:
         diagnostic = ", ".join(
             f"{candidate.component_index}:"
-            f"{candidate.axial_bore_clear_fraction:.2f}"
+            f"{candidate.clear_bore_probe_count}/{len(BORE_PROBE_FRACTIONS)}"
             for candidate in candidates
         )
+        rejected = "; ".join(rejected_components)
         raise GeometryError(
             "导管装配体中至少需要两个具有轴向孔道的连通分量；"
-            f"候选孔道通过率 [{diagnostic}]"
+            f"候选导孔探测 [{diagnostic}]"
+            + (f"；拒绝原因 [{rejected}]" if rejected else "")
         )
     return min(pairs, key=lambda pair: _pair_key(pair, configured))
 
@@ -230,9 +265,8 @@ def _build_sleeve(
     other: _GuideCandidate,
     index: int,
     configured: SleeveParameters,
-    geometry_mode: SleeveGeometryMode,
 ) -> GuideSleeve:
-    """估计一个导管的位姿并装入配置尺寸。
+    """复用已估计位姿并装入配置尺寸。
 
     参数:
         candidate: 已定向导管候选。
@@ -244,35 +278,14 @@ def _build_sleeve(
         包含 STL 位姿和配置尺寸的导管。
     """
 
-    from twin_guide.blender.sleeve_estimation_adapter import mesh_object_to_triangle_data
     from twin_guide.blender.sleeve_reconstruction import (
         validate_sleeve_boolean_parameters,
     )
 
-    source = mesh_object_to_triangle_data(candidate.guide_mesh)
-    try:
-        pose = estimate_sleeve_axis(source)
-    except ValueError as error:
-        raise GeometryError(f"无法估计导管分量 {candidate.component_index}：{error}") from error
-    if geometry_mode is SleeveGeometryMode.INPUT:
-        axial_coordinates = tuple(
-            (point - pose.axis_origin).dot(pose.axis)
-            for point in source.vertices
-        )
-        axial_min = min(axial_coordinates)
-        axial_max = max(axial_coordinates)
-        sleeve_height = axial_max - axial_min
-        if sleeve_height <= 1e-6:
-            raise GeometryError(
-                f"导管分量 {candidate.component_index} 的输入轴向范围退化"
-            )
-        axis_origin = pose.axis_origin + pose.axis * axial_min
-    else:
-        sleeve_height = configured.height_mm
-        axis_origin = pose.axis_origin
+    pose = candidate.fitted_pose
     c_opening_direction = c_opening_toward(pose.axis, candidate.center, other.center)
     parameters = SleeveEstimate(
-        axis_origin=axis_origin,
+        axis_origin=pose.axis_origin,
         axis=pose.axis,
         c_opening_direction=c_opening_direction,
         height=configured.height_mm,
@@ -290,9 +303,7 @@ def _build_sleeve(
         guide_mesh=candidate.guide_mesh,
         parameters=parameters,
         axial_min_mm=0.0,
-        axial_max_mm=sleeve_height,
-        source_component_index=candidate.component_index,
-        axial_bore_clear_fraction=candidate.axial_bore_clear_fraction,
+        axial_max_mm=configured.height_mm,
     )
 
 
@@ -310,19 +321,29 @@ def recognize_and_build_sleeves(inputs: SleeveGenerationInputs) -> SleeveGenerat
             或配置尺寸无法构成闭合导管。
 
     算法说明:
-        算法先对每个连通分量做表面采样，然后枚举分量对，
-        按已知导管高度、外径和轴线平行程度排序。对选中的两个候选，
-        从 STL 估计轴线，再将两个 C 口定向到对侧导管并与配置尺寸组合。
+        算法对每个连通分量只分析一次，保存 PCA 包络、精确内孔轴线和
+        七点导孔检查。通过导孔资格的分量按已知高度、外径、平行度和间距
+        选对，然后直接复用已拟合位姿，将两个 C 口定向到对侧导管并装入标准尺寸。
         本函数不依赖牙位、切窗或连建结果。
     """
 
     candidates = []
+    rejected_components = []
+    occlusal_outward = inputs.occlusal_axis or Vec3(
+        0.0,
+        0.0,
+        inputs.jaw.occlusal_axis_sign,
+    )
     for index, mesh in enumerate(inputs.components):
         try:
-            candidates.append(_analyze_component(mesh, index))
-        except GeometryError:
-            continue
-    first_raw, second_raw = _select_pair(tuple(candidates), inputs.sleeve_parameters)
+            candidates.append(_analyze_component(mesh, index, occlusal_outward))
+        except GeometryError as error:
+            rejected_components.append(f"{index}:{error}")
+    first_raw, second_raw = _select_pair(
+        tuple(candidates),
+        inputs.sleeve_parameters,
+        tuple(rejected_components),
+    )
     selected = (first_raw, second_raw)
     template_frame = _template_frame(inputs, selected[0], selected[1])
     ordered = sorted(
@@ -337,14 +358,12 @@ def recognize_and_build_sleeves(inputs: SleeveGenerationInputs) -> SleeveGenerat
             ordered[1],
             1,
             inputs.sleeve_parameters,
-            inputs.sleeve_geometry_mode,
         ),
         _build_sleeve(
             ordered[1],
             ordered[0],
             2,
             inputs.sleeve_parameters,
-            inputs.sleeve_geometry_mode,
         ),
     )
     return SleeveGenerationResult(sleeves, template_frame)

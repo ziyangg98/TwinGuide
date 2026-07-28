@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 import traceback
@@ -38,7 +39,7 @@ def _write_summary(records: list[dict[str, object]]) -> None:
     SUMMARY_PATH.parent.mkdir(parents=True, exist_ok=True)
     SUMMARY_PATH.write_text(
         json.dumps({
-            "recognition_profile": "tooth_recognition_arch_progress_v2",
+            "recognition_profile": "standard_sleeve_reconstruction",
             "core_grouping_policy": "arch_progress",
             "cases": records,
         }, ensure_ascii=False, indent=2, default=str),
@@ -100,6 +101,9 @@ def main() -> int:
                 ),
                 "output_directory": str(config.output_directory),
                 "model": str(artifacts.model_path),
+                "model_sha256": hashlib.sha256(
+                    artifacts.model_path.read_bytes()
+                ).hexdigest(),
                 "recognition_manifest": recognition_manifest,
                 "guide_mapping_manifest": mapping_manifest,
                 "twin_guide_mapping_manifest": wrapper_manifest,

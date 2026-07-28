@@ -317,61 +317,6 @@ def remove_excess_components(
     return mesh_object
 
 
-def remove_subvoxel_components(
-    mesh_object: bpy.types.Object,
-    voxel_size_mm: float,
-    minimum_voxel_count: float = 1.5,
-) -> bpy.types.Object:
-    """删除体积小于指定体素数量的封闭离散碎片。
-
-    Blender 体素重建偶尔会在接触边界留下一个完整体素大小的闭合立方体，
-    因而仅清理“亚体素”不足以覆盖这类数值碎片。默认删除小于 1.5 个体素
-    体积的分量；具有实际几何体积的独立输入导管或附件仍会保留，因此不
-    等价于“只留最大连通体”。
-    """
-
-    if voxel_size_mm <= 0.0:
-        raise ValueError("体素尺寸必须为正")
-    if minimum_voxel_count <= 0.0:
-        raise ValueError("最小体素体积数量必须为正")
-    minimum_volume = voxel_size_mm**3 * minimum_voxel_count
-    editable_mesh = bmesh.new()
-    editable_mesh.from_mesh(mesh_object.data)
-    components = _vertex_components(editable_mesh)
-
-    def component_volume(component: set[bmesh.types.BMVert]) -> float:
-        """以有向三角面四面体和计算单个封闭分量体积。"""
-
-        faces = {
-            face
-            for vertex in component
-            for face in vertex.link_faces
-            if all(face_vertex in component for face_vertex in face.verts)
-        }
-        signed_volume = 0.0
-        for face in faces:
-            vertices = tuple(vertex.co for vertex in face.verts)
-            for index in range(1, len(vertices) - 1):
-                signed_volume += vertices[0].dot(
-                    vertices[index].cross(vertices[index + 1])
-                ) / 6.0
-        return abs(signed_volume)
-
-    measured = tuple((component_volume(component), component) for component in components)
-    removable = [
-        vertex
-        for volume, component in measured
-        if volume < minimum_volume
-        for vertex in component
-    ]
-    if removable and len(removable) < len(editable_mesh.verts):
-        bmesh.ops.delete(editable_mesh, geom=removable, context="VERTS")
-    editable_mesh.to_mesh(mesh_object.data)
-    editable_mesh.free()
-    mesh_object.data.update()
-    return mesh_object
-
-
 def topology_edge_counts(mesh_object: bpy.types.Object) -> tuple[int, int]:
     """返回边界边数和非流形边数。"""
 

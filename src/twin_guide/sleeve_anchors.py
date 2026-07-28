@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from twin_guide.config import DEFAULT_CONNECTOR_DIAMETER_MM, SleeveGeometryMode
-from twin_guide.errors import GeometryError
+from twin_guide.config import DEFAULT_CONNECTOR_DIAMETER_MM
 from twin_guide.geometry import Vec3, project_to_plane
 from twin_guide.models import CaseAnalysis, GuideSleeve
 from twin_guide.types import SleeveGenerationResult
@@ -21,7 +20,6 @@ class SleeveAnchorSelectionConfig:
         lower_edge_clearance_mm: 下梁外缘到稳定外壁下边缘的净距。
         axial_margin_mm: 接触截面到稳定区间端部的最低安全余量。
         upper_cutter_clearance_mm: 上梁嵌入后到固定孔边界的最低余量。
-        input_lower_wall_overlap_mm: 输入导管模式下低梁嵌入真实外壁的深度。
     """
 
     connector_radius_mm: float = DEFAULT_CONNECTOR_DIAMETER_MM / 2.0
@@ -29,7 +27,6 @@ class SleeveAnchorSelectionConfig:
     lower_edge_clearance_mm: float = 1.0
     axial_margin_mm: float = 0.8
     upper_cutter_clearance_mm: float = 0.01
-    input_lower_wall_overlap_mm: float = 1.45
 
     def __post_init__(self) -> None:
         """校验半径、净距和安全余量。"""
@@ -41,7 +38,6 @@ class SleeveAnchorSelectionConfig:
             self.lower_edge_clearance_mm,
             self.axial_margin_mm,
             self.upper_cutter_clearance_mm,
-            self.input_lower_wall_overlap_mm,
         ) < 0.0:
             raise ValueError("导管锚点净距和安全余量不得为负")
 
@@ -50,7 +46,7 @@ class SleeveAnchorSelectionConfig:
 class SleeveAnchorPoint:
     """一组导管表面接触点 Q 和梁中心线点 P。
 
-    ``surface_contact`` 是输入导管真实外壁上的 Q；``position`` 是后续
+    ``surface_contact`` 是标准导管主体外壁上的 Q；``position`` 是后续
     连续梁使用的中心线接触点 P。两者满足
     ``P = Q + (r_connector - tube_overlap) * surface_normal``。
     """
@@ -98,7 +94,7 @@ def _body_wall_direction(guide: GuideSleeve) -> Vec3:
 
 
 def _stable_outer_wall_interval(guide: GuideSleeve) -> tuple[float, float]:
-    """返回输入导管实际轴向范围。"""
+    """返回标准重建导管的轴向范围。"""
 
     return guide.axial_min_mm, guide.axial_max_mm
 
@@ -109,37 +105,14 @@ def _contact_position(
     axial_position_mm: float,
     direction: Vec3,
     config: SleeveAnchorSelectionConfig,
-    use_input_surface: bool,
 ) -> SleeveAnchorPoint:
-    """射线求输入导管真实外壁 Q，并按上下嵌入规则生成 P。"""
+    """在标准导管外壁上求 Q，并按上下嵌入规则生成 P。"""
 
-    # 输入导管轴线已规范化为以 C 口高端为 axis_origin，+axis 指向
-    # 闭合低端。锚点参数按相反方向递增，因此用闭合端作为原点映射。
+    # 导管轴线以 C 口高端为 axis_origin，+axis 指向闭合低端。
     t_min, t_max = _stable_outer_wall_interval(guide)
     closed_low_end = guide.center + guide.axis * t_max
     section_center = closed_low_end - guide.axis * (axial_position_mm - t_min)
-    if not use_input_surface or guide.guide_mesh is None:
-        # 纯几何单元测试和外部规划调用可以不携带 Blender 网格；生产病例
-        # 始终包含输入导管网格并进入下方的真实表面射线分支。
-        surface_contact = section_center + direction * guide.body_radius_mm
-    else:
-        from twin_guide.blender.mesh_queries import build_bvh, ray_cast_mesh
-
-        guide_tree = build_bvh(guide.guide_mesh)
-        ray_start_distance = max(
-            10.0,
-            4.0 * guide.outer_radius_mm,
-            4.0 * config.connector_radius_mm,
-        )
-        surface_contact = ray_cast_mesh(
-            guide_tree,
-            section_center + direction * ray_start_distance,
-            -direction,
-        )
-        if surface_contact is None:
-            raise GeometryError(
-                f"导管 {guide.guide_index} 在 {label} 锚点截面无法命中输入外壁"
-            )
+    surface_contact = section_center + direction * guide.body_radius_mm
     surface_normal = direction
     contact_radius = (surface_contact - section_center).dot(direction)
     wall_thickness = contact_radius - guide.bore_radius_mm
@@ -155,16 +128,8 @@ def _contact_position(
             wall_thickness - config.upper_cutter_clearance_mm,
         )
     elif label == "lower":
-        if use_input_surface:
-            # 输入导管不会再做全局导孔复切，因此低梁只嵌入真实外壁，
-            # 并在配置内孔前保留安全余量，避免连接梁填塞现有导孔。
-            overlap = min(
-                config.input_lower_wall_overlap_mm,
-                wall_thickness - config.upper_cutter_clearance_mm,
-            )
-        else:
-            # 生成模式保持旧规则：下梁全直径预埋，最终权威复切导孔。
-            overlap = 2.0 * config.connector_radius_mm
+        # 下梁全直径预埋，最终统一复切导孔。
+        overlap = 2.0 * config.connector_radius_mm
     else:
         raise ValueError(f"未知导管锚点标签：{label}")
 
@@ -183,11 +148,11 @@ def _contact_position(
         local_wall_thickness_mm=wall_thickness,
     )
 
+
 def _select_for_guide(
     guide: GuideSleeve,
     direction: Vec3,
     config: SleeveAnchorSelectionConfig,
-    use_input_surface: bool,
 ) -> SleeveAnchorSelection:
     """按闭合低端和 C 口高端选择一个导管的低、高锚点。"""
 
@@ -207,12 +172,8 @@ def _select_for_guide(
     return SleeveAnchorSelection(
         guide_index=guide.guide_index,
         radial_direction=direction,
-        lower=_contact_position(
-            guide, "lower", t_lower, direction, config, use_input_surface
-        ),
-        upper=_contact_position(
-            guide, "upper", t_upper, direction, config, use_input_surface
-        ),
+        lower=_contact_position(guide, "lower", t_lower, direction, config),
+        upper=_contact_position(guide, "upper", t_upper, direction, config),
     )
 
 
@@ -221,7 +182,7 @@ def select_sleeve_anchors(
     sleeves: SleeveGenerationResult,
     config: SleeveAnchorSelectionConfig | None = None,
 ) -> SleeveAnchorPlan:
-    """在每根输入导管的同一外侧母线上选择上下 Q/P 点。
+    """在每根标准导管的同一外侧母线上选择上下 Q/P 点。
 
     参数:
         case: 包含本次病例导管的分析结果。
@@ -233,22 +194,17 @@ def select_sleeve_anchors(
         每根导管成对向外方向上的上下表面点 Q 和中心线点 P。
 
     算法:
-        使用第 1 步识别的导管轴线和输入导管实际高度，并从轴线向外
-        反向射线命中真实输入外壁。C 口反方向作为成对向外方向；锚点参数
+        使用第 1 步识别的导管轴线和标准高度。C 口反方向作为
+        成对向外方向；锚点参数
         从闭合低端向 C 口高端递增，高端位置为
         ``t_max - 2 mm - r``，低端位置为 ``t_min + 1 mm + r``。
-        Q 位于主体外壁，P 按嵌入规则沿 Q 的法向偏移；生成模式低端梁
-        允许全直径预埋，输入模式低端梁只嵌入真实外壁，高端梁始终受局部
-        壁厚限制。
+        Q 位于参数化主体外壁，P 按嵌入规则沿 Q 的法向偏移；低端梁
+        允许全直径预埋并在最终模型中复切导孔。
     """
 
     if case.guide_sleeves != sleeves.sleeves:
         raise ValueError("病例分析与导管生成结果不一致")
     selection_config = config or SleeveAnchorSelectionConfig()
-    use_input_surface = (
-        getattr(getattr(case, "config", None), "sleeve_geometry_mode", None)
-        is SleeveGeometryMode.INPUT
-    )
     selections = []
     if len(sleeves.sleeves) % 2:
         raise ValueError("导管数量必须为偶数并按种植位成对输入")
@@ -266,7 +222,6 @@ def select_sleeve_anchors(
                     guide,
                     direction,
                     selection_config,
-                    use_input_surface,
                 )
             )
     return SleeveAnchorPlan(tuple(selections))

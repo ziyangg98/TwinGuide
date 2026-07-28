@@ -30,7 +30,7 @@ STAGES = (
     StageDefinition(
         1,
         "sleeve_generation",
-        "输入导管识别与位姿分析",
+        "导管识别与标准重建",
         StageMaturity.STABLE,
         "1.0",
         ("source_meshes",),

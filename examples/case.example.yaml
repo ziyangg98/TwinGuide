@@ -44,7 +44,6 @@ anatomy:
   review_status: unreviewed
 
 design:
-  sleeve_geometry: {mode: input}
   observation_windows: []
   guide_anchors: {mode: nearest}
   press_beam: {mode: disabled}

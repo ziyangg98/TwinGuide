@@ -5,7 +5,6 @@ from pathlib import Path
 
 from twin_guide import CaseConfig, generate_guide, run_generation_process, validate_guide
 from twin_guide.case_analysis import analyze_case
-from twin_guide.config import SleeveGeometryMode
 from twin_guide.models import WindowPurpose
 from twin_guide.tooth_identification import identify_tooth_positions
 from twin_guide.types import SleeveGenerationResult, StageRunStatus
@@ -69,11 +68,6 @@ class EndToEndTests(unittest.TestCase):
 
             self.assertEqual(build_artifacts.model_path.name, "twin_guide.stl")
             self.assertTrue(build_artifacts.model_path.is_file())
-            sleeve_process_image = (
-                "selected_input_sleeves.png"
-                if case_config.sleeve_geometry_mode is SleeveGeometryMode.INPUT
-                else "generated_sleeves.png"
-            )
             self.assertEqual(
                 {image_path.name for image_path in build_artifacts.image_paths},
                 {
@@ -87,7 +81,7 @@ class EndToEndTests(unittest.TestCase):
                     "input_template.png",
                     "input_sleeves.png",
                     "input_patient_dentition.png",
-                    sleeve_process_image,
+                    "generated_sleeves.png",
                     "link_points.png",
                     "press_beam.png",
                     "handpiece_avoidance.png",

@@ -13,7 +13,7 @@
 
 | 上下文字段 | 结果类型 | 运行时行为 |
 | --- | --- | --- |
-| `sleeve_generation` | `SleeveGenerationResult` | 按每个种植位识别一对具有轴孔的导管，并按模式重建或保存输入实体及导板局部标架 |
+| `sleeve_generation` | `SleeveGenerationResult` | 按每个种植位识别一对具有轴孔的导管，复用精确位姿按标准参数重建，并建立导板局部标架 |
 | `tooth_identification` | `ToothIdentificationResult` | 从 `case.yaml` 现场识别牙位并映射到导板 |
 | `window_cutouts` | `WindowCutoutPlan` | 生成导孔、操作窗以及 FDI 轴扫掠观察窗 cutter |
 | `template_link_points` | `TemplateLinkPointPlan` | 生成单/多种植位连续路径锚点，末端病例可加入远中公共节点 |

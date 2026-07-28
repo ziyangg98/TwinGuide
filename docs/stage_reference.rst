@@ -15,7 +15,7 @@
 
 .. automodule:: twin_guide.guide_generation
 
-导管识别与实体模式选择
+导管识别与标准重建
 ----------------------------------------
 
 .. automodule:: twin_guide.sleeve_generation

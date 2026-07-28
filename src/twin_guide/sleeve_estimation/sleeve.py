@@ -50,29 +50,13 @@ def _refined_axis(mesh: TriangleMeshData, center: Vec3, initial_axis: Vec3) -> t
     return line.origin, direction
 
 
-def _orient_toward_closed_end(
-    mesh: TriangleMeshData, axis_origin: Vec3, axis: Vec3
-) -> tuple[Vec3, Vec3]:
-    """以带闭合内孔的一端作为轴向终点。"""
-
-    minimum, maximum = _axial_extent(mesh, axis_origin, axis)
-    span = maximum - minimum
-    low = slice_mesh(mesh, axis_origin, axis, minimum + 0.10 * span)
-    high = slice_mesh(mesh, axis_origin, axis, maximum - 0.10 * span)
-    low_closed = sum(polyline.closed for polyline in low.polylines)
-    high_closed = sum(polyline.closed for polyline in high.polylines)
-    if high_closed > low_closed:
-        return axis_origin + axis * minimum, axis
-    return axis_origin + axis * maximum, -axis
-
-
 def estimate_sleeve_axis(mesh: TriangleMeshData) -> SleeveAxis:
-    """估计导管轴线并将正向指向平台端。"""
+    """拟合导管的无符号轴线；病例层负责按上下颌统一其方向。"""
 
     center = mean_point(mesh.vertices)
     axis_center, axis = _refined_axis(mesh, center, principal_axis(mesh.vertices))
-    axis_origin, axis = _orient_toward_closed_end(mesh, axis_center, axis)
-    return SleeveAxis(axis_origin, axis)
+    minimum, _ = _axial_extent(mesh, axis_center, axis)
+    return SleeveAxis(axis_center + axis * minimum, axis)
 
 
 def c_opening_toward(axis: Vec3, center: Vec3, other_center: Vec3) -> Vec3:

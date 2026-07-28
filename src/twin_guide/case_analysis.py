@@ -111,28 +111,6 @@ def _measure_operation_feature(
     return OperationFeature(center, diameter_mm)
 
 
-def _orient_sleeve_into_guide(
-    guide: GuideSleeve,
-    template_frame: object,
-) -> GuideSleeve:
-    """统一拟合轴符号，使每个种植位均指向导板内部。
-
-    圆柱拟合轴存在正负二义性。TwinGuide 将 ``axis_origin`` 定义在 C 口
-    几何高端，并将正 ``axis`` 定义为指向闭合孔几何低端；若输入装配体
-    相反，除反转轴外还需将原点移到另一个物理端面。
-    """
-
-    inward = -template_frame.normal
-    if guide.axis.dot(inward) >= 0.0:
-        return guide
-    parameters = replace(
-        guide.parameters,
-        axis_origin=guide.center + guide.axis * guide.length_mm,
-        axis=-guide.axis,
-    )
-    return replace(guide, parameters=parameters)
-
-
 def analyze_case(config: CaseConfig) -> CaseAnalysis:
     """读取病例网格，并计算后续阶段共用的几何数据。"""
 
@@ -169,7 +147,6 @@ def analyze_case(config: CaseConfig) -> CaseAnalysis:
                 template_samples=template_samples,
                 template_center=center,
                 sleeve_parameters=config.sleeve,
-                sleeve_geometry_mode=config.sleeve_geometry_mode,
                 jaw=config.jaw,
                 occlusal_axis=occlusal_axis,
             )
@@ -181,16 +158,6 @@ def analyze_case(config: CaseConfig) -> CaseAnalysis:
         )
         if template_frame is None:
             template_frame = sleeve_generation.template_frame
-        pair = tuple(
-            _orient_sleeve_into_guide(guide, template_frame) for guide in pair
-        )
-        if occlusal_axis is not None and any(
-            guide.axis.dot(occlusal_axis) >= 0.0 for guide in pair
-        ):
-            raise GeometryError(
-                "导管轴没有指向病例牙合轴的反方向；请检查 case.yaml "
-                "anatomy.orientation.occlusal_axis"
-            )
         all_guides.extend(pair)
         operation_features.append(_measure_operation_feature(components, pair))
     if template_frame is None:

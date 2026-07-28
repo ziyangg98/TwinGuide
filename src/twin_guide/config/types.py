@@ -27,13 +27,6 @@ class Jaw(StrEnum):
         return -1.0 if self is Jaw.UPPER else 1.0
 
 
-class SleeveGeometryMode(StrEnum):
-    """最终导管实体的来源策略。"""
-
-    GENERATED = "generated"
-    INPUT = "input"
-
-
 @dataclass(frozen=True, slots=True)
 class InputMeshPaths:
     """病例的牙科导板、导管装配体和患者牙列网格路径。"""
@@ -384,7 +377,6 @@ __all__ = [
     "PressBeamParameters",
     "PressBeamSleeveAnchorSelectionParameters",
     "RenderParameters",
-    "SleeveGeometryMode",
     "SleeveParameters",
     "TerminalDistalCommonNodeParameters",
     "ToothAnchorStation",

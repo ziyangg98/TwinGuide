@@ -22,7 +22,6 @@ from twin_guide.blender.mesh_queries import (
     nearest_mesh_surface_side,
     point_inside_mesh,
     remove_excess_components,
-    remove_subvoxel_components,
     topology_edge_counts,
 )
 from twin_guide.blender.scene import clear_scene, set_active_object
@@ -33,7 +32,11 @@ from twin_guide.blender.sleeve_reconstruction import (
 )
 from twin_guide.errors import GeometryError
 from twin_guide.geometry import Vec3
-from twin_guide.guide_validation import _point_is_retained
+from twin_guide.guide_validation import (
+    _point_is_outside_dental_trim,
+    _point_is_outside_guide_bores,
+    _point_is_retained,
+)
 from twin_guide.models import GuideSleeve, TemplateFrame
 from twin_guide.sleeve_anchors import SleeveAnchorSelectionConfig, select_sleeve_anchors
 from twin_guide.sleeve_estimation.types import SleeveEstimate
@@ -133,7 +136,7 @@ class BlenderBackendTests(unittest.TestCase):
         sleeves = tuple(
             GuideSleeve(
                 index,
-                create_closed_sleeve_object(estimate, f"input_sleeve_{index}"),
+                create_closed_sleeve_object(estimate, f"generated_sleeve_{index}"),
                 estimate,
                 0.0,
                 estimate.height,
@@ -181,6 +184,84 @@ class BlenderBackendTests(unittest.TestCase):
         self.assertTrue(_point_is_retained(model_bvh, Vec3(2.2, 0.0, 0.0), 0.4))
         self.assertFalse(_point_is_retained(model_bvh, Vec3(3.0, 0.0, 0.0), 0.4))
 
+    def test_connector_validation_excludes_every_associated_guide_bore(self):
+        parameters = SleeveEstimate(
+            axis_origin=Vec3(0.0, 0.0, 0.0),
+            axis=Vec3(0.0, 0.0, 1.0),
+            c_opening_direction=Vec3(1.0, 0.0, 0.0),
+            height=8.0,
+            platform_height=2.8,
+            closed_bore_height=1.4,
+            platform_width=0.8,
+            inner_radius=1.2,
+            outer_radius=2.0,
+            inner_arc_angle=1.5 * math.pi,
+            outer_arc_angle=4.0,
+        )
+        guides = tuple(
+            GuideSleeve(
+                index,
+                None,
+                SleeveEstimate(
+                    axis_origin=Vec3(x, 0.0, 0.0),
+                    axis=parameters.axis,
+                    c_opening_direction=parameters.c_opening_direction,
+                    height=parameters.height,
+                    platform_height=parameters.platform_height,
+                    closed_bore_height=parameters.closed_bore_height,
+                    platform_width=parameters.platform_width,
+                    inner_radius=parameters.inner_radius,
+                    outer_radius=parameters.outer_radius,
+                    inner_arc_angle=parameters.inner_arc_angle,
+                    outer_arc_angle=parameters.outer_arc_angle,
+                ),
+                0.0,
+                parameters.height,
+            )
+            for index, x in enumerate((-5.0, 5.0), 1)
+        )
+
+        self.assertFalse(
+            _point_is_outside_guide_bores(Vec3(-5.0, 0.0, 4.0), guides)
+        )
+        self.assertFalse(
+            _point_is_outside_guide_bores(Vec3(5.0, 0.0, 4.0), guides)
+        )
+        self.assertTrue(
+            _point_is_outside_guide_bores(Vec3(0.0, 0.0, 4.0), guides)
+        )
+
+    def test_connector_validation_excludes_planned_dental_trim(self):
+        dentition = create_axis_cylinder(
+            "dentition",
+            Vec3(0.0, 0.0, -2.0),
+            Vec3(0.0, 0.0, 2.0),
+            1.0,
+        )
+        dentition_bvh = build_bvh(dentition)
+
+        self.assertFalse(
+            _point_is_outside_dental_trim(
+                dentition_bvh,
+                Vec3(0.0, 0.0, 0.0),
+                0.2,
+            )
+        )
+        self.assertFalse(
+            _point_is_outside_dental_trim(
+                dentition_bvh,
+                Vec3(1.1, 0.0, 0.0),
+                0.2,
+            )
+        )
+        self.assertTrue(
+            _point_is_outside_dental_trim(
+                dentition_bvh,
+                Vec3(1.3, 0.0, 0.0),
+                0.2,
+            )
+        )
+
     def test_voxel_union_preserves_input_objects(self):
         first_cylinder_mesh = create_axis_cylinder(
             "first", Vec3(0.0, 0.0, -1.0), Vec3(0.0, 0.0, 1.0), 1.0
@@ -219,24 +300,6 @@ class BlenderBackendTests(unittest.TestCase):
         remove_excess_components(main_mesh, 1)
 
         self.assertEqual(len(mesh_component_vertex_counts(main_mesh)), 1)
-
-    def test_microscopic_component_cleanup_removes_single_voxel_artifact(self):
-        """单体素碎片应删除，具有实际体积的独立实体应保留。"""
-
-        bpy.ops.mesh.primitive_cube_add(size=2.0, location=(0.0, 0.0, 0.0))
-        main_mesh = bpy.context.object
-        bpy.ops.mesh.primitive_cube_add(size=0.2, location=(3.0, 0.0, 0.0))
-        artifact_mesh = bpy.context.object
-        bpy.ops.mesh.primitive_cube_add(size=0.6, location=(5.0, 0.0, 0.0))
-        retained_mesh = bpy.context.object
-        set_active_object(main_mesh)
-        artifact_mesh.select_set(True)
-        retained_mesh.select_set(True)
-        bpy.ops.object.join()
-
-        self.assertEqual(len(mesh_component_vertex_counts(main_mesh)), 3)
-        remove_subvoxel_components(main_mesh, voxel_size_mm=0.2)
-        self.assertEqual(len(mesh_component_vertex_counts(main_mesh)), 2)
 
     def test_boolean_preserves_cutter(self):
         target_mesh = create_axis_cylinder("target", Vec3(0.0, 0.0, -2.0), Vec3(0.0, 0.0, 2.0), 2.0)

@@ -65,10 +65,8 @@ runtime:
 当前只有一套生产算法：FDI 轴扫观察窗和连续连接梁。因此配置中不存在算法 profile
 或旧策略开关；未知的 `design.algorithms` 会被拒绝。
 
-`design.sleeve_geometry.mode` 可选：
-
-- `input`：保留识别出的真实输入导管；
-- `generated`：使用识别位姿和 `runtime.sleeve` 尺寸重建标准导管。
+导管只有一条生产路径：输入装配体用于识别位姿和操作结构，最终导管统一使用
+`runtime.sleeve` 的八个尺寸参数重建。`design.sleeve_geometry` 已不是合法配置字段。
 
 `design.guide_anchors.anchors` 为每个导板端锚点显式声明 `endpoint`、牙位
 `station`、`side` 和 `ray_angle_degrees`。按压梁、末端 U 型延伸、跨组件桥接和

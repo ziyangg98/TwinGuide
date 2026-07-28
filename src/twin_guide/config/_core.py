@@ -46,7 +46,6 @@ from twin_guide.config.types import (
     PressBeamParameters,
     PressBeamSleeveAnchorSelectionParameters,
     RenderParameters,
-    SleeveGeometryMode,
     SleeveParameters,
     TerminalDistalCommonNodeParameters,
     ToothAnchorStation,
@@ -65,7 +64,6 @@ class CaseConfig:
     jaw: Jaw
     inputs: InputMeshPaths
     sleeve: SleeveParameters
-    sleeve_geometry_mode: SleeveGeometryMode
     geometry: GeometryParameters
     windows: WindowParameters
     tooth_identification: ToothIdentificationInputs | None
@@ -122,7 +120,6 @@ class CaseConfig:
         _reject_unknown(
             yaml_design,
             {
-                "sleeve_geometry",
                 "observation_windows",
                 "guide_anchors",
                 "press_beam",
@@ -167,9 +164,6 @@ class CaseConfig:
             jaw=_case_yaml_jaw(_required(anatomy, "jaw")),
             inputs=_parse_case_objects(_section(root, "objects"), base_directory),
             sleeve=_parse_sleeve(_section(runtime, "sleeve")),
-            sleeve_geometry_mode=_parse_sleeve_geometry_mode(
-                yaml_design.get("sleeve_geometry")
-            ),
             geometry=geometry,
             windows=_parse_windows(
                 window_raw,
@@ -640,22 +634,6 @@ def _parse_handpiece_avoidances(
     if len(set(identifiers)) != len(identifiers):
         raise ConfigurationError("handpiece_avoidance.id 不得重复")
     return items
-
-
-def _parse_sleeve_geometry_mode(raw_value: object) -> SleeveGeometryMode:
-    """解析 YAML 中显式声明的导管实体来源。"""
-
-    if raw_value is None:
-        raise ConfigurationError("case.yaml 必须配置 design.sleeve_geometry")
-    raw = _mapping(raw_value, "case.yaml design.sleeve_geometry")
-    _reject_unknown(raw, {"mode"}, "case.yaml design.sleeve_geometry")
-    mode_value = str(_required(raw, "mode"))
-    try:
-        return SleeveGeometryMode(mode_value)
-    except ValueError as error:
-        raise ConfigurationError(
-            "case.yaml design.sleeve_geometry.mode 必须为 generated 或 input"
-        ) from error
 
 
 def _merge_operation_window_parameters(

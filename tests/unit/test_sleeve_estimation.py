@@ -243,7 +243,7 @@ class SleeveEstimationTests(unittest.TestCase):
             all(polyline.closed for section in sections for polyline in section.polylines)
         )
 
-    def test_orientation_is_recovered_from_upside_down_input(self):
+    def test_axis_line_is_recovered_from_upside_down_input(self):
         truth = SleeveEstimate(
             axis_origin=Vec3(0.0, 0.0, 0.0),
             axis=Vec3(0.0, 0.0, 1.0),
@@ -265,7 +265,7 @@ class SleeveEstimationTests(unittest.TestCase):
 
         estimate = estimate_sleeve_axis(upside_down)
 
-        self.assertGreater(estimate.axis.dot(Vec3(0.0, 0.0, -1.0)), 0.99)
+        self.assertGreater(abs(estimate.axis.dot(Vec3(0.0, 0.0, -1.0))), 0.99)
 
     def test_c_openings_face_each_other(self):
         first_axis = Vec3(0.0, 0.0, 1.0)

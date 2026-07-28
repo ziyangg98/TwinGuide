@@ -209,8 +209,8 @@ class CaseDataLayoutTests(unittest.TestCase):
                         self.assertIn("station", record)
                         self.assertGreater(record["ray_angle_degrees"], 0.0)
 
-    def test_all_cases_explicitly_select_input_sleeve_geometry(self) -> None:
-        """当前正式病例直接保留输入导管，模式选择必须显式可审计。"""
+    def test_all_cases_use_the_single_reconstructed_sleeve_path(self) -> None:
+        """正式病例不再配置导管实体来源分支。"""
 
         datasets = (
             (self.dataset, self.case_names),
@@ -221,10 +221,7 @@ class CaseDataLayoutTests(unittest.TestCase):
                 with self.subTest(case=case_name):
                     case_yaml = dataset / case_name / "case.yaml"
                     content = yaml.safe_load(case_yaml.read_text(encoding="utf-8"))
-                    self.assertEqual(
-                        content["design"]["sleeve_geometry"],
-                        {"mode": "input"},
-                    )
+                    self.assertNotIn("sleeve_geometry", content["design"])
 
     def test_single_case_yaml_is_complete_and_loadable(self) -> None:
         """每个单颗病例只用自身 YAML 提供完整运行配置。"""
