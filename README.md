@@ -80,7 +80,7 @@ TwinGuide 是基于 Blender 的双导管牙科导板建模工具。程序从牙�
 状态。所有输入路径相对于该 YAML 所在目录解析。程序生成结果默认写入代码仓库的
 `output/<case_id>/`，不会覆盖病例目录中的参考输出。
 
-[配置模板](examples/case.example.yaml)展示完整结构，字段和约束见
+[配置模板](https://github.com/ziyangg98/TwinGuide/blob/main/examples/case.example.yaml)展示完整结构，字段和约束见
 [病例配置](docs/guide/configuration.md)。
 
 ## 安装与运行
@@ -118,6 +118,8 @@ brew install --cask blender
 
 生成命令默认拒绝标记为 `pending`、`pending_user_input` 或 `unreviewed` 的病例。
 `--allow-unreviewed` 可在诊断运行中跳过本次审核检查。
+
+<!-- sphinx-homepage-end -->
 
 七阶段职责见[生成过程](docs/process/index.md)，建模细节见
 [技术建模流程](docs/guide/technical-modeling-workflow.md)，独立检查项见

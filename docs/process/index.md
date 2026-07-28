@@ -55,6 +55,6 @@ stage-3-cutouts
 stage-4-link-points
 stage-5-press-beam
 stage-6-linking
-special-topologies
 stage-7-clearance
+special-topologies
 ```
