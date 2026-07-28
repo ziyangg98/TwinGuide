@@ -29,7 +29,7 @@ def _synthetic_sleeve(
     arc_angle=1.5 * math.pi,
     segments=48,
 ):
-    """创建独立的开孔单侧平台导套测试网格。"""
+    """创建独立的开孔单侧平台导管测试网格。"""
 
     cut_coordinate = inner_radius * math.cos(math.pi - 0.5 * arc_angle)
     outer_arc_angle = 2.0 * math.pi - 2.0 * math.acos(cut_coordinate / outer_radius)

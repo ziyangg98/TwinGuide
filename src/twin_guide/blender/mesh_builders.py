@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import warnings
 from math import cos, pi, sin
 
@@ -231,7 +232,7 @@ def create_root_tapered_centerline_tube(
     if root_radius_mm < beam_radius_mm:
         raise GeometryError("根部半径不得小于按压梁半径")
     cumulative = [0.0]
-    for previous, point in zip(centerline[:-1], centerline[1:], strict=True):
+    for previous, point in itertools.pairwise(centerline):
         cumulative.append(cumulative[-1] + previous.distance_to(point))
     effective = min(transition_length_mm, 0.45 * cumulative[-1])
     if effective <= 1e-8:
@@ -267,7 +268,7 @@ def create_dual_root_tapered_centerline_tube(
     if root_radius_mm < beam_radius_mm:
         raise GeometryError("根部半径不得小于连接梁半径")
     cumulative = [0.0]
-    for previous, point in zip(centerline[:-1], centerline[1:], strict=True):
+    for previous, point in itertools.pairwise(centerline):
         cumulative.append(cumulative[-1] + previous.distance_to(point))
     total_length = cumulative[-1]
     effective = min(transition_length_mm, 0.45 * total_length)

@@ -19,7 +19,7 @@ from twin_guide.press_beam_points import (
 )
 from twin_guide.sleeve_estimation.types import SleeveEstimate
 from twin_guide.tooth_identification import ToothPosition
-from twin_guide.tooth_section_anchors import (
+from twin_guide.tooth_section_anchors._core import (
     _arch_outward_coordinate,
     _bridge_short_visibility_gaps,
     _common_positive_sleeve_axis,

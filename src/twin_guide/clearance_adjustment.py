@@ -6,10 +6,15 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from twin_guide.config import HandpieceAvoidanceParameters
 from twin_guide.errors import GeometryError
 from twin_guide.types import GenerationContext
+
+if TYPE_CHECKING:
+    import numpy as np
+    import trimesh
 
 ALGORITHM_VERSION = "current-depth-signed-lr-sweep-v1"
 FRAGMENT_VOLUME_TOLERANCE_MM3 = 1.0e-4
@@ -40,7 +45,7 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _unit(vector):
+def _unit(vector: np.ndarray) -> np.ndarray:
     """返回三维向量的单位方向。"""
 
     import numpy as np
@@ -56,7 +61,7 @@ def _load_mesh(
     *,
     require_volume: bool = True,
     process: bool = False,
-):
+) -> trimesh.Trimesh:
     """读取单个或场景网格，并按需要求其为封闭体。"""
 
     import trimesh
@@ -71,7 +76,10 @@ def _load_mesh(
     return loaded
 
 
-def _boolean_union(meshes: list, batch_size: int):
+def _boolean_union(
+    meshes: list[trimesh.Trimesh],
+    batch_size: int,
+) -> trimesh.Trimesh:
     """用 manifold3d 分批精确合并一组封闭网格。"""
 
     import trimesh
@@ -96,7 +104,9 @@ def _boolean_union(meshes: list, batch_size: int):
     return current[0]
 
 
-def _stop_geometry(stop_report: Path):
+def _stop_geometry(
+    stop_report: Path,
+) -> tuple[np.ndarray, np.ndarray, tuple[str, str], np.ndarray]:
     """从止挡报告提取单位轴、枢轴、匹配编号和中心坐标。"""
 
     import numpy as np

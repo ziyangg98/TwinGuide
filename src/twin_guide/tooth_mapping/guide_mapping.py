@@ -5,17 +5,15 @@ from __future__ import annotations
 import json
 from argparse import Namespace
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from .map_contact_chord_teeth_to_guide import run as _map_to_guide
-
 from .tooth_recognition import (
     ToothRecognitionResult,
     load_tooth_recognition_result,
 )
-
 
 LOCKED_GUIDE_MAPPING_PARAMETERS = {
     "maximum_crown_height_fallback_mm": 1.5,
@@ -145,7 +143,7 @@ def map_recognized_teeth_to_guide(
         case_yaml=case_yaml,
         output_dir=output_dir,
         profile=request.profile,
-        created_at=datetime.now(timezone.utc).isoformat(),
+        created_at=datetime.now(UTC).isoformat(),
         recognition_manifest_path=recognition.manifest_path,
         mapping_report=mapping_report,
         manifest_path=manifest_path,
@@ -158,8 +156,8 @@ def map_recognized_teeth_to_guide(
 
 
 __all__ = [
-    "GuideMappingError",
     "LOCKED_GUIDE_MAPPING_PARAMETERS",
+    "GuideMappingError",
     "GuideMappingProfile",
     "GuideMappingRequest",
     "GuideMappingResult",

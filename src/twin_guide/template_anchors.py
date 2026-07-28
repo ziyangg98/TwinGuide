@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from twin_guide.config import GuideAnchorMode
 from twin_guide.clearance import channel_distance, window_distance
+from twin_guide.config import GuideAnchorMode
 from twin_guide.geometry import Vec3
 from twin_guide.models import CaseAnalysis, CutoutPlan, GuideSleeve, SurfaceSample
 from twin_guide.sleeve_anchors import SleeveAnchorPlan, SleeveAnchorSelection
@@ -26,12 +26,12 @@ class TemplatePointSelectionConfig:
 
     属性:
         template_clearance_mm: 候选点到窗口和通道的最小净距，单位毫米。
-        connector_radius_mm: 连接管半径，单位毫米，用于计算左右点最小跨度。
+        connector_radius_mm: 连接梁半径，单位毫米，用于计算左右点最小跨度。
         surface_sample_limit: 按中点距离保留的牙科导板表面样本上限。
         candidate_limit: 每一侧进入成对评分的候选点上限。
 
     算法说明:
-        左右点最小跨度取导套外半径与连接管直径的 1.25 倍中的较大值，
+        左右点最小跨度取导管外半径与连接管直径的 1.25 倍中的较大值，
         即 ``max(body_radius_mm, 2.5 * connector_radius_mm)``。
     """
 
@@ -49,20 +49,20 @@ class TemplatePointSelectionConfig:
             raise ValueError("牙科导板表面样本上限和单侧候选上限必须为正")
 
     def minimum_span_mm(self, body_radius_mm: float) -> float:
-        """计算一个导套对应的牙科导板左右点最小跨度。
+        """计算一个导管对应的牙科导板左右点最小跨度。
 
         参数:
-            body_radius_mm: 导套主体外半径，单位毫米。
+            body_radius_mm: 导管主体外半径，单位毫米。
 
         返回:
-            导套外半径与 ``2.5`` 倍连接管半径中的较大值。
+            导管外半径与 ``2.5`` 倍连接管半径中的较大值。
 
         异常:
-            ValueError: 导套主体外半径不是正数。
+            ValueError: 导管主体外半径不是正数。
         """
 
         if body_radius_mm <= 0.0:
-            raise ValueError("导套主体外半径必须为正")
+            raise ValueError("导管主体外半径必须为正")
         return max(body_radius_mm, 2.5 * self.connector_radius_mm)
 
 
@@ -83,11 +83,11 @@ class TemplateAnchorPoint:
 
 @dataclass(frozen=True, slots=True)
 class TemplatePointSelection:
-    """一个导套对应的牙科导板左右点及诊断。
+    """一个导管对应的牙科导板左右点及诊断。
 
     属性:
-        guide_index: 导套编号。
-        sleeve_midpoint: 导套上下锚点中点。
+        guide_index: 导管编号。
+        sleeve_midpoint: 导管上下锚点中点。
         lateral_direction: 区分左右侧的单位向量。
         left: 牙科导板左侧锚点；不可行时为 ``None``。
         right: 牙科导板右侧锚点；不可行时为 ``None``。
@@ -119,12 +119,12 @@ class TemplatePointSelection:
 
 @dataclass(frozen=True, slots=True)
 class TemplatePointPlan:
-    """所有导套的牙科导板侧选点计划。"""
+    """所有导管的牙科导板侧选点计划。"""
 
     selections: tuple[TemplatePointSelection, ...]
     trajectories: tuple[tuple[Vec3, ...], ...] = ()
     terminal_distal_common_node: TerminalDistalCommonNodePlan | None = None
-    multi_site_paths: tuple["MultiSiteTemplatePath", ...] = ()
+    multi_site_paths: tuple[MultiSiteTemplatePath, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,8 +145,8 @@ class MultiSiteTemplatePath:
 
 
 def _independent_anchor_endpoints(
-    selections: tuple["IndependentGuideAnchorSelection", ...],
-) -> tuple[dict[str, "IndependentGuideAnchorSelection"], ...]:
+    selections: tuple[IndependentGuideAnchorSelection, ...],
+) -> tuple[dict[str, IndependentGuideAnchorSelection], ...]:
     """按配置首次出现顺序把独立锚点归入端部及 U/背 U 侧。"""
 
     grouped: dict[str, dict[str, IndependentGuideAnchorSelection]] = {}
@@ -241,8 +241,8 @@ def _sleeve_side_direction(guide: GuideSleeve, sleeve: SleeveAnchorSelection) ->
     """计算牙科导板点的左右分组方向。
 
     参数:
-        guide: 待处理导套。
-        sleeve: 该导套的上下锚点选择。
+        guide: 待处理导管。
+        sleeve: 该导管的上下锚点选择。
 
     返回:
         轴向与 C 口反向的叉积单位向量。
@@ -258,11 +258,11 @@ def _select_template_pair(
     samples: tuple[SurfaceSample, ...],
     config: TemplatePointSelectionConfig,
 ) -> TemplatePointSelection:
-    """为一个导套选择牙科导板左右点。
+    """为一个导管选择牙科导板左右点。
 
     参数:
-        guide: 待联建导套。
-        sleeve: 导套侧锚点。
+        guide: 待联建导管。
+        sleeve: 导管侧锚点。
         samples: 已通过净距筛选的牙科导板样本。
         config: 搜索数量和最小跨度配置。
 
@@ -343,21 +343,21 @@ def select_template_points(
 
     参数:
         case: 包含牙科导板表面样本的病例分析。
-        sleeves: 第 1 步导套结果。
+        sleeves: 第 1 步导管结果。
         cutouts: 第 3 步通道与窗口计划。
-        sleeve_anchors: 已确定的导套侧上下锚点。
+        sleeve_anchors: 已确定的导管侧上下锚点。
         config: 牙科导板点净距、跨度和候选数量配置。
         tooth_identification: 牙位截面轨迹模式所需的牙位与导板映射。
 
     返回:
-        按导套顺序排列的牙科导板左右点计划。
+        按导管顺序排列的牙科导板左右点计划。
 
     算法说明:
         算法按以下顺序执行：
 
         1. 剔除到任一窗口或通道的有符号距离小于
            ``template_clearance_mm`` 的牙科导板样本。
-        2. 用导套上下锚点均值定义搜索中心，按到中心的距离排序，
+        2. 用导管上下锚点均值定义搜索中心，按到中心的距离排序，
            面索引作为确定性次序。
         3. 使用 ``guide.axis.cross(radial_direction)`` 定义左右方向，
            按点乘符号将候选点分到两侧。

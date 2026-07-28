@@ -1,4 +1,4 @@
-"""根据病例配置生成导套—导板联建结构 STL。"""
+"""根据病例配置生成导管—导板联建结构 STL。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from twin_guide.models import BuildArtifacts
 
 
 def generate_guide(config: CaseConfig) -> BuildArtifacts:
-    """生成包含双导套、窗口和连续曲线梁架的牙科导板。
+    """生成包含双导管、窗口和连续曲线梁架的牙科导板。
 
     参数:
         config: 已通过校验的病例配置。

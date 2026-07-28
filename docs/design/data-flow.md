@@ -4,9 +4,9 @@
 
 `CaseConfig` 是文件路径和数值参数的唯一配置入口。
 `analyze_case()` 读取网格，建立 `CaseAnalysis`，供各几何步骤共用。
-导柱的八个几何参数由 `SleeveParameters` 提供，连接柱直径由
+导管的八个几何参数由 `SleeveParameters` 提供，连接柱直径由
 `GeometryParameters` 提供。
-`SleeveEstimate.c_opening_direction` 保存世界坐标单位向量。它是两导柱中心连线
+`SleeveEstimate.c_opening_direction` 保存世界坐标单位向量。它是两导管中心连线
 在各自轴线法平面上的投影，因此两个 C 口相对。
 
 ## 步骤结果

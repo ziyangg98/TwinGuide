@@ -6,7 +6,6 @@ import ast
 import unittest
 from pathlib import Path
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_ROOT = PROJECT_ROOT / "src" / "twin_guide"
 FORBIDDEN_BUSINESS_PACKAGES = {"scripts", "tooth_guide_mapping"}
@@ -39,13 +38,24 @@ class InternalDependencyTests(unittest.TestCase):
     def test_blender_environment_does_not_inherit_external_pythonpath(self) -> None:
         """启动脚本只声明项目内部 Python 搜索路径。"""
 
-        content = (PROJECT_ROOT / "blender-env.sh").read_text(encoding="utf-8")
+        content = (PROJECT_ROOT / "scripts/blender.sh").read_text(encoding="utf-8")
         pythonpath_line = next(
             line for line in content.splitlines() if line.startswith("export PYTHONPATH=")
         )
         self.assertNotIn("workspace_directory", content)
         self.assertNotIn("${PYTHONPATH", pythonpath_line)
         self.assertIn("$project_directory/src", pythonpath_line)
+        self.assertNotIn("--gpu-backend", content)
+
+    def test_user_entry_requires_confirmed_blender_completion(self) -> None:
+        """用户入口不得把 Blender 启动崩溃误报为成功。"""
+
+        content = (PROJECT_ROOT / "twinguide").read_text(encoding="utf-8")
+
+        self.assertIn("--factory-startup", content)
+        self.assertNotIn("--gpu-backend", content)
+        self.assertIn("TWIN_GUIDE_SUCCESS_MARKER", content)
+        self.assertIn('if [ ! -f "$success_marker" ]', content)
 
 
 if __name__ == "__main__":

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import itertools
 from collections import Counter
-from typing import Iterable
+from collections.abc import Iterable
+from dataclasses import dataclass
 
 
 class FDIError(ValueError):
@@ -235,9 +236,7 @@ def configured_missing_gap_pair_indices(
     position = {label: index for index, label in enumerate(semantics.fdi_order)}
     return {
         pair_index
-        for pair_index, (first, second) in enumerate(zip(
-            present_order, present_order[1:]
-        ))
+        for pair_index, (first, second) in enumerate(itertools.pairwise(present_order))
         if position[second] - position[first] > 1
     }
 

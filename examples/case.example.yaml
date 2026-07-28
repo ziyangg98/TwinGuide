@@ -1,0 +1,55 @@
+schema_version: "1.0"
+
+case:
+  id: example_case
+  display_name: Synthetic TwinGuide example
+  cohort: example
+
+objects:
+  dental: {path: input/patient-dentition.stl}
+  guide: {path: input/dental-guide.stl}
+  sleeve:
+    files:
+      - {id: sleeve_01, path: input/sleeve-assembly.stl}
+    active_ids: [sleeve_01]
+
+runtime:
+  sleeve:
+    inner_diameter_mm: 2.10
+    outer_diameter_mm: 4.30
+    height_mm: 16.373
+    platform_width_mm: 2.036
+    platform_height_mm: 9.875
+    closed_bore_height_mm: 4.777
+    inner_arc_angle_degrees: 264.934
+    outer_arc_angle_degrees: 211.684
+  geometry:
+    channel_axial_margin_mm: 5.0
+    connector_diameter_mm: 4.6
+    fusion_voxel_size_mm: 0.2
+  windows:
+    operation_tangent_margin_mm: 1.0
+    operation_bitangent_margin_mm: 3.0
+    observation_axis_drop_mm: 0.2
+    observation_sweep_angle_degrees: 90.0
+    observation_local_failure_drop_targets_mm: [0.5, 1.0, 2.0]
+    observation_local_failure_transition_rows: 1
+  render: {width_px: 1600, height_px: 1200}
+
+anatomy:
+  jaw: maxillary
+  present_teeth: [17, 16, 15, 14, 13, 12, 11, 21, 22, 23, 24, 25, 26, 27]
+  missing_teeth: []
+  excluded_teeth: [18, 28]
+  review_status: unreviewed
+
+design:
+  sleeve_geometry: {mode: input}
+  observation_windows: []
+  guide_anchors: {mode: nearest}
+  press_beam: {mode: disabled}
+
+planning: {}
+
+review:
+  object_mapping_status: unreviewed

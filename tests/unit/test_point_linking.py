@@ -1,6 +1,5 @@
 import unittest
 
-from twin_guide.config import ConnectorMode
 from twin_guide.geometry import Vec3
 from twin_guide.models import GuideSleeve, TemplateFrame
 from twin_guide.point_linking import PointLinkingConfig, link_selected_points
@@ -12,7 +11,6 @@ from twin_guide.press_beam_points import (
 )
 from twin_guide.sleeve_anchors import SleeveAnchorSelectionConfig, select_sleeve_anchors
 from twin_guide.sleeve_estimation.types import SleeveEstimate
-from twin_guide.strategies.connectors import build_point_linking_plan
 from twin_guide.template_anchors import (
     MultiSiteTemplatePath,
     TemplateAnchorPoint,
@@ -113,64 +111,6 @@ class PointLinkingTests(unittest.TestCase):
             self.assertEqual(len(guide_links), 2)
             self.assertEqual(guide_links[0].start, guide_links[1].start)
             self.assertEqual(guide_links[0].end, guide_links[1].end)
-
-    def test_builds_four_independent_bezier_links_per_sleeve(self):
-        """legacy_merge 应为每个导管生成上下乘左右共四根独立管。"""
-        from types import SimpleNamespace
-
-        sleeves = (_sleeve(1, -5.0), _sleeve(2, 5.0))
-        frame = TemplateFrame(
-            Vec3(0.0, 0.0, 0.0),
-            Vec3(1.0, 0.0, 0.0),
-            Vec3(0.0, 1.0, 0.0),
-            Vec3(0.0, 0.0, 1.0),
-        )
-        sleeve_plan = select_sleeve_anchors(
-            SimpleNamespace(guide_sleeves=sleeves),
-            SleeveGenerationResult(sleeves, frame),
-            SleeveAnchorSelectionConfig(connector_radius_mm=1.2),
-        )
-        template_selections = tuple(
-            TemplatePointSelection(
-                sleeve.guide_index,
-                Vec3(sleeve.center.x, 0.0, 8.0),
-                Vec3(0.0, 1.0, 0.0),
-                TemplateAnchorPoint(
-                    Vec3(sleeve.center.x, -4.0, 0.0), Vec3(0, 0, 1), 1
-                ),
-                TemplateAnchorPoint(
-                    Vec3(sleeve.center.x, 4.0, 0.0), Vec3(0, 0, 1), 2
-                ),
-                3.0,
-            )
-            for sleeve in sleeves
-        )
-        points = TemplateLinkPointPlan(
-            sleeve_plan,
-            TemplatePointPlan(template_selections),
-        )
-
-        plan = build_point_linking_plan(
-            ConnectorMode.INDEPENDENT_BEZIER,
-            points,
-            PointLinkingConfig(radius_mm=1.2),
-        )
-
-        self.assertEqual(len(plan.links), 8)
-        self.assertEqual(plan.connection_type, "independent_bezier")
-        self.assertEqual(plan.curve_resolution, 24)
-        self.assertIsNone(plan.connector_guide_endpoint)
-        self.assertFalse(plan.trim_against_dentition)
-        self.assertEqual(
-            {link.link_label for link in plan.links},
-            {"lower_left", "lower_right", "upper_left", "upper_right"},
-        )
-        for link in plan.links:
-            self.assertIs(link.left_source, ConnectorEndpointSource.SLEEVE)
-            self.assertIs(link.right_source, ConnectorEndpointSource.TEMPLATE)
-            self.assertEqual(link.centerline[0], link.start)
-            self.assertEqual(link.centerline[-1], link.end)
-            self.assertEqual(link.contact_index, 0)
 
     def test_terminal_missing_tooth_links_share_one_distal_node(self):
         """末端缺牙模式应使两导管的上下四梁共享远中节点。"""

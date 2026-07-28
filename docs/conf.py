@@ -6,6 +6,8 @@ import shutil
 import sys
 from pathlib import Path
 
+from sphinx.application import Sphinx
+
 SOURCE_ROOT = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SOURCE_ROOT))
 
@@ -27,6 +29,12 @@ autodoc_mock_imports = [
     "bmesh",
     "mathutils",
     "mathutils.bvhtree",
+    "manifold3d",
+    "matplotlib",
+    "numpy",
+    "scipy",
+    "sklearn",
+    "trimesh",
 ]
 autodoc_default_options = {
     "members": True,
@@ -61,7 +69,7 @@ html_theme_options = {
 }
 
 
-def _copy_readme_images(app, exception) -> None:
+def _copy_readme_images(app: Sphinx, exception: Exception | None) -> None:
     """复制 README 引用的图片。"""
     if exception is not None:
         return
@@ -70,6 +78,6 @@ def _copy_readme_images(app, exception) -> None:
     shutil.copytree(source, target, dirs_exist_ok=True)
 
 
-def setup(app) -> None:
+def setup(app: Sphinx) -> None:
     """注册文档构建钩子。"""
     app.connect("build-finished", _copy_readme_images)

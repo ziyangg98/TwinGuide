@@ -81,7 +81,7 @@ def _measure_operation_feature(
     components: tuple[bpy.types.Object, ...],
     guide_sleeves: tuple[GuideSleeve, GuideSleeve],
 ) -> OperationFeature:
-    """测量两个导套附近用于操作窗定位的紧凑圆形分量。"""
+    """测量两个导管附近用于操作窗定位的紧凑圆形分量。"""
 
     guide_meshes = {guide.guide_mesh for guide in guide_sleeves}
     guide_centers = tuple(

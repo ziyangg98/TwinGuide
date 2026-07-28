@@ -1,4 +1,4 @@
-"""纯 Python 导柱位姿估计与重建检查。"""
+"""纯 Python 导管位姿估计与重建检查。"""
 
 from .fitting import CircleFit, LineFit, fit_axis, fit_circle
 from .mesh_integrity import MeshIntegrityReport, inspect_triangle_mesh

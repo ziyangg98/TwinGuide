@@ -1,55 +1,20 @@
-# 3. 导孔与窗口规划
+# 第 3 步：导孔与窗口规划
 
-## 功能
+**实现状态：实验。** 本阶段消费第 1 步导管结果和第 2 步牙位映射，输出
+`WindowCutoutPlan`，不直接修改 Blender 网格。
 
-根据导套位置、操作结构和第 2 步 FDI 映射，规划导孔、操作窗和观察窗。
-`fdi_axis_sweep` 使用当前轴扫掠算法；`surface_notch` 保留 TwinGuideMerge 的
-导板表面开放缺口算法。
+## 输入与输出
 
-轴扫掠观察窗缓存指纹包含当前开口算法版本；仅修改实现而输入文件不变时也会
-自动使旧缓存失效。牙位映射中的历史 `contour_following` 截面只保留为诊断，
-不会作为轴扫掠 cutter 或牙位物理覆盖的约束。
+- 输入：`CaseAnalysis`、`SleeveGenerationResult`、`ToothIdentificationResult`；
+- 输出：导孔圆柱、按种植位生成的操作窗和一个 FDI 轴扫观察窗组合体。
 
-## 输入
+## 规则
 
-- `CaseAnalysis`：牙科导板表面、局部坐标系和操作结构尺寸。
-- `SleeveGenerationResult`：导套轴线、固定孔直径和轴向范围。
-- `ToothIdentificationResult`：只读牙位映射、观察窗 FDI 端点和语义轴。
+1. 每根导管沿自身轴线生成导孔，半径来自配置内径，轴向长度包含安全余量。
+2. 每个种植位的两根导管共同确定操作窗方向；多个操作窗分别规划，实体化时做并集。
+3. 观察窗只接受第 2 步现场生成且通过 QA 的 FDI 映射，不使用固定全局方向。
+4. 观察窗沿牙弓局部方向构造轴扫组合体；局部失败只调整失败行，不整体扩大窗口。
+5. 未获得有效牙位映射时明确停止需要观察窗的正式病例，不回退到旧版表面缺口。
 
-## 输出
-
-`WindowCutoutPlan` 包含两个导孔有限圆柱、操作窗，以及本阶段生成的轴扫掠
-组合 cutter 或解析型表面缺口。
-
-## 依赖关系
-
-导孔和操作窗依赖病例分析与导套结果。
-本步的切口边界供后续联建锚点选择和功能区避让使用。
-
-## 处理逻辑
-
-1. 沿导套轴线生成带轴向余量的导孔切割体。
-2. 对非导柱分量做局部主方向分解，选取靠近两导柱中点的近圆形结构，用其自身局部平面尺寸确定操作窗。
-3. `fdi_axis_sweep` 直接使用映射报告给出的 FDI 窗口两端和语义轴；不重新识别或重排牙位。
-4. 从轴向外部反向投射至导板最外边界，构造 90° 规则扇形 cutter，并做布尔、牙面可见性和连续走廊 QA。
-5. 全局高度保持 0.2 mm。局部失败轴行按有效高度 0.5、1.0、2.0 mm 依次重试；通过即停止，否则保留最后一次结果。
-6. `surface_notch` 不依赖 FDI 窗口端点：在导板前方寻找最近牙面和导板表面，
-   从导板开放边缘向牙面止线生成宽 7.0 mm、边缘余量 2.0 mm 的矩形缺口。
-
-## 配置参数
-
-`sleeve.inner_diameter_mm` 和 `channel_axial_margin_mm` 分别控制导孔直径和轴向余量；
-病例 YAML 的 `planning.operation_windows.tangent_margin_mm` 与
-`bitangent_margin_mm` 分别控制操作窗沿切向和副切向的外扩余量，
-`axial_margin_mm` 控制操作窗切除深度，`corner_radius_mm` 控制圆角。
-副切向余量默认设为每侧 3.0 mm，因此操作窗短边默认为操作特征直径加 6.0 mm。
-`observation_axis_drop_mm`、`observation_sweep_angle_degrees`、
-`observation_local_failure_drop_targets_mm` 和
-`observation_local_failure_transition_rows` 控制统一观察窗策略。
-当前病例的导孔直径为 2.10 mm。
-在 `fdi_axis_sweep` 下，没有牙位映射时不生成观察窗；`surface_notch` 是用户
-显式选择的兼容策略，可在没有 FDI 映射时工作。
-
-## 结果示例
-
-![导孔与窗口规划](../images/cutout-planning.png)
+操作窗数值来自同一 `case.yaml` 的 `planning.operation_windows`；观察窗范围来自
+`design.observation_windows`。实体化和独立验证消费同一份计划结果。

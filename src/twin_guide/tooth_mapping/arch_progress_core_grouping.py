@@ -11,14 +11,17 @@ reproducibility of historical reports.
 
 from __future__ import annotations
 
+import itertools
+
 import numpy as np
 
 from .contact_chords import (
     CrownCoreCandidate,
     CrownSeed,
+)
+from .contact_chords import (
     select_crown_core_candidates as _select_legacy_candidates,
 )
-
 
 LEGACY_POLICY = "legacy_euclidean"
 ARCH_PROGRESS_POLICY = "arch_progress"
@@ -85,7 +88,7 @@ def group_candidates_by_arch_progress(
     grouped = list(candidates)
     while len(grouped) > target_count:
         eligible: list[tuple[float, float, int]] = []
-        for pair_index, (first, second) in enumerate(zip(grouped, grouped[1:])):
+        for pair_index, (first, second) in enumerate(itertools.pairwise(grouped)):
             planar_distance = float(np.linalg.norm(
                 np.asarray(second.center_lr_ap_mm, dtype=float)
                 - np.asarray(first.center_lr_ap_mm, dtype=float)
@@ -158,7 +161,7 @@ def core_groups_to_seeds(
                 - np.asarray(instance.center_lr_ap_mm, dtype=float)
             )),
         )
-        for instance, group in zip(ordered_instances, selected_groups)
+        for instance, group in zip(ordered_instances, selected_groups, strict=False)
     ]
 
 

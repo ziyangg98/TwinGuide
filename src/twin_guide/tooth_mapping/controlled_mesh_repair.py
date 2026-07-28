@@ -71,7 +71,7 @@ class ControlledVolumeRepairResult:
 class ControlledVolumeRepairError(RuntimeError):
     """内部算法说明。\n\nRaised when a non-volume mesh cannot be repaired within policy limits."""
 
-    def __init__(self, message: str, report: dict[str, Any]):
+    def __init__(self, message: str, report: dict[str, Any]) -> None:
         """内部算法说明。"""
         super().__init__(message)
         self.report = report
@@ -82,9 +82,9 @@ def _topology_summary(mesh: trimesh.Trimesh) -> dict[str, Any]:
     inverse = np.asarray(mesh.edges_unique_inverse, dtype=np.int64)
     counts = np.bincount(inverse, minlength=len(mesh.edges_unique))
     return {
-        "vertex_count": int(len(mesh.vertices)),
-        "face_count": int(len(mesh.faces)),
-        "unique_edge_count": int(len(mesh.edges_unique)),
+        "vertex_count": len(mesh.vertices),
+        "face_count": len(mesh.faces),
+        "unique_edge_count": len(mesh.edges_unique),
         "boundary_edge_count": int(np.count_nonzero(counts == 1)),
         "non_manifold_edge_count": int(np.count_nonzero(counts > 2)),
         "is_watertight": bool(mesh.is_watertight),
@@ -244,7 +244,7 @@ def ensure_closed_volume(
         )
         report["boundary_spur_pruning"] = {
             "face_indices": boundary_face_ids.astype(int).tolist(),
-            "face_count": int(len(boundary_face_ids)),
+            "face_count": len(boundary_face_ids),
             "maximum_edge_length_mm": maximum_spur_edge_length,
             "edge_length_limit_mm": spur_edge_limit,
         }

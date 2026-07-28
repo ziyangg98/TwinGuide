@@ -19,43 +19,27 @@ from twin_guide.blender.mesh_queries import (
     nearest_mesh_surface_side,
     point_inside_mesh,
     sample_mesh_surface,
-    topology_edge_counts,
     to_blender_vector,
     to_vec3,
+    topology_edge_counts,
 )
-from twin_guide.blender.stl_io import import_stl_mesh
 from twin_guide.blender.sleeve_reconstruction import create_closed_sleeve_object
-from twin_guide.case_analysis import analyze_case
+from twin_guide.blender.stl_io import import_stl_mesh
 from twin_guide.config import (
     CaseConfig,
-    ObservationWindowMode,
     PressBeamMode,
     SleeveGeometryMode,
 )
+from twin_guide.generation_process import run_generation_process
 from twin_guide.geometry import Vec3, point_axis_coordinates
-from twin_guide.guide_component_bridge import select_guide_component_bridge
-from twin_guide.guide_terminal_u_extension import select_guide_terminal_u_extension
 from twin_guide.models import (
     CaseAnalysis,
     CylinderCutout,
     ProfileWindowCutout,
     ValidationResult,
-    WindowPurpose,
 )
-from twin_guide.point_linking import PointLinkingConfig, PointLinkingPlan
-from twin_guide.press_beam_points import select_press_beam_points
-from twin_guide.strategies.connectors import build_point_linking_plan
-from twin_guide.template_anchors import TemplatePointSelectionConfig
-from twin_guide.template_link_points import (
-    TemplateLinkPointContext,
-    select_template_link_points,
-)
-from twin_guide.tooth_identification import (
-    identify_tooth_positions,
-)
-from twin_guide.types import GenerationContext, SleeveGenerationResult
+from twin_guide.point_linking import PointLinkingPlan
 from twin_guide.types import ConnectorEndpointSource
-from twin_guide.window_cutouts import plan_window_cutouts
 
 REFERENCE_SAMPLE_LIMIT = 3_000
 RETAINED_FRACTION_MINIMUM = 0.90
@@ -65,7 +49,7 @@ OBSERVATION_CREST_CLEARANCE_MINIMUM_MM = 0.2
 
 
 def _point_is_retained(model_bvh: BVHTree, point: Vec3, distance_tolerance_mm: float) -> bool:
-    """返回导套表面点是否仍由最终实体保留。"""
+    """返回导管表面点是否仍由最终实体保留。"""
 
     return point_inside_mesh(model_bvh, point) or (
         nearest_mesh_distance(model_bvh, point) <= distance_tolerance_mm
@@ -533,17 +517,7 @@ def _press_beam_result(
             link.start + outward_tangent * endpoint.bulb_forward_offset_mm
         )
         bulb_probe_radius = radius_mm * endpoint.bulb_radius_factor * 0.65
-        bulb_probes = (bulb_center,) + tuple(
-            bulb_center + axis * bulb_probe_radius
-            for axis in (
-                Vec3(1.0, 0.0, 0.0),
-                Vec3(-1.0, 0.0, 0.0),
-                Vec3(0.0, 1.0, 0.0),
-                Vec3(0.0, -1.0, 0.0),
-                Vec3(0.0, 0.0, 1.0),
-                Vec3(0.0, 0.0, -1.0),
-            )
-        )
+        bulb_probes = (bulb_center, *tuple(bulb_center + axis * bulb_probe_radius for axis in (Vec3(1.0, 0.0, 0.0), Vec3(-1.0, 0.0, 0.0), Vec3(0.0, 1.0, 0.0), Vec3(0.0, -1.0, 0.0), Vec3(0.0, 0.0, 1.0), Vec3(0.0, 0.0, -1.0))))
         bulb_inside = sum(
             _point_is_retained(model_bvh, point, tolerance)
             for point in bulb_probes
@@ -678,17 +652,7 @@ def _connector_endpoint_reinforcement_result(
         incident = sum(incidents, Vec3(0.0, 0.0, 0.0)).normalized()
         bulb_center = center - incident * endpoint.bulb_forward_offset_mm
         bulb_probe_radius = radius_mm * endpoint.bulb_radius_factor * 0.65
-        bulb_probes = (bulb_center,) + tuple(
-            bulb_center + axis * bulb_probe_radius
-            for axis in (
-                Vec3(1.0, 0.0, 0.0),
-                Vec3(-1.0, 0.0, 0.0),
-                Vec3(0.0, 1.0, 0.0),
-                Vec3(0.0, -1.0, 0.0),
-                Vec3(0.0, 0.0, 1.0),
-                Vec3(0.0, 0.0, -1.0),
-            )
-        )
+        bulb_probes = (bulb_center, *tuple(bulb_center + axis * bulb_probe_radius for axis in (Vec3(1.0, 0.0, 0.0), Vec3(-1.0, 0.0, 0.0), Vec3(0.0, 1.0, 0.0), Vec3(0.0, -1.0, 0.0), Vec3(0.0, 0.0, 1.0), Vec3(0.0, 0.0, -1.0))))
         bulb_fraction = sum(
             _point_is_retained(model_bvh, point, tolerance)
             for point in bulb_probes
@@ -795,54 +759,18 @@ def validate_guide(
 ) -> tuple[ValidationResult, ...]:
     """对已导出 STL 执行独立检查，不修改输入文件。"""
 
-    case = analyze_case(config)
-    sleeves = SleeveGenerationResult(case.guide_sleeves, case.template_frame)
-    tooth_identification = (
-        identify_tooth_positions(config) if config.tooth_identification is not None else None
-    )
-    cutout_plan = plan_window_cutouts(case, sleeves, tooth_identification)
-    link_points = select_template_link_points(
-        TemplateLinkPointContext(case, sleeves, cutout_plan, tooth_identification),
-        TemplatePointSelectionConfig(
-            template_clearance_mm=(
-                config.geometry.connector_radius_mm
-                + config.geometry.fusion_voxel_size_mm
-            ),
-            connector_radius_mm=config.geometry.connector_radius_mm,
-        ),
-    )
-    selection_context = GenerationContext(
-        config=config,
-        case=case,
-        sleeve_generation=sleeves,
-        tooth_identification=tooth_identification,
-        window_cutouts=cutout_plan,
-        template_link_points=link_points,
-    )
-    guide_component_bridge = None
-    if config.guide_component_bridge.enabled:
-        guide_component_bridge = select_guide_component_bridge(selection_context)
-        selection_context.guide_component_bridge = guide_component_bridge
-    guide_terminal_u_extension = None
-    if config.guide_terminal_u_extension.enabled:
-        guide_terminal_u_extension = select_guide_terminal_u_extension(
-            selection_context
-        )
-        selection_context.guide_terminal_u_extension = guide_terminal_u_extension
-    press_beam_points = None
-    if config.press_beam.mode is not PressBeamMode.DISABLED:
-        press_beam_points = select_press_beam_points(selection_context)
-    connector_plan = build_point_linking_plan(
-        config.algorithms.connector,
-        link_points,
-        PointLinkingConfig(
-            radius_mm=config.geometry.connector_radius_mm,
-            connector_guide_endpoint=config.geometry.connector_guide_endpoint,
-        ),
-        press_beam_points,
-        guide_component_bridge,
-        guide_terminal_u_extension,
-    )
+    process = run_generation_process(config)
+    context = process.context
+    if (
+        context.case is None
+        or context.window_cutouts is None
+        or context.point_linking is None
+    ):
+        raise RuntimeError("验证未获得完整的公开几何计划")
+    case = context.case
+    cutout_plan = context.window_cutouts
+    connector_plan = context.point_linking
+    tooth_identification = context.tooth_identification
     reference_sleeves = (
         tuple(guide.guide_mesh for guide in case.guide_sleeves)
         if config.sleeve_geometry_mode is SleeveGeometryMode.INPUT
@@ -857,7 +785,6 @@ def validate_guide(
     model_mesh = import_stl_mesh(model_path.resolve(), "validated_twin_guide_mesh")
     model_bvh = build_bvh(model_mesh)
     template_bvh = build_bvh(case.input_meshes.template_mesh)
-    dentition_bvh = build_bvh(case.input_meshes.patient_dentition_mesh)
     sleeve_bvhs = tuple(build_bvh(sleeve) for sleeve in reference_sleeves)
     boundary_edge_count, non_manifold_edge_count = topology_edge_counts(model_mesh)
     duplicate_face_count = duplicate_triangle_count(model_mesh)
@@ -981,30 +908,8 @@ def validate_guide(
             channel_metrics,
         )
     )
-    if (
-        config.algorithms.observation_window
-        is ObservationWindowMode.FDI_AXIS_SWEEP
-        and tooth_identification is not None
-    ):
+    if tooth_identification is not None:
         results.append(
             _observation_window_result(model_bvh, cutout_plan.profile_windows)
-        )
-    elif (
-        config.algorithms.observation_window
-        is ObservationWindowMode.SURFACE_NOTCH
-    ):
-        notch_count = sum(
-            window.purpose is WindowPurpose.OBSERVATION
-            for window in cutout_plan.windows
-        )
-        results.append(
-            ValidationResult(
-                "observation_windows",
-                notch_count > 0,
-                {
-                    "window_count": notch_count,
-                    "surface_notch_strategy": 1,
-                },
-            )
         )
     return tuple(results)

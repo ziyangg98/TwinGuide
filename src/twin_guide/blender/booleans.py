@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import bpy
+
+if TYPE_CHECKING:
+    import trimesh
 
 from twin_guide.blender.scene import duplicate_mesh_object, remove_object, set_active_object
 from twin_guide.errors import BooleanOperationError
@@ -18,7 +21,11 @@ MANIFOLD_SIMPLIFY_TOLERANCE_MM = 0.005
 MANIFOLD_CUTTER_CLEARANCE_MM = 0.020
 
 
-def _to_trimesh(mesh_object: bpy.types.Object, *, process: bool = True):
+def _to_trimesh(
+    mesh_object: bpy.types.Object,
+    *,
+    process: bool = True,
+) -> trimesh.Trimesh:
     """将 Blender 对象转换为 Trimesh，并可为 cutter 保留索引拓扑。"""
 
     import trimesh
@@ -30,7 +37,7 @@ def _to_trimesh(mesh_object: bpy.types.Object, *, process: bool = True):
     return trimesh.Trimesh(vertices=vertices, faces=faces, process=process)
 
 
-def _remove_invalid_faces(mesh) -> None:
+def _remove_invalid_faces(mesh: trimesh.Trimesh) -> None:
     """删除坐标量化后塌缩或重复的三角面。"""
 
     mesh.update_faces(mesh.unique_faces() & mesh.nondegenerate_faces())
@@ -38,9 +45,9 @@ def _remove_invalid_faces(mesh) -> None:
 
 
 def _weld_manifold_output(
-    mesh,
+    mesh: trimesh.Trimesh,
     collapse_limit_mm: float = MANIFOLD_OUTPUT_COLLAPSE_LIMIT_MM,
-):
+) -> trimesh.Trimesh:
     """焊接 manifold3d 输出中的亚微米重合点并封闭少量短坏边。"""
 
     import numpy as np

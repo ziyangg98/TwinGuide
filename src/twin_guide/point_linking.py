@@ -1,8 +1,9 @@
-"""第 6 步：以连续五次 Hermite 曲线生成导套—导板梁架中心线。"""
+"""第 6 步：以连续五次 Hermite 曲线生成导管—导板梁架中心线。"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import itertools
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from twin_guide.config import PressBeamGuideEndpointParameters
@@ -29,8 +30,8 @@ class PointLinkingConfig:
     lower_approach_overlap_mm: float = 1.45
     lower_dive_merge_arc_mm: float = 5.0
     centerline_spacing_mm: float = 0.30
-    connector_guide_endpoint: PressBeamGuideEndpointParameters = (
-        PressBeamGuideEndpointParameters()
+    connector_guide_endpoint: PressBeamGuideEndpointParameters = field(
+        default_factory=PressBeamGuideEndpointParameters
     )
 
     def __post_init__(self) -> None:
@@ -253,7 +254,7 @@ def _cumulative_lengths(points: tuple[Vec3, ...]) -> tuple[float, ...]:
     """返回折线各采样点的累计弧长。"""
 
     lengths = [0.0]
-    for previous, point in zip(points[:-1], points[1:], strict=True):
+    for previous, point in itertools.pairwise(points):
         lengths.append(lengths[-1] + previous.distance_to(point))
     return tuple(lengths)
 
@@ -421,7 +422,7 @@ def link_selected_points(
         strict=True,
     )):
         if not template.feasible:
-            raise ValueError(f"导套 {sleeve.guide_index} 的牙科导板侧锚点不可行")
+            raise ValueError(f"导管 {sleeve.guide_index} 的牙科导板侧锚点不可行")
         left_surface = template.left.position
         right_surface = template.right.position
         left_start = template.left_centerline_anchor or left_surface

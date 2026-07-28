@@ -46,7 +46,6 @@ from twin_guide.models import (
 from twin_guide.point_linking import PointLinkingPlan
 from twin_guide.types import ConnectorEndpointSource
 
-
 # 最终输入导管融合会使刚完成的切口边界向内回缩约半个体素。观察窗的
 # 独立验证要求轴线到实体保持 0.2 mm 净距，因此复切时显式预留该净距。
 OBSERVATION_WINDOW_CLEARANCE_MM = 0.2
@@ -91,7 +90,7 @@ def _create_selected_input_sleeves(
     case: CaseAnalysis,
     material: bpy.types.Material,
 ) -> tuple[bpy.types.Object, ...]:
-    """复制输入装配体中识别出的原始导柱，不做参数化重建。"""
+    """复制输入装配体中识别出的原始导管，不做参数化重建。"""
 
     sleeves = tuple(
         assign_material(
@@ -201,7 +200,7 @@ def create_point_link_meshes(
         material: 赋给连接管的 Blender 材质。
 
     返回:
-        当前四根连续梁或兼容独立梁、可选的三根 Y 型按压梁及汇合球网格。
+        连续连接梁、可选的三根 Y 型按压梁及汇合球网格。
 
     算法说明:
         对每条已规划中心线使用平行输运标架扫掠圆形截面并封闭两端。
@@ -555,7 +554,7 @@ def _create_link_point_markers(
     plan: PointLinkingPlan,
     materials: dict[str, bpy.types.Material],
 ) -> tuple[tuple[bpy.types.Object, ...], tuple[bpy.types.Object, ...]]:
-    """为联建选点图创建导套侧和导板侧标记球。"""
+    """为联建选点图创建导管侧和导板侧标记球。"""
 
     marker_radius = min(0.55, plan.radius_mm * 0.45)
 
@@ -639,38 +638,46 @@ def _create_link_point_markers(
     return sleeve_markers, template_markers
 
 
-def _create_anchor_trajectory_meshes(
+def _create_stage_trajectory_meshes(
     plan: PointLinkingPlan,
     material: bpy.types.Material,
-) -> tuple[bpy.types.Object, ...]:
-    """将牙位截面外表面备选轨迹实体化为仅供诊断的细管。"""
+) -> tuple[tuple[bpy.types.Object, ...], tuple[bpy.types.Object, ...]]:
+    """分别实体化锚点选择和按压梁规划轨迹。"""
 
-    return tuple(
-        create_centerline_tube(
-            f"anchor_trajectory_{index}",
-            trajectory,
-            0.12,
-            material,
-            16,
+    def build(
+        prefix: str,
+        trajectories: tuple[tuple[Vec3, ...], ...],
+    ) -> tuple[bpy.types.Object, ...]:
+        """将一组轨迹构造为带阶段前缀的诊断细管。"""
+
+        return tuple(
+            create_centerline_tube(
+                f"{prefix}_{index}",
+                trajectory,
+                0.12,
+                material,
+                16,
+            )
+            for index, trajectory in enumerate(trajectories, 1)
+            if len(trajectory) >= 2
         )
-        for index, trajectory in enumerate(
-            (
-                *plan.anchor_trajectories,
-                *plan.press_beam_trajectories,
-                *(
-                    plan.guide_component_bridge.trajectories
-                    if plan.guide_component_bridge is not None
-                    else ()
-                ),
-                *(
-                    plan.guide_terminal_u_extension.trajectories
-                    if plan.guide_terminal_u_extension is not None
-                    else ()
-                ),
-            ),
-            1,
-        )
-        if len(trajectory) >= 2
+
+    anchor_trajectories = (
+        *plan.anchor_trajectories,
+        *(
+            plan.guide_component_bridge.trajectories
+            if plan.guide_component_bridge is not None
+            else ()
+        ),
+        *(
+            plan.guide_terminal_u_extension.trajectories
+            if plan.guide_terminal_u_extension is not None
+            else ()
+        ),
+    )
+    return (
+        build("anchor_trajectory", anchor_trajectories),
+        build("press_beam_trajectory", plan.press_beam_trajectories),
     )
 
 
@@ -684,6 +691,7 @@ def _render_process_images(
     sleeve_point_markers: tuple[bpy.types.Object, ...],
     template_point_markers: tuple[bpy.types.Object, ...],
     anchor_trajectory_meshes: tuple[bpy.types.Object, ...],
+    press_beam_trajectory_meshes: tuple[bpy.types.Object, ...],
 ) -> tuple[Path, ...]:
     """渲染输入、当前模式导管、切口、选点和连接结果。"""
 
@@ -696,6 +704,9 @@ def _render_process_images(
         (*channel_cutters, *window_cutters),
     )
     assign_material(cut_template_preview, template_mesh.data.materials[0])
+    press_beam_meshes = tuple(
+        mesh for mesh in connector_meshes if mesh.name.startswith("press_beam_")
+    )
     image_specs = (
         ("input_template.png", (template_mesh,)),
         ("input_sleeves.png", source_assemblies),
@@ -729,6 +740,15 @@ def _render_process_images(
             ),
         ),
         (
+            "press_beam.png",
+            (
+                cut_template_preview,
+                *sleeve_meshes,
+                *press_beam_meshes,
+                *press_beam_trajectory_meshes,
+            ),
+        ),
+        (
             "cutouts.png",
             (template_mesh, *sleeve_meshes, *window_cutters),
         ),
@@ -742,6 +762,38 @@ def _render_process_images(
     return tuple(image_paths)
 
 
+def _render_handpiece_avoidance(
+    output_directory: Path,
+    case: CaseAnalysis,
+    visible_meshes: tuple[bpy.types.Object, ...],
+    plans: tuple[HandpieceAvoidancePlan, ...],
+    material: bpy.types.Material,
+) -> Path | None:
+    """渲染第 7 阶段手机摆动包络与当前几何计划。"""
+
+    if not plans:
+        return None
+    envelopes = tuple(
+        assign_material(
+            import_polygon_mesh(
+                plan.envelope_mesh_path,
+                f"handpiece_{plan.avoidance_id}_preview",
+            ),
+            material,
+        )
+        for plan in plans
+    )
+    image_path = output_directory / "handpiece_avoidance.png"
+    render_objects(
+        image_path,
+        (*visible_meshes, *envelopes),
+        case.config.render,
+    )
+    for envelope in envelopes:
+        remove_object(envelope)
+    return image_path
+
+
 def build_guide_from_links(
     case: CaseAnalysis,
     cutout_plan: CutoutPlan,
@@ -751,7 +803,7 @@ def build_guide_from_links(
     """使用第 6 步光滑连接计划构造并导出正式牙科导板。
 
     参数:
-        case: 包含输入网格、导套参数和输出配置的病例分析。
+        case: 包含输入网格、导管参数和输出配置的病例分析。
         cutout_plan: 第 3 步通道与窗口计划。
         point_links: 第 6 步光滑连接计划。
         handpiece_avoidance: 可选的第 7 步一个或多个手机左右摆动包络计划。
@@ -807,8 +859,10 @@ def build_guide_from_links(
     sleeve_point_markers, template_point_markers = _create_link_point_markers(
         point_links, materials
     )
-    anchor_trajectory_meshes = _create_anchor_trajectory_meshes(
+    anchor_trajectory_meshes, press_beam_trajectory_meshes = (
+        _create_stage_trajectory_meshes(
         point_links, materials["template_point"]
+        )
     )
     process_image_paths = _render_process_images(
         output_directory,
@@ -820,7 +874,17 @@ def build_guide_from_links(
         sleeve_point_markers,
         template_point_markers,
         anchor_trajectory_meshes,
+        press_beam_trajectory_meshes,
     )
+    handpiece_image = _render_handpiece_avoidance(
+        output_directory,
+        case,
+        (template_mesh, *sleeve_meshes, *link_meshes),
+        handpiece_avoidance or (),
+        materials["operation"],
+    )
+    if handpiece_image is not None:
+        process_image_paths = (*process_image_paths, handpiece_image)
     cut_template_mesh = subtract_cutters(template_mesh, (*channel_cutters, *window_cutters))
     generated_recut_cutters = (
         (*channel_cutters, *profile_window_cutters)

@@ -16,7 +16,6 @@ from scipy.spatial import cKDTree
 from sklearn.cluster import KMeans
 from sklearn.mixture import GaussianMixture
 
-
 EPS = 1e-9
 
 
@@ -334,7 +333,7 @@ def fit_unlabelled_ellipse_instances(
                 (float(covariance[0, 0]), float(covariance[0, 1])),
                 (float(covariance[1, 0]), float(covariance[1, 1])),
             ),
-            support_pixel_count=int(len(selected)),
+            support_pixel_count=len(selected),
             boundary_mean_distance_mm=refinement["boundary_mean_distance_mm"],
             boundary_p95_distance_mm=refinement["boundary_p95_distance_mm"],
             owned_support_coverage=refinement["coverage"],

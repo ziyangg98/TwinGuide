@@ -1,4 +1,4 @@
-"""根据估计参数重建导套，并计算表面误差。"""
+"""根据估计参数重建导管，并计算表面误差。"""
 
 from __future__ import annotations
 
@@ -57,7 +57,7 @@ def _weld_mesh(
 
 
 def reconstruct_sleeve(estimate: SleeveEstimate, angular_segments: int = 72) -> TriangleMeshData:
-    """根据核心参数重建导套的三个轴向区域。
+    """根据核心参数重建导管的三个轴向区域。
 
     上段为 C 形环状截面；中段由 D 形外轮廓、内圆弧和平行槽壁组成；
     下段保留 D 形外轮廓，并在完整圆形固定孔周围封闭侧槽。
@@ -85,12 +85,12 @@ def reconstruct_sleeve(estimate: SleeveEstimate, angular_segments: int = 72) -> 
     z_transition = estimate.height - estimate.closed_bore_height
     z_bottom = estimate.height
     if not z_top < z_platform < z_transition < z_bottom:
-        raise ValueError("导套高度必须满足 0 < H-hp < H-hs < H")
+        raise ValueError("导管高度必须满足 0 < H-hp < H-hs < H")
     vertices: list[Vec3] = []
     faces: list[tuple[int, int, int]] = []
 
     def point(x_value: float, y_value: float, axial: float) -> Vec3:
-        """将导套局部坐标转换为世界坐标。"""
+        """将导管局部坐标转换为世界坐标。"""
 
         return estimate.axis_origin + platform * x_value + across * y_value + axis * axial
 
@@ -304,7 +304,7 @@ def _distances(source: tuple[Vec3, ...], target: TriangleMeshData) -> tuple[floa
 
 
 def _region(point: Vec3, estimate: SleeveEstimate) -> str:
-    """按轴向高度和径向位置将重建点归入导套几何区域。"""
+    """按轴向高度和径向位置将重建点归入导管几何区域。"""
 
     offset = point - estimate.axis_origin
     axial = offset.dot(estimate.axis)

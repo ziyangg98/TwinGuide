@@ -15,20 +15,18 @@ from __future__ import annotations
 import json
 from argparse import Namespace
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from .extract_contact_chord_contours import run as _extract_contours
-from .render_enhanced_crown_projection import run as _render_projection
 from .arch_progress_core_grouping import (
     CORE_GROUPING_POLICIES,
     DEFAULT_POLICY,
     LEGACY_POLICY,
 )
-
+from .extract_contact_chord_contours import run as _extract_contours
 from .pipeline import run_case_mapping
-
+from .render_enhanced_crown_projection import run as _render_projection
 
 LOCKED_RECOGNITION_PARAMETERS = {
     "arch_corridor_half_width_mm": 11.5,
@@ -96,7 +94,7 @@ class ToothRecognitionRequest:
         default_factory=ToothRecognitionProfile
     )
 
-    def resolved(self) -> "ToothRecognitionRequest":
+    def resolved(self) -> ToothRecognitionRequest:
         """内部算法说明。"""
         case_yaml = Path(self.case_yaml).resolve()
         if not case_yaml.is_file():
@@ -253,7 +251,7 @@ def recognize_teeth(request: ToothRecognitionRequest) -> ToothRecognitionResult:
         case_yaml=request.case_yaml,
         output_dir=request.output_dir,
         profile=profile,
-        created_at=datetime.now(timezone.utc).isoformat(),
+        created_at=datetime.now(UTC).isoformat(),
         base_mapping_report=base_report,
         projection_report=projection_report,
         contour_report=contour_report,
@@ -267,8 +265,8 @@ def recognize_teeth(request: ToothRecognitionRequest) -> ToothRecognitionResult:
 
 
 __all__ = [
-    "ToothRecognitionError",
     "LOCKED_RECOGNITION_PARAMETERS",
+    "ToothRecognitionError",
     "ToothRecognitionProfile",
     "ToothRecognitionRequest",
     "ToothRecognitionResult",

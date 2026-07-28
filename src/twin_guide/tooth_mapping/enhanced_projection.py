@@ -14,7 +14,6 @@ from skimage.draw import polygon
 from skimage.filters import scharr
 from skimage.morphology import closing, disk, remove_small_holes, remove_small_objects
 
-
 EPS = 1e-9
 
 
@@ -60,7 +59,7 @@ def rasterise_crown_triangles(
     ap_centres = np.arange(low[1], high[1] + resolution_mm, resolution_mm)
     shape = (len(lr_centres), len(ap_centres))
     top_height = np.full(shape, -np.inf, dtype=np.float32)
-    top_normal = np.zeros(shape + (3,), dtype=np.float32)
+    top_normal = np.zeros((*shape, 3), dtype=np.float32)
     triangle_hits = np.zeros(shape, dtype=np.uint16)
 
     for face in selected_faces:
@@ -124,8 +123,8 @@ def rasterise_crown_triangles(
         top_normal[update_rows, update_columns] = interpolated_normal[higher]
 
     raw_mask = np.isfinite(top_height)
-    minimum_object = max(12, int(round(0.35 / resolution_mm**2)))
-    maximum_hole = max(20, int(round(0.50 / resolution_mm**2)))
+    minimum_object = max(12, round(0.35 / resolution_mm**2))
+    maximum_hole = max(20, round(0.50 / resolution_mm**2))
     silhouette = closing(raw_mask, footprint=disk(1))
     silhouette = remove_small_objects(silhouette, max_size=minimum_object - 1)
     silhouette = remove_small_holes(silhouette, max_size=maximum_hole - 1)
@@ -191,6 +190,6 @@ def rasterise_crown_triangles(
         "curvature": curvature,
         "fused_edge": fused_edge,
         "triangle_hit_count": triangle_hits,
-        "selected_triangle_count": int(len(selected_faces)),
+        "selected_triangle_count": len(selected_faces),
         "covered_pixel_count": int(np.count_nonzero(silhouette)),
     }

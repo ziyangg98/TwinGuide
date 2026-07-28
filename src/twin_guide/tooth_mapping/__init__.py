@@ -6,13 +6,13 @@ centre per configured slot, but it is never allowed to create a new tooth
 number from a cusp or a projected surface island.
 """
 
-from .fdi import FDIError, derive_fdi_order, validate_anatomy
 from .controlled_mesh_repair import (
     ControlledVolumeRepairError,
     ControlledVolumeRepairPolicy,
     ControlledVolumeRepairResult,
     ensure_closed_volume,
 )
+from .fdi import FDIError, derive_fdi_order, validate_anatomy
 from .pipeline import run_case_mapping
 
 __all__ = [

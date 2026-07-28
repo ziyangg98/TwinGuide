@@ -9,13 +9,11 @@ arch intervals for observation-window mapping.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 import numpy as np
 from scipy.interpolate import PchipInterpolator
 from scipy.optimize import minimize_scalar
 from scipy.spatial import cKDTree
-
 
 EPS = 1e-9
 
@@ -42,8 +40,8 @@ class MeasuredArchCurve:
     ap: np.ndarray
     s: np.ndarray
     apex_index: int
-    s_to_lr: Any
-    s_to_ap: Any
+    s_to_lr: PchipInterpolator
+    s_to_ap: PchipInterpolator
 
     def at_s(self, values: np.ndarray | float) -> np.ndarray:
         """内部算法说明。"""
@@ -142,7 +140,10 @@ def fit_measured_contour_arch(
     )
 
 
-def project_point_to_arch(curve: Any, point_lr_ap: np.ndarray) -> tuple[float, np.ndarray, float]:
+def project_point_to_arch(
+    curve: MeasuredArchCurve,
+    point_lr_ap: np.ndarray,
+) -> tuple[float, np.ndarray, float]:
     """内部算法说明。\n\nReturn the nearest directed-arch coordinate to one LR/AP point."""
 
     point = np.asarray(point_lr_ap, dtype=float)
@@ -170,7 +171,10 @@ def project_point_to_arch(curve: Any, point_lr_ap: np.ndarray) -> tuple[float, n
     return s_mm, projected, distance
 
 
-def contour_arch_interval(curve: Any, contour_lr_ap: np.ndarray) -> tuple[float, float]:
+def contour_arch_interval(
+    curve: MeasuredArchCurve,
+    contour_lr_ap: np.ndarray,
+) -> tuple[float, float]:
     """内部算法说明。\n\nProject a measured contour to a conservative directed-arch interval."""
 
     contour = np.asarray(contour_lr_ap, dtype=float)

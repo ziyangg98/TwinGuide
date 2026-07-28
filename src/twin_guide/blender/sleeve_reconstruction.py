@@ -1,4 +1,4 @@
-"""在 Blender 中根据几何参数重建封闭导套。"""
+"""在 Blender 中根据几何参数重建封闭导管。"""
 
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ def _cylinder(
     depth: float,
     axial_center: float,
 ) -> bpy.types.Object:
-    """创建沿导套局部 Z 轴排列的圆柱布尔辅助体。"""
+    """创建沿导管局部 Z 轴排列的圆柱布尔辅助体。"""
 
     bpy.ops.mesh.primitive_cylinder_add(
         vertices=128,
@@ -57,7 +57,7 @@ def _cylinder(
 
 
 def _boolean(target: bpy.types.Object, operand: bpy.types.Object, operation: str) -> None:
-    """对导套重建中间体执行布尔运算，并移除操作体。"""
+    """对导管重建中间体执行布尔运算，并移除操作体。"""
 
     _activate(target)
     modifier = target.modifiers.new(f"{operation.lower()}_{operand.name}", "BOOLEAN")
@@ -69,7 +69,7 @@ def _boolean(target: bpy.types.Object, operand: bpy.types.Object, operation: str
 
 
 def validate_sleeve_boolean_parameters(estimate: SleeveEstimate) -> None:
-    """拒绝会使布尔切割体为空或方向翻转的导套尺寸。"""
+    """拒绝会使布尔切割体为空或方向翻转的导管尺寸。"""
 
     numeric = {
         "height": estimate.height,
@@ -83,11 +83,11 @@ def validate_sleeve_boolean_parameters(estimate: SleeveEstimate) -> None:
     }
     non_finite = [name for name, value in numeric.items() if not math.isfinite(value)]
     if non_finite:
-        raise GeometryError(f"导套参数中存在非有限值：{', '.join(non_finite)}")
+        raise GeometryError(f"导管参数中存在非有限值：{', '.join(non_finite)}")
     if not 0.0 < estimate.inner_radius < estimate.outer_radius:
-        raise GeometryError("导套半径必须满足 0 < inner_radius < outer_radius")
+        raise GeometryError("导管半径必须满足 0 < inner_radius < outer_radius")
     if not 0.0 < estimate.closed_bore_height < estimate.platform_height < estimate.height:
-        raise GeometryError("导套高度必须满足 0 < closed_bore_height < platform_height < height")
+        raise GeometryError("导管高度必须满足 0 < closed_bore_height < platform_height < height")
     if estimate.platform_width <= 0.0:
         raise GeometryError("platform_width 必须为正数")
     for name, angle in (
@@ -97,12 +97,12 @@ def validate_sleeve_boolean_parameters(estimate: SleeveEstimate) -> None:
         if not 0.0 < angle < 2.0 * math.pi:
             raise GeometryError(f"{name} 必须严格位于 0 与 2*pi 之间")
     if estimate.axis.length <= 1e-10:
-        raise GeometryError("导套轴向不得为零向量")
+        raise GeometryError("导管轴向不得为零向量")
     radial_direction = estimate.c_opening_direction - estimate.axis.normalized() * (
         estimate.c_opening_direction.dot(estimate.axis.normalized())
     )
     if radial_direction.length <= 1e-10:
-        raise GeometryError("c_opening_direction 不得与导套轴向平行")
+        raise GeometryError("c_opening_direction 不得与导管轴向平行")
 
     inner_gap = 2.0 * math.pi - estimate.inner_arc_angle
     outer_gap = 2.0 * math.pi - estimate.outer_arc_angle
@@ -123,7 +123,7 @@ def create_closed_sleeve_object(
     estimate: SleeveEstimate,
     name: str,
 ) -> bpy.types.Object:
-    """根据导套参数创建单一连通的封闭实体。
+    """根据导管参数创建单一连通的封闭实体。
 
     外形由圆弧主体和肩部下方的单侧平台组成；贯穿圆柱形成固定孔。
     上段和中段分别使用切割体形成 C 形开口和矩形侧槽，
@@ -188,7 +188,7 @@ def create_closed_sleeve_object(
     across = axis.cross(c_opening_direction).normalized()
     origin = estimate.axis_origin
     # 布尔基本体的轴向中心位于 H/2。替换 matrix_world 前先应用局部平移，
-    # 否则导套将以 axis_origin 为中心跨越 [-H/2, H/2]。
+    # 否则导管将以 axis_origin 为中心跨越 [-H/2, H/2]。
     _activate(body)
     bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
     body.matrix_world = Matrix(
@@ -202,5 +202,5 @@ def create_closed_sleeve_object(
     body.name = name
     integrity = inspect_triangle_mesh(mesh_object_to_triangle_data(body))
     if not integrity.valid:
-        raise GeometryError(f"重建导套 {name!r} 未通过网格完整性检查：{integrity}")
+        raise GeometryError(f"重建导管 {name!r} 未通过网格完整性检查：{integrity}")
     return body

@@ -9,6 +9,7 @@
 .. automodule:: twin_guide.generation_process
 
 .. automodule:: twin_guide.config
+   :no-index:
 
 .. automodule:: twin_guide.models
 

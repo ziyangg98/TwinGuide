@@ -9,6 +9,7 @@ from all geometric fitting and is assigned by the caller afterwards.
 
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -19,9 +20,9 @@ from scipy.ndimage import (
     map_coordinates,
     maximum_filter,
 )
-from skimage.measure import find_contours, label as connected_components
+from skimage.measure import find_contours
+from skimage.measure import label as connected_components
 from skimage.morphology import closing, disk, remove_small_holes, remove_small_objects
-
 
 EPS = 1e-9
 MAX_ADJACENT_CORE_MERGE_MM = 5.75
@@ -88,7 +89,7 @@ def select_crown_core_candidates(
     resolution = float(enhanced_maps["resolution_mm"])
     mask = np.asarray(enhanced_maps["silhouette"], dtype=bool)
     depth = distance_transform_edt(mask) * resolution
-    peak_window = max(5, int(round(2.4 / resolution)))
+    peak_window = max(5, round(2.4 / resolution))
     if peak_window % 2 == 0:
         peak_window += 1
     raw_peaks = (
@@ -143,7 +144,7 @@ def select_crown_core_candidates(
         for point_index, point in enumerate(points_array):
             options: list[tuple[float, float]] = []
             for segment_index, (start, vector, length) in enumerate(zip(
-                reference[:-1], vectors, lengths
+                reference[:-1], vectors, lengths, strict=False
             )):
                 if length <= EPS:
                     continue
@@ -203,7 +204,7 @@ def select_crown_core_candidates(
                 np.asarray(second.center_lr_ap_mm)
                 - np.asarray(first.center_lr_ap_mm)
             ))
-            for first, second in zip(grouped, grouped[1:])
+            for first, second in itertools.pairwise(grouped)
         ]
         if not adjacent_distances:
             break
@@ -437,7 +438,7 @@ def refine_crown_core_seeds(
             instance_id=int(item.instance_id),
             center_lr_ap_mm=(float(centre[0]), float(centre[1])),
             initial_center_lr_ap_mm=(float(initial_center[0]), float(initial_center[1])),
-            core_pixel_count=int(len(rows)),
+            core_pixel_count=len(rows),
             refinement_distance_mm=float(np.linalg.norm(centre - initial_center)),
         ))
     return seeds
@@ -454,8 +455,8 @@ def build_continuous_projection_mask(
     mask = support >= 0.16
     mask |= occupied
     mask = closing(mask, footprint=disk(1))
-    minimum_object = max(8, int(round(0.40 / resolution**2)))
-    maximum_hole = max(12, int(round(0.65 / resolution**2)))
+    minimum_object = max(8, round(0.40 / resolution**2))
+    maximum_hole = max(12, round(0.65 / resolution**2))
     mask = remove_small_objects(mask, max_size=minimum_object - 1)
     mask = remove_small_holes(mask, max_size=maximum_hole - 1)
     return np.asarray(mask, dtype=bool)
@@ -513,7 +514,7 @@ def find_contact_chords(
     origin_index = int(np.argmin(np.abs(sample_q)))
     chords: list[ContactChord] = []
 
-    for pair_index, (first, second) in enumerate(zip(ordered_instances, ordered_instances[1:])):
+    for pair_index, (first, second) in enumerate(itertools.pairwise(ordered_instances)):
         first_center = np.asarray(first.center_lr_ap_mm, dtype=float)
         second_center = np.asarray(second.center_lr_ap_mm, dtype=float)
         delta = second_center - first_center
@@ -625,7 +626,7 @@ def find_multichannel_contact_chords(
         """内部算法说明。"""
         return _sample_grid(values, points, lr_centres, ap_centres, resolution, order)
 
-    for pair_index, (first, second) in enumerate(zip(ordered_instances, ordered_instances[1:])):
+    for pair_index, (first, second) in enumerate(itertools.pairwise(ordered_instances)):
         first_center = np.asarray(first.center_lr_ap_mm, dtype=float)
         second_center = np.asarray(second.center_lr_ap_mm, dtype=float)
         delta = second_center - first_center
@@ -665,7 +666,7 @@ def find_multichannel_contact_chords(
                 signed_grid = (grid_points - line_point) @ line_normal
                 first_area = int(np.count_nonzero(local_roi & (signed_grid * signed_first >= 0.0)))
                 second_area = int(np.count_nonzero(local_roi & (signed_grid * signed_second >= 0.0)))
-                if min(first_area, second_area) < max(60, int(round(4.0 / resolution**2))):
+                if min(first_area, second_area) < max(60, round(4.0 / resolution**2)):
                     continue
 
                 chord_points = points[low:high + 1]
@@ -846,7 +847,7 @@ def _outer_concavity_candidates(
     score = np.zeros(len(smooth), dtype=float)
     fractions = np.linspace(0.12, 0.88, 9)
     for span_mm in span_mm_values:
-        span = max(3, int(round(span_mm / resolution)))
+        span = max(3, round(span_mm / resolution))
         previous = np.roll(smooth, span, axis=0)
         following = np.roll(smooth, -span, axis=0)
         incoming = smooth - previous
@@ -872,7 +873,7 @@ def _outer_concavity_candidates(
 
     # Keep local peaks only; closely spaced staircase points represent one
     # anatomical notch and must not produce artificial ultra-short chords.
-    peak_window = max(2, int(round(0.45 / resolution)))
+    peak_window = max(2, round(0.45 / resolution))
     peaks = np.zeros(len(score), dtype=bool)
     for shift in range(-peak_window, peak_window + 1):
         peaks |= score < np.roll(score, shift)
@@ -948,7 +949,13 @@ def find_shortest_concavity_chords(
         """内部算法说明。"""
         return _sample_grid(values, points, lr_centres, ap_centres, resolution, order)
 
-    def gap(pair_index: int, first, second, midpoint: np.ndarray, perpendicular: np.ndarray) -> ContactChord:
+    def gap(
+        pair_index: int,
+        first: CrownSeed,
+        second: CrownSeed,
+        midpoint: np.ndarray,
+        perpendicular: np.ndarray,
+    ) -> ContactChord:
         """内部算法说明。"""
         return ContactChord(
             pair_index=pair_index,
@@ -966,7 +973,7 @@ def find_shortest_concavity_chords(
             selection_method="disconnected_component_gap",
         )
 
-    for pair_index, (first, second) in enumerate(zip(ordered_seeds, ordered_seeds[1:])):
+    for pair_index, (first, second) in enumerate(itertools.pairwise(ordered_seeds)):
         first_center = np.asarray(first.center_lr_ap_mm, dtype=float)
         second_center = np.asarray(second.center_lr_ap_mm, dtype=float)
         delta = second_center - first_center
@@ -1071,7 +1078,7 @@ def find_shortest_concavity_chords(
                     second_area = int(np.count_nonzero(
                         local_roi & (signed_grid * signed_second >= 0.0)
                     ))
-                    if min(first_area, second_area) < max(60, int(round(4.0 / resolution**2))):
+                    if min(first_area, second_area) < max(60, round(4.0 / resolution**2)):
                         continue
                     candidate_segment = np.vstack([endpoint_1, endpoint_2])
                     if any(_segments_cross(candidate_segment, prior) for prior in accepted_segments):
@@ -1338,7 +1345,7 @@ def split_projection_by_chords(
                 float(interior_center[0]), float(interior_center[1])
             ),
             maximum_interior_radius_mm=maximum_radius,
-            pixel_count=int(len(rows)),
+            pixel_count=len(rows),
             contour_lr_ap_mm=contour,
         ))
     return results, label_grid

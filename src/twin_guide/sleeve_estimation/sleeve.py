@@ -1,4 +1,4 @@
-"""从输入导柱 STL 估计有向轴线，并定义成对的 C 口方向。"""
+"""从输入导管 STL 估计有向轴线，并定义成对的 C 口方向。"""
 
 from __future__ import annotations
 
@@ -67,7 +67,7 @@ def _orient_toward_closed_end(
 
 
 def estimate_sleeve_axis(mesh: TriangleMeshData) -> SleeveAxis:
-    """估计导柱轴线并将正向指向平台端。"""
+    """估计导管轴线并将正向指向平台端。"""
 
     center = mean_point(mesh.vertices)
     axis_center, axis = _refined_axis(mesh, center, principal_axis(mesh.vertices))
@@ -76,7 +76,7 @@ def estimate_sleeve_axis(mesh: TriangleMeshData) -> SleeveAxis:
 
 
 def c_opening_toward(axis: Vec3, center: Vec3, other_center: Vec3) -> Vec3:
-    """返回轴线法平面内指向另一导柱的 C 口方向。"""
+    """返回轴线法平面内指向另一导管的 C 口方向。"""
 
     toward_other = other_center - center
     return (toward_other - axis * toward_other.dot(axis)).normalized()

@@ -9,14 +9,14 @@ from twin_guide.models import (
     WindowCutout,
     WindowPurpose,
 )
-from twin_guide.strategies.observation_windows import plan_observation_windows
+from twin_guide.observation_window_opening import build_observation_window_opening
 from twin_guide.tooth_identification import ToothIdentificationResult
 from twin_guide.types import SleeveGenerationResult
 
 WindowCutoutPlan = CutoutPlan
 
 def _plan_channels(case: CaseAnalysis) -> tuple[CylinderCutout, ...]:
-    """沿全部导套轴线构造带轴向余量的牙科导板通道。"""
+    """沿全部导管轴线构造带轴向余量的牙科导板通道。"""
 
     axial_margin_mm = case.config.geometry.channel_axial_margin_mm
     guide_inner_radius_mm = case.config.sleeve.inner_radius_mm
@@ -38,7 +38,7 @@ def _plan_operation_window(
     operation_feature: object,
     site_index: int,
 ) -> WindowCutout:
-    """根据两导套间距、操作特征尺寸和局部牙科导板厚度规划操作窗。"""
+    """根据两导管间距、操作特征尺寸和局部牙科导板厚度规划操作窗。"""
 
     first_guide, second_guide = guides
     center = operation_feature.center
@@ -102,24 +102,24 @@ def plan_window_cutouts(
     """生成导孔、操作窗和观察缺口计划。
 
     参数:
-        case: 包含牙科导板、导套和窗口配置的病例分析。
-        sleeves: 第 1 步输出的导套结果。
+        case: 包含牙科导板、导管和窗口配置的病例分析。
+        sleeves: 第 1 步输出的导管结果。
         tooth_identification: 可选的第 2 步现场牙位与观察窗映射结果。
 
     返回:
         不含 Blender 对象的导孔与窗口几何计划。
 
     异常:
-        ValueError: 病例分析与第 1 步导套结果不一致。
+        ValueError: 病例分析与第 1 步导管结果不一致。
 
     算法说明:
-        始终生成两个导孔和一个操作窗。配置第 2 步报告时，
-        当前策略使用其 FDI 端点生成轴扫掠组合 cutter；显式选择兼容策略时
-        改为最近表面 7 mm 开放缺口。当前策略未配置牙位映射时仅保留操作窗。
+        按种植位生成导孔和操作窗。已配置观察窗时，必须使用
+        第 2 步的 FDI 牙位映射生成轴扫掠组合 cutter；缺少所需
+        牙位映射时明确报错。
     """
 
     if case.guide_sleeves != sleeves.sleeves:
-        raise ValueError("病例分析与导套生成结果不一致")
+        raise ValueError("病例分析与导管生成结果不一致")
 
     operation_windows = tuple(
         _plan_operation_window(case, pair, feature, index)
@@ -128,12 +128,13 @@ def plan_window_cutouts(
             1,
         )
     )
-    observation_windows, profile_windows = plan_observation_windows(
-        case,
-        tooth_identification,
+    profile_windows = (
+        ()
+        if tooth_identification is None
+        else (build_observation_window_opening(case.config, tooth_identification),)
     )
     return CutoutPlan(
         channels=_plan_channels(case),
-        windows=(*operation_windows, *observation_windows),
+        windows=operation_windows,
         profile_windows=profile_windows,
     )

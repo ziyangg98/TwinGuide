@@ -4,8 +4,8 @@ from dataclasses import replace
 from pathlib import Path
 
 from twin_guide import CaseConfig, generate_guide, run_generation_process, validate_guide
-from twin_guide.config import SleeveGeometryMode
 from twin_guide.case_analysis import analyze_case
+from twin_guide.config import SleeveGeometryMode
 from twin_guide.models import WindowPurpose
 from twin_guide.tooth_identification import identify_tooth_positions
 from twin_guide.types import SleeveGenerationResult, StageRunStatus
@@ -16,7 +16,7 @@ class EndToEndTests(unittest.TestCase):
     def _assert_fdi_axis_sweep_window(self, config_path: Path) -> None:
         """已配置牙位映射时只生成第 3 步轴扫掠观察窗。"""
 
-        case_config = CaseConfig.from_json(config_path)
+        case_config = CaseConfig.from_yaml(config_path)
         case_analysis = analyze_case(case_config)
         sleeves = SleeveGenerationResult(
             case_analysis.guide_sleeves,
@@ -38,12 +38,15 @@ class EndToEndTests(unittest.TestCase):
 
     def test_current_case(self):
         code_directory = Path(__file__).resolve().parents[2]
+        case_path = (
+            code_directory.parent / "data/cases/single/tooth-11/case.yaml"
+        )
+        if not case_path.is_file():
+            self.skipTest("未提供 tooth-11 仓库外病例数据")
         for tooth_number in (11,):
             with self.subTest(tooth_number=tooth_number):
-                self._assert_fdi_axis_sweep_window(
-                    code_directory / "examples" / f"case-tooth-{tooth_number}.json"
-                )
-        source_config = CaseConfig.from_json(code_directory / "examples" / "case-tooth-11.json")
+                self._assert_fdi_axis_sweep_window(case_path)
+        source_config = CaseConfig.from_yaml(case_path)
         with tempfile.TemporaryDirectory() as temporary_output_directory:
             case_config = replace(
                 source_config,
@@ -86,6 +89,8 @@ class EndToEndTests(unittest.TestCase):
                     "input_patient_dentition.png",
                     sleeve_process_image,
                     "link_points.png",
+                    "press_beam.png",
+                    "handpiece_avoidance.png",
                 },
             )
             self.assertEqual(

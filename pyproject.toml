@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "twin-guide"
-version = "0.2.0"
-description = "基于三维模型的双导套牙科导板自动构建工具"
+version = "0.3.0"
+description = "基于三维模型的双导管牙科导板自动构建工具"
 requires-python = ">=3.13,<3.15"
 dependencies = [
     "manifold3d>=3.5,<4",
@@ -42,3 +42,6 @@ ignore = ["RUF001", "RUF002", "RUF003"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["ANN"]
+"src/twin_guide/tooth_mapping/contact_chords.py" = ["B023"]
+"src/twin_guide/tooth_mapping/extract_contact_chord_contours.py" = ["ANN"]
+"src/twin_guide/tooth_mapping/render_enhanced_crown_projection.py" = ["ANN"]

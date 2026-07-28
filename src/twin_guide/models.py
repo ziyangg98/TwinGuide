@@ -26,7 +26,7 @@ class SurfaceSample:
 
 @dataclass(frozen=True, slots=True)
 class GuideSleeve:
-    """单个已识别导套的几何参数和 Blender 网格。"""
+    """单个已识别导管的几何参数和 Blender 网格。"""
 
     guide_index: int
     guide_mesh: bpy.types.Object
@@ -44,13 +44,13 @@ class GuideSleeve:
 
     @property
     def axis(self) -> Vec3:
-        """返回从导柱顶部指向底部的内在轴向。"""
+        """返回从导管顶部指向底部的内在轴向。"""
 
         return self.parameters.axis
 
     @property
     def outer_radius_mm(self) -> float:
-        """返回导套径向包络半径。"""
+        """返回导管径向包络半径。"""
 
         return self.parameters.outer_radius + self.parameters.platform_width
 
@@ -80,7 +80,7 @@ class GuideSleeve:
 
     @property
     def length_mm(self) -> float:
-        """返回导套的轴向高度。"""
+        """返回导管的轴向高度。"""
 
         return self.axial_max_mm - self.axial_min_mm
 
@@ -109,14 +109,6 @@ class GenerationMeshes:
     guide_sleeve_assembly_meshes: tuple[bpy.types.Object, ...]
     patient_dentition_mesh: bpy.types.Object
 
-    @property
-    def guide_sleeve_assembly_mesh(self) -> bpy.types.Object:
-        """为旧版单种植调用方返回唯一导管装配体网格。"""
-
-        if len(self.guide_sleeve_assembly_meshes) != 1:
-            raise ValueError("多种植位病例必须逐导管装配体处理")
-        return self.guide_sleeve_assembly_meshes[0]
-
 
 @dataclass(frozen=True, slots=True)
 class OperationFeature:
@@ -138,14 +130,6 @@ class CaseAnalysis:
     template_frame: TemplateFrame
     template_samples: tuple[SurfaceSample, ...]
     dentition_samples: tuple[SurfaceSample, ...]
-
-    @property
-    def operation_feature(self) -> OperationFeature:
-        """为旧版单种植调用方返回唯一操作特征。"""
-
-        if len(self.operation_features) != 1:
-            raise ValueError("多种植位病例包含多个独立操作特征")
-        return self.operation_features[0]
 
     @property
     def guide_sleeve_pairs(self) -> tuple[tuple[GuideSleeve, GuideSleeve], ...]:

@@ -1,4 +1,4 @@
-"""导套参数估计的无外部依赖数据契约。"""
+"""导管参数估计的无外部依赖数据契约。"""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ class TriangleMeshData:
 
 @dataclass(frozen=True, slots=True)
 class SleeveAxis:
-    """从输入导柱 STL 估计的有向轴线。"""
+    """从输入导管 STL 估计的有向轴线。"""
 
     axis_origin: Vec3
     axis: Vec3
@@ -39,7 +39,7 @@ class SleeveAxis:
 
 @dataclass(frozen=True, slots=True)
 class SleeveEstimate:
-    """描述单个导套的轴线、C 口方向和八个标量尺寸参数。"""
+    """描述单个导管的轴线、C 口方向和八个标量尺寸参数。"""
 
     axis_origin: Vec3
     axis: Vec3

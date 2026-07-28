@@ -5,8 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,6 +15,13 @@ import yaml
 from scipy.ndimage import label as connected_components
 from scipy.spatial import cKDTree
 
+from .arch_progress_core_grouping import (
+    ARCH_PROGRESS_POLICY,
+    CORE_GROUPING_POLICIES,
+    DEFAULT_POLICY,
+    core_groups_to_seeds,
+    select_crown_core_candidates,
+)
 from .contact_chords import (
     CrownSeed,
     build_continuous_projection_mask,
@@ -34,15 +40,6 @@ from .fdi import (
     validate_anatomy,
 )
 from .pipeline import PALETTE, estimate_frame_and_arch, load_mesh, resolve_case_path
-
-from .arch_progress_core_grouping import (
-    ARCH_PROGRESS_POLICY,
-    CORE_GROUPING_POLICIES,
-    DEFAULT_POLICY,
-    core_groups_to_seeds,
-    select_crown_core_candidates,
-)
-
 
 APPROVABLE_CONTACT_SEPARATOR_METHODS = frozenset({
     "shortest_valid_local_neck_pair",
@@ -207,7 +204,7 @@ def _configured_projection_support(
     curve_points = np.column_stack([frame["curve"].lr, frame["curve"].ap])
     tree = cKDTree(curve_points)
     transverse_distance, curve_index = tree.query(grid_points, k=1)
-    arch_s = np.asarray(frame["curve"].s)[curve_index]
+    np.asarray(frame["curve"].s)[curve_index]
 
     used_intervals = []
     for slot in tooth_slots:
@@ -325,12 +322,12 @@ def _configured_projection_support(
         "core_grouping_policy": core_grouping_policy,
         "raw_component_count": int(component_count),
         "crown_core_candidates": candidate_records,
-        "selected_candidate_count": int(len(selected)),
-        "effective_physical_instance_count": int(len(selected)),
+        "selected_candidate_count": len(selected),
+        "effective_physical_instance_count": len(selected),
         "slot_based_physical_instance_recovery_used": False,
         "rejected_candidate_ids": sorted(int(value) for value in rejected_ids),
         "rejected_interference_pixel_count": int(excluded_pixel_count),
-        "interference_partition_chord_count": int(len(rejection_chords)),
+        "interference_partition_chord_count": len(rejection_chords),
         "physical_crown_core_groups": [
             {
                 "physical_instance_index": int(index + 1),
@@ -519,7 +516,7 @@ def run(args):
         record["second_FDI"] = labels[chord.pair_index + 1]
         chord_records.append(record)
     contour_records = []
-    for label, contour in zip(labels, contours):
+    for label, contour in zip(labels, contours, strict=False):
         contour_records.append({
             "FDI": int(label),
             "source_unlabelled_instance_id": int(contour.source_instance_id),
@@ -609,7 +606,7 @@ def run(args):
     }
     report = {
         "schema_version": "1.2-lr-ap-concavity-chords-with-frame",
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "status": "complete" if all(qa.values()) else "needs_review",
         "safe_for_downstream_use": bool(all(qa.values())),
         "case": config["case"],
@@ -670,7 +667,7 @@ def run(args):
                 "core_pixel_count": int(getattr(item, "core_pixel_count", 0)),
                 "refinement_distance_mm": float(getattr(item, "refinement_distance_mm", 0.0)),
             }
-            for label, item in zip(labels, partition_instances)
+            for label, item in zip(labels, partition_instances, strict=False)
         ],
         "semantics": {
             "numbered_present_teeth": labels,

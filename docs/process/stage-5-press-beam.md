@@ -1,4 +1,4 @@
-# 5. 按压梁柱锚点选择
+# 5. 按压梁锚点选择
 
 **实现状态：已接入正式流程。** 未配置时记录为 `skipped`；当前支持
 `inner_sleeve_upper_y`、`three_tooth_anchors_y` 和

@@ -43,16 +43,15 @@ design:
     mode: input  # 或 generated
 ```
 
-- `generated`：将识别位姿与 JSON 的八个解析尺寸组合，重建规则标准导管。
+- `generated`：将识别位姿与 YAML 的八个解析尺寸组合，重建规则标准导管。
   后续允许导管、导板和连接梁整体融合，再对最终整体复切导孔。
 - `input`：直接采用通过识别的原始导管组件。锚点投射到真实外壁，功能切割
   先作用于导板和连接梁基础体，输入导管最后作为受保护实体融合。
 
-未配置时使用 `generated`，以保持旧病例兼容行为。当前正式病例均在 YAML 中
-显式声明模式，便于审计。
+`mode` 为必填字段；缺失时配置加载直接报错。
 
 ## 结果示例
 
-![导柱参数示意](../images/sleeve-parameters.png)
+![导管参数示意](../images/sleeve-parameters.png)
 
 ![导管识别与参数化重建](../images/sleeve-reconstruction.png)

@@ -4,18 +4,8 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-import bpy
-
-from twin_guide.blender.mesh_queries import (
-    build_bvh,
-    point_inside_mesh,
-    sample_mesh_surface,
-)
-from twin_guide.blender.sleeve_estimation_adapter import mesh_object_to_triangle_data
-from twin_guide.blender.sleeve_reconstruction import (
-    validate_sleeve_boolean_parameters,
-)
 from twin_guide.config import Jaw, SleeveGeometryMode, SleeveParameters
 from twin_guide.errors import GeometryError
 from twin_guide.geometry import (
@@ -32,6 +22,8 @@ from twin_guide.sleeve_estimation import c_opening_toward, estimate_sleeve_axis
 from twin_guide.sleeve_estimation.types import SleeveEstimate
 from twin_guide.types import SleeveGenerationResult
 
+if TYPE_CHECKING:
+    import bpy
 
 BORE_PROBE_FRACTIONS = (0.15, 0.25, 0.35, 0.50, 0.65, 0.75, 0.85)
 MINIMUM_AXIAL_BORE_CLEAR_FRACTION = 0.60
@@ -39,7 +31,7 @@ MINIMUM_AXIAL_BORE_CLEAR_FRACTION = 0.60
 
 @dataclass(frozen=True, slots=True)
 class SleeveGenerationInputs:
-    """导套识别、定向和排序所需的最小输入集。"""
+    """导管识别、定向和排序所需的最小输入集。"""
 
     components: tuple[bpy.types.Object, ...]
     template_samples: tuple[SurfaceSample, ...]
@@ -52,7 +44,7 @@ class SleeveGenerationInputs:
 
 @dataclass(frozen=True, slots=True)
 class _GuideCandidate:
-    """从导套装配体分离出的导套候选分量。"""
+    """从导管装配体分离出的导管候选分量。"""
 
     component_index: int
     guide_mesh: bpy.types.Object
@@ -72,7 +64,7 @@ class _GuideCandidate:
 
 
 def _analyze_component(mesh: bpy.types.Object, component_index: int) -> _GuideCandidate:
-    """将连通分量转为导套候选。
+    """将连通分量转为导管候选。
 
     参数:
         mesh: 连通分量网格。
@@ -82,9 +74,16 @@ def _analyze_component(mesh: bpy.types.Object, component_index: int) -> _GuideCa
         包含表面样本、主轴、轴向范围和外径估计的候选。
     """
 
+    from twin_guide.blender.mesh_queries import (
+        build_bvh,
+        point_inside_mesh,
+        sample_mesh_surface,
+    )
+    from twin_guide.blender.sleeve_estimation_adapter import mesh_object_to_triangle_data
+
     samples = sample_mesh_surface(mesh)
     if len(samples) < 20:
-        raise GeometryError(f"导套候选分量 {component_index} 的表面积过小")
+        raise GeometryError(f"导管候选分量 {component_index} 的表面积过小")
     points = tuple(sample.position for sample in samples)
     center = mean_point(points)
     axis = principal_axis(points)
@@ -132,10 +131,10 @@ def _pair_key(
     pair: tuple[_GuideCandidate, _GuideCandidate],
     configured: SleeveParameters,
 ) -> tuple[float, float, float, int, int]:
-    """按与已知导柱尺寸的差异和轴线平行度排序。
+    """按与已知导管尺寸的差异和轴线平行度排序。
 
     参数:
-        pair: 两个导套候选。
+        pair: 两个导管候选。
 
     返回:
         配置尺寸差、轴线差、分量间距和两个分量索引。
@@ -160,13 +159,13 @@ def _select_pair(
     candidates: tuple[_GuideCandidate, ...],
     configured: SleeveParameters,
 ) -> tuple[_GuideCandidate, _GuideCandidate]:
-    """选择最接近已知尺寸且轴线最平行的导柱对。
+    """选择最接近已知尺寸且轴线最平行的导管对。
 
     参数:
         candidates: 全部连通分量候选。
 
     返回:
-        最优的两个导套候选。
+        最优的两个导管候选。
 
     异常:
         GeometryError: 可用连通分量少于两个。
@@ -221,7 +220,7 @@ def _template_frame(
     midpoint = (first.center + second.center) / 2.0
     depth = project_to_plane(inputs.template_center - midpoint, normal)
     if depth.length < 1e-6:
-        raise GeometryError("无法根据导套位置确定牙科导板深度方向")
+        raise GeometryError("无法根据导管位置确定牙科导板深度方向")
     depth = depth.normalized()
     return TemplateFrame(inputs.template_center, depth.cross(normal).normalized(), depth, normal)
 
@@ -233,23 +232,28 @@ def _build_sleeve(
     configured: SleeveParameters,
     geometry_mode: SleeveGeometryMode,
 ) -> GuideSleeve:
-    """估计一个导柱的位姿并装入配置尺寸。
+    """估计一个导管的位姿并装入配置尺寸。
 
     参数:
-        candidate: 已定向导套候选。
-        other: 另一个导套候选。
-        index: 输出导套编号。
-        configured: 病例配置中的导柱几何参数。
+        candidate: 已定向导管候选。
+        other: 另一个导管候选。
+        index: 输出导管编号。
+        configured: 病例配置中的导管几何参数。
 
     返回:
-        包含 STL 位姿和配置尺寸的导柱。
+        包含 STL 位姿和配置尺寸的导管。
     """
+
+    from twin_guide.blender.sleeve_estimation_adapter import mesh_object_to_triangle_data
+    from twin_guide.blender.sleeve_reconstruction import (
+        validate_sleeve_boolean_parameters,
+    )
 
     source = mesh_object_to_triangle_data(candidate.guide_mesh)
     try:
         pose = estimate_sleeve_axis(source)
     except ValueError as error:
-        raise GeometryError(f"无法估计导柱分量 {candidate.component_index}：{error}") from error
+        raise GeometryError(f"无法估计导管分量 {candidate.component_index}：{error}") from error
     if geometry_mode is SleeveGeometryMode.INPUT:
         axial_coordinates = tuple(
             (point - pose.axis_origin).dot(pose.axis)
@@ -260,7 +264,7 @@ def _build_sleeve(
         sleeve_height = axial_max - axial_min
         if sleeve_height <= 1e-6:
             raise GeometryError(
-                f"导柱分量 {candidate.component_index} 的输入轴向范围退化"
+                f"导管分量 {candidate.component_index} 的输入轴向范围退化"
             )
         axis_origin = pose.axis_origin + pose.axis * axial_min
     else:
@@ -293,22 +297,22 @@ def _build_sleeve(
 
 
 def recognize_and_build_sleeves(inputs: SleeveGenerationInputs) -> SleeveGenerationResult:
-    """识别并重建两个导套。
+    """识别并重建两个导管。
 
     参数:
         inputs: 装配体连通分量、牙科导板表面样本和中心。
 
     返回:
-        按牙科导板横向排序的两个导套及牙科导板局部坐标系。
+        按牙科导板横向排序的两个导管及牙科导板局部坐标系。
 
     异常:
         GeometryError: 可用连通分量不足、牙科导板标架退化，
-            或配置尺寸无法构成闭合导柱。
+            或配置尺寸无法构成闭合导管。
 
     算法说明:
         算法先对每个连通分量做表面采样，然后枚举分量对，
-        按已知导柱高度、外径和轴线平行程度排序。对选中的两个候选，
-        从 STL 估计轴线，再将两个 C 口定向到对侧导柱并与配置尺寸组合。
+        按已知导管高度、外径和轴线平行程度排序。对选中的两个候选，
+        从 STL 估计轴线，再将两个 C 口定向到对侧导管并与配置尺寸组合。
         本函数不依赖牙位、切窗或连建结果。
     """
 

@@ -3,8 +3,8 @@ from __future__ import annotations
 import unittest
 
 from twin_guide.errors import GeometryError
-from twin_guide.guide_terminal_u_extension import _turnaround_distal_positions
 from twin_guide.geometry import Vec3
+from twin_guide.guide_terminal_u_extension import _turnaround_distal_positions
 from twin_guide.press_beam_points import _farthest_point_from_two_anchors
 
 

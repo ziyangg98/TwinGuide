@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,15 +13,14 @@ import numpy as np
 import yaml
 from scipy.spatial import cKDTree
 
-from .enhanced_projection import rasterise_crown_triangles
-from .fdi import validate_anatomy
-from .pipeline import estimate_frame_and_arch, load_mesh, resolve_case_path
-
 from .arch_progress_core_grouping import (
     CORE_GROUPING_POLICIES,
     DEFAULT_POLICY,
     select_crown_core_candidates,
 )
+from .enhanced_projection import rasterise_crown_triangles
+from .fdi import validate_anatomy
+from .pipeline import estimate_frame_and_arch, load_mesh, resolve_case_path
 
 
 def _extent(maps):
@@ -114,8 +112,8 @@ def _physical_core_diagnostics(
         policy=core_grouping_policy,
     )
     return {
-        "candidate_peak_count": int(len(candidates)),
-        "physical_core_count": int(len(groups)),
+        "candidate_peak_count": len(candidates),
+        "physical_core_count": len(groups),
         "physical_core_centres_LR_AP_mm": [
             list(group.center_lr_ap_mm) for group in groups
         ],

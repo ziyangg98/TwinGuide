@@ -5,8 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -343,7 +342,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     instance_analysis = {"instances": preview_instances, "assignment": {}, "candidates": []}
     report = {
         "schema_version": "5.1-physical-guide-coverage",
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "status": (
             "tooth_guide_mapping_complete"
             if all(qa.values())

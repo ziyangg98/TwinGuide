@@ -1,15 +1,13 @@
-import json
 import math
 import tempfile
 import unittest
 from pathlib import Path
 
+import yaml
+
 from twin_guide.config import (
-    AlgorithmProfile,
     CaseConfig,
-    ConnectorMode,
     Jaw,
-    ObservationWindowMode,
     SleeveGeometryMode,
     case_occlusal_axis,
     require_production_review,
@@ -66,12 +64,87 @@ class CaseConfigTests(unittest.TestCase):
         }
 
     def _write_config(self, config_data: dict[str, object]) -> Path:
-        config_path = self.case_directory / "case.json"
-        config_path.write_text(json.dumps(config_data), encoding="utf-8")
+        config_path = self.case_directory / "case.yaml"
+        existing: dict[str, object] = {}
+        if config_path.exists():
+            loaded = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                existing = loaded
+        inputs = config_data["inputs"]
+        assert isinstance(inputs, dict)
+        sleeve_paths = inputs.get("guide_sleeve_assemblies")
+        if sleeve_paths is None:
+            sleeve_paths = [inputs["guide_sleeve_assembly"]]
+        assert isinstance(sleeve_paths, list)
+        runtime = {
+            key: config_data[key]
+            for key in (
+                "sleeve",
+                "geometry",
+                "windows",
+                "handpiece_avoidance",
+                "press_beam",
+                "render",
+            )
+            if key in config_data and config_data[key] is not None
+        }
+        design = {
+            "sleeve_geometry": {
+                "mode": config_data.get("sleeve_geometry_mode", "generated")
+            },
+            **dict(existing.get("design", {})),
+        }
+        for key in (
+            "guide_anchors",
+            "guide_component_bridge",
+            "guide_terminal_u_extension",
+        ):
+            if config_data.get(key) is not None:
+                design[key] = config_data[key]
+        jaw = config_data.get("jaw")
+        anatomy_jaw = {
+            "upper": "maxillary",
+            "lower": "mandibular",
+        }.get(jaw, jaw)
+        anatomy = {
+            "present_teeth": [],
+            "missing_teeth": [],
+            "excluded_teeth": [],
+            **dict(existing.get("anatomy", {})),
+        }
+        if anatomy_jaw is not None:
+            anatomy["jaw"] = anatomy_jaw
+        content = {
+            "schema_version": "1.0",
+            "case": {"id": config_data.get("case_id", "case_01")},
+            "objects": {
+                "dental": {"path": inputs["patient_dentition"]},
+                "guide": {"path": inputs["template"]},
+                "sleeve": {
+                    "files": [
+                        {"id": f"sleeve_{index:02d}", "path": value}
+                        for index, value in enumerate(sleeve_paths, start=1)
+                    ],
+                    "active_ids": [
+                        f"sleeve_{index:02d}"
+                        for index in range(1, len(sleeve_paths) + 1)
+                    ],
+                },
+            },
+            "runtime": runtime,
+            "anatomy": anatomy,
+            "design": design,
+            "planning": existing.get("planning", {}),
+            "review": existing.get("review", {}),
+        }
+        config_path.write_text(
+            yaml.safe_dump(content, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
         return config_path
 
     def test_loads_and_resolves_valid_configuration(self):
-        config = CaseConfig.from_json(self._write_config(self._valid_config_data()))
+        config = CaseConfig.from_yaml(self._write_config(self._valid_config_data()))
 
         self.assertEqual(config.case_id, "case_01")
         self.assertEqual(config.jaw.value, "upper")
@@ -82,12 +155,6 @@ class CaseConfigTests(unittest.TestCase):
         self.assertEqual(config.sleeve.outer_diameter_mm, 4.3)
         self.assertEqual(config.sleeve.outer_radius_mm, 2.15)
         self.assertIs(config.sleeve_geometry_mode, SleeveGeometryMode.GENERATED)
-        self.assertIs(config.algorithms.profile, AlgorithmProfile.CURRENT)
-        self.assertIs(
-            config.algorithms.observation_window,
-            ObservationWindowMode.FDI_AXIS_SWEEP,
-        )
-        self.assertIs(config.algorithms.connector, ConnectorMode.CONTINUOUS_FRAME)
         self.assertEqual(config.sleeve.height_mm, 16.373)
         self.assertEqual(config.sleeve.platform_width_mm, 2.036)
         self.assertEqual(config.sleeve.platform_height_mm, 9.875)
@@ -113,8 +180,14 @@ class CaseConfigTests(unittest.TestCase):
             config.inputs.patient_dentition,
             (self.case_directory / "patient_dentition.stl").resolve(),
         )
-        self.assertEqual(config.output_directory, (self.case_directory / "output").resolve())
-        self.assertIsNone(config.tooth_identification)
+        self.assertEqual(
+            config.output_directory,
+            Path(__file__).resolve().parents[2] / "output" / "case_01",
+        )
+        self.assertEqual(
+            config.tooth_identification.case_yaml,
+            (self.case_directory / "case.yaml").resolve(),
+        )
         self.assertEqual(config.handpiece_avoidance, ())
         self.assertEqual(config.guide_anchors.mode.value, "nearest")
         self.assertEqual(config.guide_anchors.stations, ())
@@ -135,6 +208,28 @@ class CaseConfigTests(unittest.TestCase):
             (0.5, 1.0, 2.0),
         )
 
+    def test_rejects_input_path_outside_case_directory(self):
+        """病例输入不得通过上级目录跳出病例边界。"""
+
+        config_data = self._valid_config_data()
+        inputs = config_data["inputs"]
+        self.assertIsInstance(inputs, dict)
+        inputs["template"] = "../outside.stl"
+
+        with self.assertRaisesRegex(ConfigurationError, "必须位于病例目录内"):
+            CaseConfig.from_yaml(self._write_config(config_data))
+
+    def test_rejects_absolute_input_path(self):
+        """病例 YAML 的输入路径必须保持可移植的相对形式。"""
+
+        config_data = self._valid_config_data()
+        inputs = config_data["inputs"]
+        self.assertIsInstance(inputs, dict)
+        inputs["template"] = str((self.case_directory / "template.stl").resolve())
+
+        with self.assertRaisesRegex(ConfigurationError, "必须使用相对病例目录"):
+            CaseConfig.from_yaml(self._write_config(config_data))
+
     def test_loads_input_sleeve_geometry_mode_from_case_yaml(self):
         (self.case_directory / "case.yaml").write_text(
             """
@@ -147,7 +242,7 @@ design:
         config_data = self._valid_config_data()
         config_data["tooth_identification"] = {"case_yaml": "case.yaml"}
 
-        config = CaseConfig.from_json(self._write_config(config_data))
+        config = CaseConfig.from_yaml(self._write_config(config_data))
 
         self.assertIs(config.sleeve_geometry_mode, SleeveGeometryMode.INPUT)
 
@@ -164,65 +259,21 @@ design:
         config_data["tooth_identification"] = {"case_yaml": "case.yaml"}
 
         with self.assertRaisesRegex(ConfigurationError, "generated 或 input"):
-            CaseConfig.from_json(self._write_config(config_data))
+            CaseConfig.from_yaml(self._write_config(config_data))
 
-    def test_loads_legacy_merge_algorithm_profile_from_case_yaml(self):
-        (self.case_directory / "case.yaml").write_text(
-            """
-design:
-  algorithms:
-    profile: legacy_merge
-""",
+    def test_rejects_missing_sleeve_geometry_mode(self):
+        """导管实体来源不得依赖兼容默认值。"""
+
+        path = self._write_config(self._valid_config_data())
+        content = yaml.safe_load(path.read_text(encoding="utf-8"))
+        del content["design"]["sleeve_geometry"]
+        path.write_text(
+            yaml.safe_dump(content, allow_unicode=True, sort_keys=False),
             encoding="utf-8",
         )
-        config_data = self._valid_config_data()
-        config_data["tooth_identification"] = {"case_yaml": "case.yaml"}
 
-        config = CaseConfig.from_json(self._write_config(config_data))
-
-        self.assertIs(config.algorithms.profile, AlgorithmProfile.LEGACY_MERGE)
-        self.assertIs(
-            config.algorithms.observation_window,
-            ObservationWindowMode.SURFACE_NOTCH,
-        )
-        self.assertIs(config.algorithms.connector, ConnectorMode.INDEPENDENT_BEZIER)
-
-    def test_algorithm_profile_allows_explicit_stage_override(self):
-        (self.case_directory / "case.yaml").write_text(
-            """
-design:
-  algorithms:
-    profile: legacy_merge
-    observation_window: fdi_axis_sweep
-    connector: continuous_frame
-""",
-            encoding="utf-8",
-        )
-        config_data = self._valid_config_data()
-        config_data["tooth_identification"] = {"case_yaml": "case.yaml"}
-
-        config = CaseConfig.from_json(self._write_config(config_data))
-
-        self.assertIs(
-            config.algorithms.observation_window,
-            ObservationWindowMode.FDI_AXIS_SWEEP,
-        )
-        self.assertIs(config.algorithms.connector, ConnectorMode.CONTINUOUS_FRAME)
-
-    def test_rejects_unknown_algorithm_profile(self):
-        (self.case_directory / "case.yaml").write_text(
-            """
-design:
-  algorithms:
-    profile: experimental_unknown
-""",
-            encoding="utf-8",
-        )
-        config_data = self._valid_config_data()
-        config_data["tooth_identification"] = {"case_yaml": "case.yaml"}
-
-        with self.assertRaisesRegex(ConfigurationError, "current 或 legacy_merge"):
-            CaseConfig.from_json(self._write_config(config_data))
+        with self.assertRaisesRegex(ConfigurationError, "sleeve_geometry"):
+            CaseConfig.from_yaml(path)
 
     def test_connector_diameter_defaults_to_4_60_mm(self):
         config_data = self._valid_config_data()
@@ -230,7 +281,7 @@ design:
         self.assertIsInstance(geometry_data, dict)
         del geometry_data["connector_diameter_mm"]
 
-        config = CaseConfig.from_json(self._write_config(config_data))
+        config = CaseConfig.from_yaml(self._write_config(config_data))
 
         self.assertEqual(config.geometry.connector_diameter_mm, 4.60)
         self.assertEqual(config.geometry.connector_radius_mm, 2.30)
@@ -241,12 +292,12 @@ design:
         self.assertIsInstance(windows_data, dict)
         del windows_data["operation_bitangent_margin_mm"]
 
-        config = CaseConfig.from_json(self._write_config(config_data))
+        config = CaseConfig.from_yaml(self._write_config(config_data))
 
         self.assertEqual(config.windows.operation_bitangent_margin_mm, 3.0)
 
-    def test_case_yaml_operation_window_parameters_override_json_defaults(self):
-        """病例 YAML 是操作窗范围参数的正式病例级来源。"""
+    def test_maps_planning_operation_window_parameters(self):
+        """同一 YAML 的规划字段应映射为操作窗参数。"""
 
         (self.case_directory / "case.yaml").write_text(
             """
@@ -268,7 +319,7 @@ planning:
         config_data = self._valid_config_data()
         config_data["tooth_identification"] = {"case_yaml": "case.yaml"}
 
-        config = CaseConfig.from_json(self._write_config(config_data))
+        config = CaseConfig.from_yaml(self._write_config(config_data))
 
         self.assertEqual(config.windows.operation_tangent_margin_mm, 0.75)
         self.assertEqual(config.windows.operation_bitangent_margin_mm, 1.50)
@@ -289,7 +340,7 @@ planning:
         config_data["tooth_identification"] = {"case_yaml": "case.yaml"}
 
         with self.assertRaisesRegex(ConfigurationError, "mode 当前仅支持"):
-            CaseConfig.from_json(self._write_config(config_data))
+            CaseConfig.from_yaml(self._write_config(config_data))
 
     def test_loads_optional_handpiece_avoidance(self):
         config_data = self._valid_config_data()
@@ -298,7 +349,7 @@ planning:
             "stop_report": "stop_report.json",
         }
 
-        config = CaseConfig.from_json(self._write_config(config_data))
+        config = CaseConfig.from_yaml(self._write_config(config_data))
 
         self.assertEqual(len(config.handpiece_avoidance), 1)
         parameters = config.handpiece_avoidance[0]
@@ -323,7 +374,7 @@ planning:
             },
         ]
 
-        config = CaseConfig.from_json(self._write_config(config_data))
+        config = CaseConfig.from_yaml(self._write_config(config_data))
 
         self.assertEqual(
             tuple(item.avoidance_id for item in config.handpiece_avoidance),
@@ -339,7 +390,7 @@ planning:
         }
 
         with self.assertRaisesRegex(ConfigurationError, "奇数"):
-            CaseConfig.from_json(self._write_config(config_data))
+            CaseConfig.from_yaml(self._write_config(config_data))
 
     def test_loads_optional_unified_tooth_identification_case(self):
         """解析统一牙位识别与导板映射使用的病例 YAML。"""
@@ -350,7 +401,7 @@ planning:
             "case_yaml": "case.yaml",
         }
 
-        config = CaseConfig.from_json(self._write_config(config_data))
+        config = CaseConfig.from_yaml(self._write_config(config_data))
 
         self.assertIsNotNone(config.tooth_identification)
         assert config.tooth_identification is not None
@@ -373,7 +424,7 @@ anatomy:
         config_data = self._valid_config_data()
         config_data["tooth_identification"] = {"case_yaml": "case.yaml"}
 
-        config = CaseConfig.from_json(self._write_config(config_data))
+        config = CaseConfig.from_yaml(self._write_config(config_data))
 
         self.assertEqual(case_occlusal_axis(config), (0.0, 0.0, -1.0))
 
@@ -389,7 +440,7 @@ anatomy:
         config_data = self._valid_config_data()
         config_data["tooth_identification"] = {"case_yaml": "case.yaml"}
 
-        config = CaseConfig.from_json(self._write_config(config_data))
+        config = CaseConfig.from_yaml(self._write_config(config_data))
 
         self.assertEqual(case_occlusal_axis(config), (0.0, 0.0, 1.0))
 
@@ -406,7 +457,7 @@ review:
         )
         config_data = self._valid_config_data()
         config_data["tooth_identification"] = {"case_yaml": "case.yaml"}
-        config = CaseConfig.from_json(self._write_config(config_data))
+        config = CaseConfig.from_yaml(self._write_config(config_data))
 
         with self.assertRaisesRegex(ConfigurationError, "anatomy.review_status"):
             require_production_review(config)
@@ -424,7 +475,7 @@ review:
         )
         config_data = self._valid_config_data()
         config_data["tooth_identification"] = {"case_yaml": "case.yaml"}
-        config = CaseConfig.from_json(self._write_config(config_data))
+        config = CaseConfig.from_yaml(self._write_config(config_data))
 
         require_production_review(config)
 
@@ -444,7 +495,7 @@ review:
             ],
         }
 
-        config = CaseConfig.from_json(self._write_config(config_data))
+        config = CaseConfig.from_yaml(self._write_config(config_data))
 
         self.assertEqual(config.guide_anchors.mode.value, "tooth_section_trajectory")
         self.assertEqual(
@@ -478,7 +529,7 @@ design:
         config_data = self._valid_config_data()
         config_data["tooth_identification"] = {"case_yaml": "case.yaml"}
 
-        config = CaseConfig.from_json(self._write_config(config_data))
+        config = CaseConfig.from_yaml(self._write_config(config_data))
 
         self.assertEqual(config.guide_anchors.stations, ())
         self.assertEqual(
@@ -533,10 +584,10 @@ design:
         }
 
         with self.assertRaisesRegex(ConfigurationError, "各配置一个 U 侧和背 U 侧"):
-            CaseConfig.from_json(self._write_config(config_data))
+            CaseConfig.from_yaml(self._write_config(config_data))
 
-    def test_loads_anchor_design_from_case_yaml_and_merges_engineering_fields(self):
-        """YAML 提供锚点语义，JSON 保留按压梁工程参数。"""
+    def test_loads_design_semantics_and_runtime_engineering_fields(self):
+        """同一 YAML 可分组表达锚点语义与按压梁工程参数。"""
 
         (self.case_directory / "case.yaml").write_text(
             """
@@ -564,7 +615,7 @@ design:
             "junction_axial_lift_mm": 2.0,
         }
 
-        config = CaseConfig.from_json(self._write_config(config_data))
+        config = CaseConfig.from_yaml(self._write_config(config_data))
 
         self.assertEqual(config.guide_anchors.mode.value, "tooth_section_trajectory")
         self.assertEqual(
@@ -580,41 +631,18 @@ design:
             (75.0, 45.0, 75.0),
         )
 
-    def test_rejects_duplicate_anchor_fields_in_json_and_case_yaml(self):
-        """同一设计字段不允许存在两个配置来源。"""
-
-        (self.case_directory / "case.yaml").write_text(
-            """
-design:
-  guide_anchors:
-    mode: tooth_section_trajectory
-""",
-            encoding="utf-8",
-        )
-        config_data = self._valid_config_data()
-        config_data["tooth_identification"] = {"case_yaml": "case.yaml"}
-        config_data["guide_anchors"] = {"mode": "nearest"}
-
-        with self.assertRaisesRegex(ConfigurationError, "JSON.*case.yaml.*mode"):
-            CaseConfig.from_json(self._write_config(config_data))
-
     def test_rejects_duplicate_keys_inside_case_yaml(self):
         """严格 YAML 加载器不得静默采用同名键的最后一个值。"""
 
-        (self.case_directory / "case.yaml").write_text(
-            """
-design:
-  press_beam:
-    mode: disabled
-    mode: three_tooth_anchors_y
-""",
-            encoding="utf-8",
+        path = self._write_config(self._valid_config_data())
+        text = path.read_text(encoding="utf-8").replace(
+            "  id: case_01\n",
+            "  id: case_01\n  id: duplicate\n",
         )
-        config_data = self._valid_config_data()
-        config_data["tooth_identification"] = {"case_yaml": "case.yaml"}
+        path.write_text(text, encoding="utf-8")
 
-        with self.assertRaisesRegex(ConfigurationError, "duplicate key.*mode"):
-            CaseConfig.from_json(self._write_config(config_data))
+        with self.assertRaisesRegex(ConfigurationError, "duplicate key.*id"):
+            CaseConfig.from_yaml(path)
 
     def test_rejects_tooth_section_mode_without_two_stations(self):
         config_data = self._valid_config_data()
@@ -624,7 +652,7 @@ design:
         }
 
         with self.assertRaisesRegex(ConfigurationError, "必须配置 2 个端部"):
-            CaseConfig.from_json(self._write_config(config_data))
+            CaseConfig.from_yaml(self._write_config(config_data))
 
     def test_loads_inner_sleeve_upper_y_press_beam(self):
         """按压梁只配置两个牙位，导管由运行时自动选择牙弓内侧者。"""
@@ -662,7 +690,7 @@ design:
             },
         }
 
-        config = CaseConfig.from_json(self._write_config(config_data))
+        config = CaseConfig.from_yaml(self._write_config(config_data))
 
         self.assertEqual(config.press_beam.mode.value, "inner_sleeve_upper_y")
         self.assertEqual(
@@ -693,7 +721,7 @@ design:
         }
 
         with self.assertRaisesRegex(ConfigurationError, "必须配置两个牙位站位"):
-            CaseConfig.from_json(self._write_config(config_data))
+            CaseConfig.from_yaml(self._write_config(config_data))
 
     def test_loads_three_tooth_anchor_y_press_beam(self):
         """全牙位 Y 模式必须解析三个站位及牙合方向抬高距离。"""
@@ -723,7 +751,7 @@ design:
             ],
         }
 
-        config = CaseConfig.from_json(self._write_config(config_data))
+        config = CaseConfig.from_yaml(self._write_config(config_data))
 
         self.assertEqual(config.press_beam.mode.value, "three_tooth_anchors_y")
         self.assertEqual(
@@ -751,7 +779,7 @@ design:
         }
 
         with self.assertRaisesRegex(ConfigurationError, "显式配置 ray_angle_degrees"):
-            CaseConfig.from_json(self._write_config(config_data))
+            CaseConfig.from_yaml(self._write_config(config_data))
 
     def test_accepts_single_tooth_press_beam_anchor(self):
         (self.case_directory / "case.yaml").write_text("case: {}\n", encoding="utf-8")
@@ -773,7 +801,7 @@ design:
             ],
         }
 
-        config = CaseConfig.from_json(self._write_config(config_data))
+        config = CaseConfig.from_yaml(self._write_config(config_data))
 
         self.assertEqual(
             tuple(station.fdis for station in config.press_beam.stations),
@@ -806,7 +834,7 @@ anatomy:
             },
         }
 
-        config = CaseConfig.from_json(self._write_config(config_data))
+        config = CaseConfig.from_yaml(self._write_config(config_data))
 
         self.assertEqual(
             config.guide_anchors.mode.value,
@@ -854,7 +882,7 @@ anatomy:
             },
         }
 
-        config = CaseConfig.from_json(self._write_config(config_data))
+        config = CaseConfig.from_yaml(self._write_config(config_data))
 
         self.assertEqual(
             config.guide_anchors.mode.value,
@@ -864,19 +892,6 @@ anatomy:
             config.guide_anchors.terminal_distal_common_node.implant_fdis,
             (16, 17),
         )
-
-    def test_rejects_tooth_guide_anchors_without_tooth_identification(self):
-        config_data = self._valid_config_data()
-        config_data["guide_anchors"] = {
-            "mode": "tooth_section_trajectory",
-            "stations": [
-                {"type": "tooth_pair_midpoint", "fdis": [16, 15]},
-                {"type": "tooth_pair_midpoint", "fdis": [12, 11]},
-            ],
-        }
-
-        with self.assertRaisesRegex(ConfigurationError, "tooth_identification"):
-            CaseConfig.from_json(self._write_config(config_data))
 
     def test_rejects_nonadjacent_terminal_distal_reference(self):
         (self.case_directory / "case.yaml").write_text(
@@ -901,7 +916,7 @@ anatomy:
         }
 
         with self.assertRaisesRegex(ConfigurationError, "相邻关系"):
-            CaseConfig.from_json(self._write_config(config_data))
+            CaseConfig.from_yaml(self._write_config(config_data))
 
     def test_rejects_terminal_distal_common_node_with_terminal_u_extension(self):
         (self.case_directory / "case.yaml").write_text(
@@ -934,7 +949,7 @@ anatomy:
         }
 
         with self.assertRaisesRegex(ConfigurationError, "不得在同一病例"):
-            CaseConfig.from_json(self._write_config(config_data))
+            CaseConfig.from_yaml(self._write_config(config_data))
 
     def test_rejects_terminal_distal_mode_without_terminal_parameters(self):
         config_data = self._valid_config_data()
@@ -946,7 +961,7 @@ anatomy:
         }
 
         with self.assertRaisesRegex(ConfigurationError, "terminal_distal_common_node"):
-            CaseConfig.from_json(self._write_config(config_data))
+            CaseConfig.from_yaml(self._write_config(config_data))
 
     def test_rejects_three_tooth_y_without_three_stations(self):
         config_data = self._valid_config_data()
@@ -959,7 +974,7 @@ anatomy:
         }
 
         with self.assertRaisesRegex(ConfigurationError, "必须配置三个牙位站位"):
-            CaseConfig.from_json(self._write_config(config_data))
+            CaseConfig.from_yaml(self._write_config(config_data))
 
     def test_loads_terminal_tooth_wrapping_u_extension_from_case_yaml(self):
         """病例 YAML 可完整定义导板末端绕牙 U 型延伸梁。"""
@@ -991,7 +1006,7 @@ design:
         config_data = self._valid_config_data()
         config_data["tooth_identification"] = {"case_yaml": "case.yaml"}
 
-        config = CaseConfig.from_json(self._write_config(config_data))
+        config = CaseConfig.from_yaml(self._write_config(config_data))
 
         extension = config.guide_terminal_u_extension
         self.assertTrue(extension.enabled)
@@ -1023,7 +1038,7 @@ anatomy:
         }
 
         with self.assertRaisesRegex(ConfigurationError, "不是当前牙列末端"):
-            CaseConfig.from_json(self._write_config(config_data))
+            CaseConfig.from_yaml(self._write_config(config_data))
 
     def test_rejects_terminal_u_turn_depth_smaller_than_radius(self):
         config_data = self._valid_config_data()
@@ -1038,7 +1053,7 @@ anatomy:
         }
 
         with self.assertRaisesRegex(ConfigurationError, "不得小于梁半径"):
-            CaseConfig.from_json(self._write_config(config_data))
+            CaseConfig.from_yaml(self._write_config(config_data))
 
     def test_loads_terminal_u_extension_anchor_y_from_case_yaml(self):
         (self.case_directory / "case.yaml").write_text(
@@ -1073,7 +1088,7 @@ design:
         config_data = self._valid_config_data()
         config_data["tooth_identification"] = {"case_yaml": "case.yaml"}
 
-        config = CaseConfig.from_json(self._write_config(config_data))
+        config = CaseConfig.from_yaml(self._write_config(config_data))
 
         self.assertEqual(
             config.press_beam.mode.value, "terminal_u_extension_anchor_y"
@@ -1096,7 +1111,7 @@ design:
         windows["observation_local_failure_drop_targets_mm"] = [0.5, 0.5, 2.0]
 
         with self.assertRaisesRegex(ConfigurationError, "必须严格递增"):
-            CaseConfig.from_json(self._write_config(config_data))
+            CaseConfig.from_yaml(self._write_config(config_data))
 
     def test_rejects_unknown_fields(self):
         config_data = self._valid_config_data()
@@ -1105,18 +1120,18 @@ design:
         geometry_data["platform_height_mm"] = 4.0
 
         with self.assertRaisesRegex(ConfigurationError, "geometry 包含未知字段"):
-            CaseConfig.from_json(self._write_config(config_data))
+            CaseConfig.from_yaml(self._write_config(config_data))
 
     def test_rejects_missing_or_invalid_jaw(self):
         config_data = self._valid_config_data()
         del config_data["jaw"]
         with self.assertRaisesRegex(ConfigurationError, "缺少必填字段：jaw"):
-            CaseConfig.from_json(self._write_config(config_data))
+            CaseConfig.from_yaml(self._write_config(config_data))
 
         config_data = self._valid_config_data()
         config_data["jaw"] = "maxilla"
-        with self.assertRaisesRegex(ConfigurationError, "upper.*lower"):
-            CaseConfig.from_json(self._write_config(config_data))
+        with self.assertRaisesRegex(ConfigurationError, "maxillary.*mandibular"):
+            CaseConfig.from_yaml(self._write_config(config_data))
 
     def test_rejects_invalid_numbers(self):
         config_data = self._valid_config_data()
@@ -1124,7 +1139,7 @@ design:
         self.assertIsInstance(geometry_data, dict)
         geometry_data["fusion_voxel_size_mm"] = math.inf
         with self.assertRaisesRegex(ConfigurationError, "必须为有限数"):
-            CaseConfig.from_json(self._write_config(config_data))
+            CaseConfig.from_yaml(self._write_config(config_data))
 
     def test_rejects_outer_guide_diameter_not_larger_than_inner(self):
         config_data = self._valid_config_data()
@@ -1133,7 +1148,7 @@ design:
         sleeve_data["outer_diameter_mm"] = 2.10
 
         with self.assertRaisesRegex(ConfigurationError, "必须大于"):
-            CaseConfig.from_json(self._write_config(config_data))
+            CaseConfig.from_yaml(self._write_config(config_data))
 
     def test_rejects_missing_sleeve_parameter(self):
         config_data = self._valid_config_data()
@@ -1142,7 +1157,7 @@ design:
         del sleeve_data["height_mm"]
 
         with self.assertRaisesRegex(ConfigurationError, "缺少必填字段：height_mm"):
-            CaseConfig.from_json(self._write_config(config_data))
+            CaseConfig.from_yaml(self._write_config(config_data))
 
 
 if __name__ == "__main__":

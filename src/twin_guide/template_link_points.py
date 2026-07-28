@@ -1,4 +1,4 @@
-"""导套—牙科导板联建选点。"""
+"""导管—牙科导板联建选点。"""
 
 from __future__ import annotations
 
@@ -15,8 +15,8 @@ from twin_guide.template_anchors import (
     TemplatePointSelectionConfig,
     select_template_points,
 )
-from twin_guide.types import SleeveGenerationResult
 from twin_guide.tooth_identification import ToothIdentificationResult
+from twin_guide.types import SleeveGenerationResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,7 +25,7 @@ class TemplateLinkPointContext:
 
     属性:
         case: 牙科导板表面采样和局部坐标系。
-        sleeves: 第 1 步导套输出。
+        sleeves: 第 1 步导管输出。
         cutouts: 第 3 步通道与窗口计划。
     """
 
@@ -37,10 +37,10 @@ class TemplateLinkPointContext:
 
 @dataclass(frozen=True, slots=True)
 class TemplateLinkPointPlan:
-    """导套侧锚点和牙科导板侧锚点。
+    """导管侧锚点和牙科导板侧锚点。
 
     属性:
-        sleeve_anchors: 导套侧上下锚点。
+        sleeve_anchors: 导管侧上下锚点。
         template_points: 牙科导板侧左右锚点。
     """
 
@@ -59,10 +59,10 @@ def select_template_link_points(
         config: 牙科导板侧选点净距、间距和搜索数量配置。
 
     返回:
-        导套侧锚点和牙科导板侧锚点。
+        导管侧锚点和牙科导板侧锚点。
 
     算法说明:
-        依次计算导套侧锚点和牙科导板侧锚点。
+        依次计算导管侧锚点和牙科导板侧锚点。
     """
 
     sleeve_anchors = select_sleeve_anchors(

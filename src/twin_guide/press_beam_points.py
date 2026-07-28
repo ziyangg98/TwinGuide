@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import math
 from dataclasses import dataclass
 from enum import StrEnum
@@ -243,7 +244,7 @@ def _farthest_point_from_two_anchors(
         raise GeometryError("末端 U 型延伸梁候选段不足两个中心线点")
     lengths = tuple(
         first.distance_to(second)
-        for first, second in zip(points[:-1], points[1:], strict=True)
+        for first, second in itertools.pairwise(points)
     )
     total_length = sum(lengths)
     if total_length <= start_margin_mm + end_margin_mm:
@@ -304,7 +305,10 @@ def _farthest_point_from_two_anchors(
     return best[2], best[3], best[4], best[5]
 
 
-def _extension_segment_centerline(context: GenerationContext, segment: str):
+def _extension_segment_centerline(
+    context: GenerationContext,
+    segment: str,
+) -> tuple[Vec3, ...]:
     """按配置名称取得末端 U 型延伸梁的候选中心线段。"""
 
     extension = context.guide_terminal_u_extension
