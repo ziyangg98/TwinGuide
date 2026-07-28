@@ -49,18 +49,22 @@ YAML 不直接生成网格，它表达“这个病例是什么”和“人工希
 当前实验数据使用统一目录：
 
 ```text
-data/cases/single/tooth-<FDI>/
+../data/cases/single/tooth-<FDI>/
   case.yaml
   input/
-    dentition.stl
-    guide-template.stl
-    sleeve-assembly.stl
-    handpiece-NN.stl          # 可选
+    <来源牙列文件>.stl
+    <来源导板文件>.stl
+    <来源导管装配体>.stl
+    <来源手机文件>.stl        # 可选
     handpiece-stop-NN.json    # 可选
-    cutter.stl                # 可选
+  design/                     # 设计示意资料
+  working/                    # 工程、中间文件和可选裁切参考
+  output/                     # 参考或目标结果
 ```
 
-原“初始案例”实际为缺失牙位 47 的黄金回归病例，因此规范目录为 `tooth-47`。生成结果只写入 `output/`，不再与输入病例混放。
+STL 保留来源文件名，文件角色由 JSON 与 `case.yaml` 的显式路径表达。原“初始案例”
+实际为缺失牙位 47 的黄金回归病例，因此病例目录为 `tooth-47`。程序生成结果写入
+代码目录的 `output/`；病例自带的参考结果继续保存在病例 `output/` 中。
 
 ### 2.2 JSON：可执行工程配置
 

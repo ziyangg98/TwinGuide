@@ -12,16 +12,17 @@ from twin_guide.config import CaseConfig
 
 
 class CaseDataLayoutTests(unittest.TestCase):
-    """防止病例输入重新依赖项目外部的旧中文目录。"""
+    """检查仓库外病例数据中的规范入口与来源文件映射。"""
 
     @classmethod
     def setUpClass(cls) -> None:
         cls.project = Path(__file__).resolve().parents[2]
-        cls.dataset = cls.project / "data/cases/single"
+        cls.data_root = cls.project.parent / "data"
+        cls.dataset = cls.data_root / "cases/single"
         cls.case_names = tuple(
             f"tooth-{value}" for value in (11, 12, 13, 14, 15, 16, 17, 47)
         )
-        cls.multiple_dataset = cls.project / "data/cases/multiple"
+        cls.multiple_dataset = cls.data_root / "cases/multiple"
         cls.multiple_case_names = (
             "teeth-12-13",
             "teeth-14-15",

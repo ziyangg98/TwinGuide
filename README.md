@@ -37,7 +37,7 @@ TwinGuide 面向双导套牙科导板的自动化建模，负责输入导管识�
 | 配置 | 主要职责 |
 | --- | --- |
 | `examples/case-*.json` | 输入网格路径、导管尺寸、融合精度、通用几何参数、渲染尺寸和输出目录 |
-| `data/cases/<cohort>/<case>/case.yaml` | 上下颌与 FDI 牙位、种植位和对象对应关系、导管使用模式、操作窗/观察窗、每个导板锚点、按压梁、特殊拓扑和人工审核状态 |
+| `../data/cases/<cohort>/<case>/case.yaml` | 仓库外病例数据：上下颌与 FDI 牙位、对象对应关系、导管使用模式、窗口、锚点、按压梁、特殊拓扑和人工审核状态 |
 
 牙位以人工提供的信息为准。`present_teeth`、`missing_teeth` 和
 `excluded_teeth` 必须互斥并符合相应牙颌的 FDI 编码：上颌为
@@ -46,8 +46,8 @@ TwinGuide 面向双导套牙科导板的自动化建模，负责输入导管识�
 
 规范病例目录支持单颗和多颗种植位：
 
-- `data/cases/single/tooth-<FDI>/`
-- `data/cases/multiple/teeth-<FDI>-<FDI>/`
+- `../data/cases/single/tooth-<FDI>/`
+- `../data/cases/multiple/teeth-<FDI>-<FDI>/`
 
 每个目录包含 `case.yaml` 与 `input/`；JSON 中的相对路径以 JSON 文件所在目录为基准。
 
@@ -221,7 +221,7 @@ TwinGuide 支持 Python 3.13–3.14，网格建模使用 Blender 5.2 LTS。
 | `src/twin_guide/` | 七阶段建模、实体生成、验证和 CLI |
 | `src/twin_guide/tooth_mapping/` | 项目内置牙位识别与导板映射 |
 | `src/twin_guide/observation_window_engine.py` | FDI 轴扫掠观察窗核心算法 |
-| `data/cases/` | 单颗/多颗规范病例、YAML 和输入数据 |
+| `../data/cases/` | 仓库外单颗/多颗病例、YAML、原始资料、工作文件和参考结果 |
 | `examples/` | JSON 运行入口 |
 | `tests/` | 单元、集成和回归测试 |
 | `docs/` | 配置、流程、建模细节和 API 文档 |

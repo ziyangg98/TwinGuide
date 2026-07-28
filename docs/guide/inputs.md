@@ -15,22 +15,25 @@
 三个网格必须使用同一世界坐标系，长度单位为毫米。
 文件中的转换矩阵应在导出 STL 前应用，避免几何位置与表面顶点不一致。
 
-项目内实验病例统一保存在 `data/cases/single/tooth-<FDI>/`。病例 YAML
+实验病例统一保存在代码仓库外的 `../data/cases/single/tooth-<FDI>/`。病例 YAML
 位于病例根目录，输入文件放在 `input/`：
 
 ```text
-data/cases/single/tooth-11/
+../data/cases/single/tooth-11/
   case.yaml
   input/
-    dentition.stl
-    guide-template.stl
-    sleeve-assembly.stl
-    handpiece-01.stl
+    <来源牙列文件>.stl
+    <来源导板文件>.stl
+    <来源导管装配体>.stl
+    <来源手机文件>.stl
     handpiece-stop-01.json
 ```
 
+STL 保留来源文件名；JSON 和 `case.yaml` 通过显式相对路径声明文件角色，
+不要求为了程序运行复制或重命名输入网格。
+
 生成结果统一写入项目的 `output/`，不写回病例数据目录。完整文件角色和
-迁移来源见 [`data/cases/single/README.md`](../../data/cases/single/README.md)。
+病例数据目录说明见外层 `../data/README.md`。该目录包含患者来源资料，不进入代码仓库。
 
 `jaw` 是必填病例参数，只用于将导板法向和观察窗开放边定向到牙合侧。
 导柱轴向由输入 STL 的平台端确定；两个 C 口分别沿两导柱中心连线指向对侧导柱。

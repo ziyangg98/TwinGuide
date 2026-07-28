@@ -2,12 +2,12 @@
   "case_id": "teeth_15_16",
   "jaw": "upper",
   "inputs": {
-    "template": "../data/cases/multiple/teeth-15-16/input/guide-template.stl",
+    "template": "../../data/cases/multiple/teeth-15-16/input/taohuandaoban.stl",
     "guide_sleeve_assemblies": [
-      "../data/cases/multiple/teeth-15-16/input/sleeve-assembly-01.stl",
-      "../data/cases/multiple/teeth-15-16/input/sleeve-assembly-02.stl"
+      "../../data/cases/multiple/teeth-15-16/input/sleeves#15_10_15_37#S.stl",
+      "../../data/cases/multiple/teeth-15-16/input/sleeves#16_8_17_37#55S.stl"
     ],
-    "patient_dentition": "../data/cases/multiple/teeth-15-16/input/dentition.stl"
+    "patient_dentition": "../../data/cases/multiple/teeth-15-16/input/ubk.stl"
   },
   "sleeve": {
     "inner_diameter_mm": 2.10,
@@ -33,7 +33,7 @@
     "observation_local_failure_transition_rows": 1
   },
   "tooth_identification": {
-    "case_yaml": "../data/cases/multiple/teeth-15-16/case.yaml"
+    "case_yaml": "../../data/cases/multiple/teeth-15-16/case.yaml"
   },
   "render": {
     "width_px": 1600,

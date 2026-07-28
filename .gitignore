@@ -12,6 +12,9 @@ htmlcov/
 venv/
 .blender-site-packages/
 
+# Patient-derived and case-specific assets live in the sibling ../data directory.
+/data/
+
 output/
 output_sleeve_modes/
 docs/_build/

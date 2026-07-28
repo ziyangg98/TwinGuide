@@ -2,9 +2,9 @@
   "case_id": "tooth_47",
   "jaw": "lower",
   "inputs": {
-    "template": "../data/cases/single/tooth-47/input/guide-template.stl",
-    "guide_sleeve_assembly": "../data/cases/single/tooth-47/input/sleeve-assembly.stl",
-    "patient_dentition": "../data/cases/single/tooth-47/input/dentition.stl"
+    "template": "../../data/cases/single/tooth-47/input/ring-guide.stl",
+    "guide_sleeve_assembly": "../../data/cases/single/tooth-47/input/guide-sleeve-47-34-10-12-s-40s.stl",
+    "patient_dentition": "../../data/cases/single/tooth-47/input/lbk.stl"
   },
   "sleeve": {
     "inner_diameter_mm": 2.10,
@@ -29,12 +29,12 @@
     "observation_local_failure_drop_targets_mm": [1.0, 2.0, 3.0]
   },
   "tooth_identification": {
-    "case_yaml": "../data/cases/single/tooth-47/case.yaml"
+    "case_yaml": "../../data/cases/single/tooth-47/case.yaml"
   },
   "handpiece_avoidance": {
     "id": "handpiece_01",
-    "handpiece": "../data/cases/single/tooth-47/input/handpiece-01.stl",
-    "stop_report": "../data/cases/single/tooth-47/input/handpiece-stop-01.json",
+    "handpiece": "../../data/cases/single/tooth-47/input/handpiece-47.stl",
+    "stop_report": "../../data/cases/single/tooth-47/input/handpiece-stop-01.json",
     "maximum_angle_degrees": 5.0,
     "pose_samples": 41,
     "union_batch_size": 7,
