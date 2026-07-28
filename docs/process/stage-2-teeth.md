@@ -13,4 +13,4 @@
 
 ## 结果示例
 
-![牙位识别与导板映射示意](../images/tooth-identification-placeholder.svg)
+![牙位识别与导板映射示意](../images/tooth-identification-placeholder.png)
