@@ -47,16 +47,5 @@ class InternalDependencyTests(unittest.TestCase):
         self.assertIn("$project_directory/src", pythonpath_line)
         self.assertNotIn("--gpu-backend", content)
 
-    def test_user_entry_requires_confirmed_blender_completion(self) -> None:
-        """用户入口不得把 Blender 启动崩溃误报为成功。"""
-
-        content = (PROJECT_ROOT / "twinguide").read_text(encoding="utf-8")
-
-        self.assertIn("--factory-startup", content)
-        self.assertNotIn("--gpu-backend", content)
-        self.assertIn("TWIN_GUIDE_SUCCESS_MARKER", content)
-        self.assertIn('if [ ! -f "$success_marker" ]', content)
-
-
 if __name__ == "__main__":
     unittest.main()

@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
 ALGORITHM_VERSION = "current-depth-signed-lr-sweep-v1"
 FRAGMENT_VOLUME_TOLERANCE_MM3 = 1.0e-4
+FRAGMENT_SURFACE_AREA_TOLERANCE_MM2 = 1.0e-4
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +103,24 @@ def _boolean_union(
             next_level.append(result)
         current = next_level
     return current[0]
+
+
+def _signed_volume(mesh: trimesh.Trimesh) -> float:
+    """不计算质心，直接返回三角网格有向体积。"""
+
+    import numpy as np
+
+    triangles = np.asarray(mesh.triangles, dtype=float)
+    if len(triangles) == 0:
+        return 0.0
+    return float(
+        np.einsum(
+            "ij,ij->i",
+            triangles[:, 0],
+            np.cross(triangles[:, 1], triangles[:, 2]),
+        ).sum()
+        / 6.0
+    )
 
 
 def _stop_geometry(
@@ -239,14 +258,28 @@ def _adjust_single_handpiece(
         )
         poses.append(pose)
     envelope_raw = _boolean_union(poses, parameters.union_batch_size)
-    components = sorted(
-        envelope_raw.split(only_watertight=False),
-        key=lambda mesh: abs(float(mesh.volume)),
-        reverse=True,
-    )
+    raw_components = envelope_raw.split(only_watertight=False)
+    valid_components = []
+    invalid_component_areas = []
+    for component in raw_components:
+        signed_volume = _signed_volume(component)
+        if (
+            component.is_watertight
+            and component.is_winding_consistent
+            and signed_volume > 0.0
+        ):
+            valid_components.append((component, signed_volume))
+        elif float(component.area) > FRAGMENT_SURFACE_AREA_TOLERANCE_MM2:
+            invalid_component_areas.append(float(component.area))
+    if invalid_component_areas:
+        raise GeometryError(
+            "手机姿态并集产生非封闭有效分量，表面积 mm²："
+            f"{invalid_component_areas}"
+        )
+    components = sorted(valid_components, key=lambda item: item[1], reverse=True)
     if not components:
         raise GeometryError("手机姿态包络为空")
-    discarded_volumes = [abs(float(mesh.volume)) for mesh in components[1:]]
+    discarded_volumes = [volume for _, volume in components[1:]]
     significant = [
         volume
         for volume in discarded_volumes
@@ -254,7 +287,7 @@ def _adjust_single_handpiece(
     ]
     if significant:
         raise GeometryError(f"手机姿态并集产生独立有效分量：{significant}")
-    envelope = components[0]
+    envelope = components[0][0]
     envelope.remove_unreferenced_vertices()
     if not envelope.is_volume:
         raise GeometryError("手机左右摆动包络不是封闭有效体")
@@ -341,13 +374,16 @@ def adjust_clearance(context: GenerationContext) -> tuple[HandpieceAvoidancePlan
     parameters = context.config.handpiece_avoidance
     if not parameters:
         raise GeometryError("病例未配置 handpiece_avoidance")
-    root = context.config.output_directory / "handpiece_avoidance"
-    multiple = len(parameters) > 1
+    root = (
+        context.config.output_directory
+        / ".cache"
+        / "stage-07-clearance-adjustment"
+    )
     return tuple(
         _adjust_single_handpiece(
             context,
             item,
-            root / item.avoidance_id if multiple else root,
+            root / "handpieces" / item.avoidance_id,
         )
         for item in parameters
     )

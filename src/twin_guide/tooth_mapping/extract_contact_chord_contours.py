@@ -130,9 +130,9 @@ def _save_contact_diagnostics(path, points, maps, mask, instances, chords):
             segment = np.vstack([point - 4.0 * direction, point + 4.0 * direction])
             axis.plot(segment[:, 0], segment[:, 1], color="#2563eb", linestyle="--", linewidth=1.4)
     axis.set_aspect("equal", adjustable="box")
-    axis.set_xlabel("patient right → left (mm)")
-    axis.set_ylabel("anterior → posterior (mm)")
-    axis.set_title("Contact endpoints and straight contact chords (unlabelled)")
+    axis.set_xlabel("患者右 → 左（mm）")
+    axis.set_ylabel("前 → 后（mm）")
+    axis.set_title("接触端点与直线接触弦（未编号）")
     figure.savefig(path, dpi=240)
     plt.close(figure)
 
@@ -149,7 +149,7 @@ def _save_final(path, points, contours, chords, labels):
         axis.plot(polygon[:, 0], polygon[:, 1], color=color, linewidth=1.8)
         axis.scatter(*center, s=54, color=color, edgecolor="black", zorder=5)
         axis.scatter(*interior, s=36, marker="x", color="#111827", linewidths=1.4, zorder=6)
-        axis.text(center[0] + 0.3, center[1] + 0.3, str(labels[index]), fontsize=9, weight="bold")
+        axis.text(center[0] + 0.3, center[1] + 0.3, str(labels[index]), fontsize=9, weight=600)
     for chord in chords:
         if chord.kind != "contact":
             continue
@@ -157,9 +157,9 @@ def _save_final(path, points, contours, chords, labels):
         second = np.asarray(chord.second_endpoint_lr_ap_mm)
         axis.plot([first[0], second[0]], [first[1], second[1]], color="#111827", linewidth=1.1)
     axis.set_aspect("equal", adjustable="box")
-    axis.set_xlabel("patient right → left (mm)")
-    axis.set_ylabel("anterior → posterior (mm)")
-    axis.set_title("Present-only contours: area centroid (dot), interior centre (×)")
+    axis.set_xlabel("患者右 → 左（mm）")
+    axis.set_ylabel("前 → 后（mm）")
+    axis.set_title("现存牙冠轮廓：面积质心（圆点）与内部中心（×）")
     figure.savefig(path, dpi=240)
     plt.close(figure)
 
@@ -174,9 +174,9 @@ def _save_regions(path, maps, label_grid):
     masked = np.ma.masked_where(label_grid.T == 0, label_grid.T)
     axis.imshow(masked, origin="lower", extent=extent, interpolation="nearest", cmap="tab20")
     axis.set_aspect("equal", adjustable="box")
-    axis.set_xlabel("patient right → left (mm)")
-    axis.set_ylabel("anterior → posterior (mm)")
-    axis.set_title("Chord-partitioned projection regions")
+    axis.set_xlabel("患者右 → 左（mm）")
+    axis.set_ylabel("前 → 后（mm）")
+    axis.set_title("接触弦分割的牙冠投影区域")
     figure.savefig(path, dpi=220)
     plt.close(figure)
 
@@ -497,17 +497,20 @@ def run(args):
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     paths = {
-        "contact_diagnostics": output_dir / "01_contact_endpoints_and_chords.png",
-        "partitioned_regions": output_dir / "02_chord_partitioned_regions.png",
-        "final_contours": output_dir / "03_final_contact_chord_contours.png",
         "report": output_dir / "contact_chord_report.json",
     }
-    _save_contact_diagnostics(
-        paths["contact_diagnostics"], points, partition_maps, mask,
-        partition_instances, chords,
-    )
-    _save_regions(paths["partitioned_regions"], partition_maps, label_grid)
-    _save_final(paths["final_contours"], points, contours, chords, labels)
+    if getattr(args, "write_diagnostics", True):
+        paths.update({
+            "contact_diagnostics": output_dir / "01_contact_endpoints_and_chords.png",
+            "partitioned_regions": output_dir / "02_chord_partitioned_regions.png",
+            "final_contours": output_dir / "03_final_contact_chord_contours.png",
+        })
+        _save_contact_diagnostics(
+            paths["contact_diagnostics"], points, partition_maps, mask,
+            partition_instances, chords,
+        )
+        _save_regions(paths["partitioned_regions"], partition_maps, label_grid)
+        _save_final(paths["final_contours"], points, contours, chords, labels)
 
     chord_records = []
     for chord in chords:

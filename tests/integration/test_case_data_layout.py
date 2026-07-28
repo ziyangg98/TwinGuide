@@ -82,6 +82,27 @@ class CaseDataLayoutTests(unittest.TestCase):
                 self.assertEqual(len(sleeves["files"]), 2)
                 self.assertEqual(len(sleeves["active_ids"]), 2)
 
+    def test_tooth_14_uses_standard_y_beam_without_terminal_u_extension(
+        self,
+    ) -> None:
+        """14 号病例不应生成临床不需要的尾部 U 型梁。"""
+
+        content = yaml.safe_load(
+            (self.dataset / "tooth-14" / "case.yaml").read_text(encoding="utf-8")
+        )
+        design = content["design"]
+        self.assertNotIn("guide_terminal_u_extension", design)
+        press_beam = design["press_beam"]
+        self.assertEqual(press_beam["mode"], "inner_sleeve_upper_y")
+        self.assertEqual(
+            [station["fdis"] for station in press_beam["stations"]],
+            [[11, 21], [16, 15]],
+        )
+        self.assertEqual(
+            [station["ray_angle_degrees"] for station in press_beam["stations"]],
+            [45.0, 60.0],
+        )
+
     def test_all_cases_have_no_legacy_algorithm_selection(self) -> None:
         """唯一生产算法不再需要病例级策略开关。"""
 
@@ -223,6 +244,27 @@ class CaseDataLayoutTests(unittest.TestCase):
                     content = yaml.safe_load(case_yaml.read_text(encoding="utf-8"))
                     self.assertNotIn("sleeve_geometry", content["design"])
 
+    def test_press_beam_station_records_use_only_applicable_fields(self) -> None:
+        """按压梁站位不保留模式无关的 ID 或显式空字段。"""
+
+        datasets = (
+            (self.dataset, self.case_names),
+            (self.multiple_dataset, self.multiple_case_names),
+        )
+        for dataset, case_names in datasets:
+            for case_name in case_names:
+                case_yaml = dataset / case_name / "case.yaml"
+                content = yaml.safe_load(case_yaml.read_text(encoding="utf-8"))
+                for station in content["design"]["press_beam"]["stations"]:
+                    with self.subTest(case=case_name, station=station):
+                        expected = {"type", "ray_angle_degrees"}
+                        if station["type"] == "tooth_center":
+                            expected.add("fdi")
+                        else:
+                            self.assertEqual(station["type"], "tooth_pair_midpoint")
+                            expected.add("fdis")
+                        self.assertEqual(set(station), expected)
+
     def test_single_case_yaml_is_complete_and_loadable(self) -> None:
         """每个单颗病例只用自身 YAML 提供完整运行配置。"""
 
@@ -230,6 +272,10 @@ class CaseDataLayoutTests(unittest.TestCase):
             path = self.dataset / case_name / "case.yaml"
             with self.subTest(config=path):
                 config = CaseConfig.from_yaml(path)
+                self.assertEqual(
+                    config.case_id,
+                    case_name.replace("tooth-", "single_"),
+                )
                 self.assertTrue(config.inputs.template.is_file())
                 self.assertTrue(config.inputs.guide_sleeve_assembly.is_file())
                 self.assertTrue(config.inputs.patient_dentition.is_file())
@@ -245,12 +291,27 @@ class CaseDataLayoutTests(unittest.TestCase):
         for case_name in self.multiple_case_names:
             path = self.multiple_dataset / case_name / "case.yaml"
             with self.subTest(config=path.name):
+                content = yaml.safe_load(path.read_text(encoding="utf-8"))
                 config = CaseConfig.from_yaml(path)
                 self.assertEqual(
                     config.tooth_identification.case_yaml,
                     path.resolve(),
                 )
                 self.assertEqual(len(config.inputs.guide_sleeve_assemblies), 2)
+                self.assertEqual(len(config.handpiece_avoidance), 2)
+                active_ids = set(content["objects"]["handpiece"]["active_ids"])
+                planned_ids = {
+                    site["handpiece_id"] for site in content["planning"]["implant_sites"]
+                }
+                avoidance_ids = {
+                    item.avoidance_id for item in config.handpiece_avoidance
+                }
+                self.assertNotIn(None, planned_ids)
+                self.assertEqual(active_ids, planned_ids)
+                self.assertEqual(avoidance_ids, planned_ids)
+                for avoidance in config.handpiece_avoidance:
+                    self.assertTrue(avoidance.handpiece.is_file())
+                    self.assertTrue(avoidance.stop_report.is_file())
 
     def test_input_files_are_nonempty(self) -> None:
         """复制后的 STL 和止挡报告不得为空文件。"""

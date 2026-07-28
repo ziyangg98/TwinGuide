@@ -39,7 +39,7 @@
 
 .. automodule:: twin_guide.window_cutouts
 
-联建锚点选择
+导管与导板锚点选择
 ----------------------------------------
 
 .. automodule:: twin_guide.sleeve_anchors
@@ -50,7 +50,7 @@
 
 .. automodule:: twin_guide.template_link_points
 
-光滑连接管生成与复切
+连续连接梁生成与复切
 ----------------------------------------
 
 .. automodule:: twin_guide.point_linking

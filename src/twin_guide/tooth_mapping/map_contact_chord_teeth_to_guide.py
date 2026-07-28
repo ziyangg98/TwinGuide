@@ -334,12 +334,38 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         preview_instances.append({
             "FDI": item.fdi,
             "contour_s_n_mm": np.column_stack([contour_s, contour_n]).tolist(),
+            "contour_lr_ap_mm": contour.tolist(),
+            "area_centroid_lr_ap_mm": list(item.centroid_lr_ap_mm),
             "area_centroid_arch_s_mm": item.arch_s_mm,
             "area_centroid_normal_n_mm": float(item.centroid_lr_ap_mm[1] - centroid_arch_ap),
             "mesial_arch_s_mm": item.contour_interval_s_mm[0],
             "distal_arch_s_mm": item.contour_interval_s_mm[1],
         })
-    instance_analysis = {"instances": preview_instances, "assignment": {}, "candidates": []}
+    instance_analysis = {
+        "instances": preview_instances,
+        "contact_chords": list(contact.get("chords", [])),
+    }
+    preview_slots = list(slots)
+    contact_sources = contact.get("sources")
+    base_coordinate_path = (
+        contact_sources.get("base_coordinate_report")
+        if isinstance(contact_sources, dict)
+        else None
+    )
+    if isinstance(base_coordinate_path, str) and Path(base_coordinate_path).is_file():
+        base_preview = load_json(Path(base_coordinate_path))
+        missing_fdis = set(semantics.missing_teeth)
+        preview_slots.extend(
+            item
+            for item in base_preview.get("tooth_slots", [])
+            if isinstance(item, dict)
+            and item.get("status") == "missing_slot"
+            and int(item.get("FDI", -1)) in missing_fdis
+        )
+        order_index = {
+            int(fdi): index for index, fdi in enumerate(semantics.fdi_order)
+        }
+        preview_slots.sort(key=lambda item: order_index[int(item["FDI"])])
     report = {
         "schema_version": "5.1-physical-guide-coverage",
         "created_at": datetime.now(UTC).isoformat(),
@@ -404,14 +430,32 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             ),
         },
         "QA": qa,
-        "outputs": {
-            "report_json": str(report_path),
-            "preview_png": str(preview_path),
-            "context_glb": str(context_path),
-        },
+        "outputs": {"report_json": str(report_path)},
     }
-    render_preview(preview_path, frame, slots, windows, instance_analysis)
-    export_context(context_path, dental, guide, slots, windows)
+    overview_path = getattr(args, "overview_path", None)
+    if overview_path is not None:
+        overview_path = Path(overview_path).resolve()
+        overview_path.parent.mkdir(parents=True, exist_ok=True)
+        render_preview(
+            overview_path,
+            frame,
+            preview_slots,
+            windows,
+            instance_analysis,
+        )
+        report["outputs"]["overview_png"] = str(overview_path)
+    if getattr(args, "write_diagnostics", True):
+        if overview_path is None:
+            render_preview(
+                preview_path,
+                frame,
+                preview_slots,
+                windows,
+                instance_analysis,
+            )
+            report["outputs"]["preview_png"] = str(preview_path)
+        export_context(context_path, dental, guide, slots, windows)
+        report["outputs"]["context_glb"] = str(context_path)
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     return report
 

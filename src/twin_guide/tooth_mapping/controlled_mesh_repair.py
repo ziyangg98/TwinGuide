@@ -77,10 +77,34 @@ class ControlledVolumeRepairError(RuntimeError):
         self.report = report
 
 
+def _signed_volume(mesh: trimesh.Trimesh) -> float:
+    """直接计算三角网格有向体积，不触发病态网格的质心计算。"""
+
+    triangles = np.asarray(mesh.triangles, dtype=float)
+    if len(triangles) == 0:
+        return 0.0
+    return float(
+        np.einsum(
+            "ij,ij->i",
+            triangles[:, 0],
+            np.cross(triangles[:, 1], triangles[:, 2]),
+        ).sum()
+        / 6.0
+    )
+
+
+def _is_closed_volume(mesh: trimesh.Trimesh, signed_volume: float | None = None) -> bool:
+    """根据拓扑、绕序和正有向体积判断封闭实体。"""
+
+    volume = _signed_volume(mesh) if signed_volume is None else signed_volume
+    return bool(mesh.is_watertight and mesh.is_winding_consistent and volume > 0.0)
+
+
 def _topology_summary(mesh: trimesh.Trimesh) -> dict[str, Any]:
     """内部算法说明。"""
     inverse = np.asarray(mesh.edges_unique_inverse, dtype=np.int64)
     counts = np.bincount(inverse, minlength=len(mesh.edges_unique))
+    signed_volume = _signed_volume(mesh)
     return {
         "vertex_count": len(mesh.vertices),
         "face_count": len(mesh.faces),
@@ -89,8 +113,8 @@ def _topology_summary(mesh: trimesh.Trimesh) -> dict[str, Any]:
         "non_manifold_edge_count": int(np.count_nonzero(counts > 2)),
         "is_watertight": bool(mesh.is_watertight),
         "is_winding_consistent": bool(mesh.is_winding_consistent),
-        "is_closed_volume": bool(mesh.is_volume),
-        "signed_volume_mm3": float(mesh.volume),
+        "is_closed_volume": _is_closed_volume(mesh, signed_volume),
+        "signed_volume_mm3": signed_volume,
     }
 
 
@@ -156,7 +180,7 @@ def ensure_closed_volume(
         "policy": asdict(selected_policy),
         "before": before,
     }
-    if original.is_volume:
+    if bool(before["is_closed_volume"]):
         report.update({
             "status": "not_needed",
             "reason": "source already is a closed volume",
@@ -270,7 +294,7 @@ def ensure_closed_volume(
 
     working_summary = _topology_summary(working)
     non_manifold_count = int(working_summary["non_manifold_edge_count"])
-    if working.is_volume:
+    if bool(working_summary["is_closed_volume"]):
         candidate = working
         after = working_summary
         report["after"] = after
@@ -319,7 +343,7 @@ def ensure_closed_volume(
         candidate.fix_normals(multibody=True)
         after = _topology_summary(candidate)
         report["after"] = after
-        if not candidate.is_volume:
+        if not bool(after["is_closed_volume"]):
             raise _rejection(
                 "Manifold canonicalization did not produce a closed volume",
                 report,
@@ -331,8 +355,8 @@ def ensure_closed_volume(
         * selected_policy.maximum_surface_deviation_edge_fraction,
     )
     bounds_change = float(np.max(np.abs(candidate.bounds - original.bounds)))
-    original_volume = float(abs(original.volume))
-    candidate_volume = float(abs(candidate.volume))
+    original_volume = abs(float(before["signed_volume_mm3"]))
+    candidate_volume = abs(float(after["signed_volume_mm3"]))
     relative_volume_change = abs(candidate_volume - original_volume) / max(
         original_volume, 1e-12
     )

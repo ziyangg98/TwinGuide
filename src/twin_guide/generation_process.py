@@ -143,7 +143,6 @@ def run_generation_process(config: CaseConfig) -> GenerationProcessResult:
     else:
         context.tooth_identification = identify_tooth_positions(
             config,
-            regenerate=True,
         )
         results.append(
             StageResult(STAGES[1], StageRunStatus.COMPLETED, context.tooth_identification)
@@ -207,4 +206,8 @@ def run_generation_process(config: CaseConfig) -> GenerationProcessResult:
         results.append(
             StageResult(STAGES[6], StageRunStatus.COMPLETED, context.clearance_adjustment)
         )
-    return GenerationProcessResult(context, tuple(results))
+    process = GenerationProcessResult(context, tuple(results))
+    from twin_guide.stage_artifacts import write_stage_result_documents
+
+    write_stage_result_documents(process)
+    return process

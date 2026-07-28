@@ -93,6 +93,7 @@ class ToothRecognitionRequest:
     profile: ToothRecognitionProfile = field(
         default_factory=ToothRecognitionProfile
     )
+    write_diagnostics: bool = False
 
     def resolved(self) -> ToothRecognitionRequest:
         """内部算法说明。"""
@@ -103,6 +104,7 @@ class ToothRecognitionRequest:
             case_yaml=case_yaml,
             output_dir=Path(self.output_dir).resolve(),
             profile=self.profile,
+            write_diagnostics=self.write_diagnostics,
         )
 
 
@@ -218,15 +220,16 @@ def recognize_teeth(request: ToothRecognitionRequest) -> ToothRecognitionResult:
     request = request.resolved()
     profile = request.profile
     request.output_dir.mkdir(parents=True, exist_ok=True)
-    base_dir = request.output_dir / "01_base_mapping"
-    projection_dir = request.output_dir / "02_enhanced_projection"
-    contour_dir = request.output_dir / "03_contact_contours"
+    base_dir = request.output_dir / "guide-surface-mapping"
+    projection_dir = request.output_dir / "crown-projection"
+    contour_dir = request.output_dir / "contact-contours"
 
     base_report = run_case_mapping(
         request.case_yaml,
         output_dir=base_dir,
         crown_height_quantile=profile.crown_height_quantile,
         minimum_normal_dot=profile.minimum_crown_normal_dot,
+        write_diagnostics=request.write_diagnostics,
     )
     base_path = Path(base_report["outputs"]["report_json"])
     projection_report = _render_projection(Namespace(
@@ -236,6 +239,7 @@ def recognize_teeth(request: ToothRecognitionRequest) -> ToothRecognitionResult:
         resolution_mm=profile.projection_resolution_mm,
         height_quantile=profile.height_quantile_override,
         core_grouping_policy=profile.core_grouping_policy,
+        write_diagnostics=request.write_diagnostics,
     ))
     contour_report = _extract_contours(Namespace(
         case=request.case_yaml,
@@ -245,6 +249,7 @@ def recognize_teeth(request: ToothRecognitionRequest) -> ToothRecognitionResult:
         enhanced_maps=Path(projection_report["outputs"]["arrays"]),
         mapping_report=base_path,
         core_grouping_policy=profile.core_grouping_policy,
+        write_diagnostics=request.write_diagnostics,
     ))
     manifest_path = request.output_dir / "tooth_recognition_result.json"
     result = ToothRecognitionResult(

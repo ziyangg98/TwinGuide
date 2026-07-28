@@ -1,6 +1,7 @@
 import math
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import bpy
 
@@ -285,6 +286,17 @@ class BlenderBackendTests(unittest.TestCase):
                 len(second_cylinder_mesh.data.vertices),
             ),
         )
+        self.assertGreater(len(union_mesh.data.vertices), 0)
+
+    def test_voxel_union_accepts_one_mesh_without_joining(self):
+        source = create_axis_cylinder(
+            "single", Vec3(0.0, 0.0, -1.0), Vec3(0.0, 0.0, 1.0), 1.0
+        )
+
+        with patch("bpy.ops.object.join") as join:
+            union_mesh = voxel_union((source,), "single_union", 0.2)
+
+        join.assert_not_called()
         self.assertGreater(len(union_mesh.data.vertices), 0)
 
     def test_excess_component_cleanup_preserves_largest_mesh(self):

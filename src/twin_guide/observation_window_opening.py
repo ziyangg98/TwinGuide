@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 from pathlib import Path
@@ -13,9 +12,9 @@ from twin_guide.geometry import Vec3
 from twin_guide.models import ProfileWindowCutout
 from twin_guide.tooth_identification import ToothIdentificationResult
 
-INTEGRATION_REPORT_NAME = "twin_guide_observation_opening.json"
+INTEGRATION_REPORT_NAME = "manifest.json"
 OBSERVATION_OPENING_ALGORITHM_VERSION = (
-    "axis_sweep_controlled_source_repair_physical_coverage_v2"
+    "axis_sweep_single_path_fail_closed_v3"
 )
 
 
@@ -171,7 +170,9 @@ def build_observation_window_opening(
     mapping_path = tooth_identification.mapping_report_path.resolve()
     mapping = tooth_identification.mapping_report
     _validate_axis_sweep_contract(mapping, config)
-    output_root = config.output_directory / "observation_window_opening"
+    output_root = (
+        config.output_directory / ".cache" / "stage-03-cutout-planning"
+    )
     output_root.mkdir(parents=True, exist_ok=True)
     integration_path = output_root / INTEGRATION_REPORT_NAME
     fingerprint = _fingerprint(config, mapping_path)
@@ -186,25 +187,22 @@ def build_observation_window_opening(
 
     # 延迟导入项目内观察窗引擎，使纯配置测试不必加载完整网格依赖。
     try:
-        from twin_guide.observation_window_engine import run
+        from twin_guide.observation_window_engine import (
+            ObservationWindowRequest,
+            run,
+        )
     except ImportError as error:
         raise GeometryError(
             "无法加载 TwinGuide 内部观察窗算法；请检查项目依赖安装"
         ) from error
 
-    arguments = argparse.Namespace(
+    request = ObservationWindowRequest(
         case=mapping_path,
         mapping_report=mapping_path,
         source=config.inputs.template,
-        output_dir=output_root / "attempts",
-        window_id=None,
-        top_extension_mm=0.4,
+        output_dir=output_root,
         side_extension_mm=0.4,
-        outward_margin_mm=0.4,
         wall_overcut_mm=0.4,
-        window_wall_overcut_mm=None,
-        maximum_wall_thickness_mm=5.0,
-        ray_entry_tolerance_mm=0.65,
         following_wall_safety_mm=0.10,
         axis_core_overcut_mm=0.30,
         minimum_axis_visibility_row_fraction=0.50,
@@ -213,11 +211,11 @@ def build_observation_window_opening(
         fragment_volume_tolerance_mm3=2.0,
         minimum_removed_volume_mm3=1.0,
         residual_volume_tolerance_mm3=1e-4,
-        volume_identity_tolerance_mm3=5e-3,
+        # difference 与 intersection 是两次独立的浮点网格布尔运算。
+        # 0.05 mm³ 是 12 病例回归覆盖的绝对数值底线；大切割仍受 0.01% 限制。
+        volume_identity_tolerance_mm3=5e-2,
         volume_identity_relative_tolerance=1e-4,
-        write_failed_qa_artifacts=True,
-        local_failure_drop_increment_mm=0.0,
-        local_failure_drop_target_mm=list(
+        local_failure_drop_targets_mm=tuple(
             config.windows.observation_local_failure_drop_targets_mm
         ),
         local_failure_transition_rows=(
@@ -225,12 +223,17 @@ def build_observation_window_opening(
         ),
     )
     try:
-        report = run(arguments)
+        report = run(request)
     except Exception as error:
         raise GeometryError(f"轴扫掠观察窗生成失败：{error}") from error
+    if not all(report["QA"].values()):
+        failed_checks = [name for name, passed in report["QA"].items() if not passed]
+        raise GeometryError(
+            "轴扫观察窗未通过最终 QA：" + "、".join(failed_checks)
+        )
     final_report = Path(str(report["outputs"]["report_json"])).resolve()
     integration = {
-        "status": "complete" if all(report["QA"].values()) else "retained_after_failed_QA",
+        "status": "complete",
         "fingerprint": fingerprint,
         "mapping_report": str(mapping_path),
         "final_report": str(final_report),

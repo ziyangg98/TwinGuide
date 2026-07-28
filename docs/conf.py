@@ -49,7 +49,13 @@ source_suffix = {
     ".rst": "restructuredtext",
     ".md": "markdown",
 }
-myst_enable_extensions = ["colon_fence", "deflist", "fieldlist"]
+myst_enable_extensions = [
+    "amsmath",
+    "colon_fence",
+    "deflist",
+    "dollarmath",
+    "fieldlist",
+]
 myst_fence_as_directive = ["mermaid"]
 myst_heading_anchors = 3
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -41,7 +42,6 @@ class ToothIdentificationResult:
     """本次运行中已通过全部安全门的牙位与观察窗语义映射。"""
 
     mapping_report_path: Path
-    workflow_manifest_path: Path
     mapping_report: dict[str, object]
     jaw: str
     fdi_order: tuple[int, ...]
@@ -222,9 +222,11 @@ def _window_mappings(
     return tuple(windows)
 
 
-WORKFLOW_SCHEMA_VERSION = "1.4-twinguide-physical-guide-coverage"
-WORKFLOW_DIRECTORY_NAME = "tooth_mapping"
-WORKFLOW_MANIFEST_NAME = "twin_guide_tooth_mapping.json"
+WORKFLOW_SCHEMA_VERSION = "1.6-standard-stage-output"
+STAGE_RESULT_SCHEMA = "twin-guide.stage-result/1.0"
+WORKFLOW_RESULT_NAME = "stage-02-tooth-mapping.json"
+WORKFLOW_OVERVIEW_NAME = "stage-02-tooth-mapping.png"
+WORKFLOW_CACHE_NAME = "stage-02-tooth-mapping"
 
 
 def _sha256(path: Path) -> str:
@@ -262,14 +264,48 @@ def _input_fingerprint(config: CaseConfig) -> dict[str, object]:
     }
 
 
+def stage_2_mapping_payload(document: dict[str, object]) -> dict[str, object]:
+    """将统一阶段结果转换为几何算法使用的牙位映射。"""
+
+    if document.get("schema_version") != STAGE_RESULT_SCHEMA:
+        return document
+    stage = _mapping(document.get("stage"), "stage")
+    inputs = _mapping(document.get("inputs"), "inputs")
+    result = _mapping(document.get("result"), "result")
+    quality = _mapping(document.get("quality"), "quality")
+    artifacts = _mapping(document.get("artifacts"), "artifacts")
+    return {
+        "schema_version": WORKFLOW_SCHEMA_VERSION,
+        "created_at": stage.get("completed_at"),
+        "status": (
+            "tooth_guide_mapping_complete"
+            if stage.get("status") == "completed"
+            else "tooth_guide_mapping_needs_review"
+        ),
+        "case": document.get("case"),
+        "sources": inputs.get("sources"),
+        "semantics": result.get("semantics"),
+        "coordinate_system": result.get("coordinate_system"),
+        "mapping_parameters": document.get("parameters"),
+        "tooth_slots": result.get("teeth"),
+        "observation_windows": result.get("observation_windows"),
+        "diagnostics": quality.get("diagnostics"),
+        "QA": quality.get("checks"),
+        "outputs": {
+            "report_json": artifacts.get("result_json"),
+            "overview_png": artifacts.get("overview_png"),
+        },
+    }
+
+
 def _validated_result(
     config: CaseConfig,
     mapping_report_path: Path,
     mapping_report: dict[str, object],
-    workflow_manifest_path: Path,
 ) -> ToothIdentificationResult:
     """把本次生成的报告转换成 TwinGuide 的内存阶段结果。"""
 
+    mapping_report = stage_2_mapping_payload(mapping_report)
     _require_complete_qa(mapping_report, "tooth_guide_mapping_complete", "牙位映射报告")
 
     semantics = _mapping(mapping_report.get("semantics"), "semantics")
@@ -310,7 +346,6 @@ def _validated_result(
 
     return ToothIdentificationResult(
         mapping_report_path=mapping_report_path,
-        workflow_manifest_path=workflow_manifest_path,
         mapping_report=mapping_report,
         jaw=jaw,
         fdi_order=tuple(
@@ -342,23 +377,33 @@ def _validated_result(
 def _load_current_result(config: CaseConfig) -> ToothIdentificationResult | None:
     """仅在输入指纹完全一致时复用 TwinGuide 自己生成的当前结果。"""
 
-    workflow_root = config.output_directory / WORKFLOW_DIRECTORY_NAME
-    manifest_path = workflow_root / WORKFLOW_MANIFEST_NAME
-    if not manifest_path.is_file():
+    result_path = config.output_directory / WORKFLOW_RESULT_NAME
+    raw_overview_path = (
+        config.output_directory
+        / ".cache"
+        / WORKFLOW_CACHE_NAME
+        / "raw-overview.png"
+    )
+    recognition_root = raw_overview_path.parent / "tooth-recognition"
+    required_cache_paths = (
+        raw_overview_path,
+        recognition_root / "guide-surface-mapping",
+        recognition_root / "crown-projection",
+        recognition_root / "contact-contours",
+        raw_overview_path.parent / "guide-mapping",
+    )
+    if not result_path.is_file() or not all(
+        path.exists() for path in required_cache_paths
+    ):
         return None
     try:
-        manifest = _read_report(manifest_path, "TwinGuide 牙位工作流清单")
-        if manifest.get("schema_version") != WORKFLOW_SCHEMA_VERSION:
+        report = _read_report(result_path, "TwinGuide 第二阶段结果")
+        if report.get("schema_version") != STAGE_RESULT_SCHEMA:
             return None
-        if manifest.get("input_fingerprint") != _input_fingerprint(config):
+        inputs = _mapping(report.get("inputs"), "inputs")
+        if inputs.get("fingerprint") != _input_fingerprint(config):
             return None
-        report_path = Path(str(manifest["mapping_report"])).resolve()
-        if not report_path.is_file():
-            return None
-        if manifest.get("mapping_report_sha256") != _sha256(report_path):
-            return None
-        report = _read_report(report_path, "本次牙位映射报告")
-        return _validated_result(config, report_path, report, manifest_path)
+        return _validated_result(config, result_path, report)
     except (KeyError, OSError, GeometryError, ValueError):
         return None
 
@@ -369,9 +414,14 @@ def _run_unified_workflow(config: CaseConfig) -> ToothIdentificationResult:
     inputs = config.tooth_identification
     if inputs is None:
         raise GeometryError("病例未配置牙位识别 case.yaml")
-    workflow_root = config.output_directory / WORKFLOW_DIRECTORY_NAME
-    recognition_directory = workflow_root / "01_tooth_recognition"
-    mapping_directory = workflow_root / "02_guide_mapping"
+    workflow_root = config.output_directory
+    cache_root = workflow_root / ".cache" / WORKFLOW_CACHE_NAME
+    recognition_directory = cache_root / "tooth-recognition"
+    mapping_directory = cache_root / "guide-mapping"
+    raw_overview_path = cache_root / "raw-overview.png"
+    for directory in (recognition_directory, mapping_directory):
+        if directory.is_dir():
+            shutil.rmtree(directory)
     try:
         from twin_guide.tooth_mapping.guide_mapping import (
             GuideMappingRequest,
@@ -392,6 +442,7 @@ def _run_unified_workflow(config: CaseConfig) -> ToothIdentificationResult:
             recognition=recognition,
             output_dir=mapping_directory,
             case_yaml=inputs.case_yaml,
+            overview_path=raw_overview_path,
         ))
         if not guide_mapping.complete:
             raise GeometryError("本次牙位到导板映射未通过全部 QA")
@@ -400,25 +451,53 @@ def _run_unified_workflow(config: CaseConfig) -> ToothIdentificationResult:
     except Exception as error:
         raise GeometryError(f"统一牙位映射执行失败：{error}") from error
 
-    report_path = guide_mapping.report_path.resolve()
-    report = guide_mapping.mapping_report
-    manifest_path = workflow_root / WORKFLOW_MANIFEST_NAME
-    manifest = {
-        "schema_version": WORKFLOW_SCHEMA_VERSION,
-        "status": "complete",
-        "input_fingerprint": _input_fingerprint(config),
-        "recognition_profile_id": recognition.profile.profile_id,
-        "core_grouping_policy": recognition.profile.core_grouping_policy,
-        "recognition_manifest": str(recognition.manifest_path.resolve()),
-        "guide_mapping_manifest": str(guide_mapping.manifest_path.resolve()),
-        "mapping_report": str(report_path),
-        "mapping_report_sha256": _sha256(report_path),
+    result_path = workflow_root / WORKFLOW_RESULT_NAME
+    mapping = guide_mapping.mapping_report
+    overview_path = workflow_root / WORKFLOW_OVERVIEW_NAME
+    shutil.copy2(raw_overview_path, overview_path)
+    report = {
+        "schema_version": STAGE_RESULT_SCHEMA,
+        "stage": {
+            "number": 2,
+            "key": "tooth_identification",
+            "title": "牙位识别",
+            "status": "completed",
+            "maturity": "experimental",
+            "implementation_version": WORKFLOW_SCHEMA_VERSION,
+            "completed_at": mapping.get("created_at"),
+        },
+        "case": mapping.get("case"),
+        "inputs": {
+            "sources": mapping.get("sources"),
+            "fingerprint": _input_fingerprint(config),
+        },
+        "parameters": {
+            **_mapping(mapping.get("mapping_parameters"), "mapping_parameters"),
+            "recognition_profile_id": recognition.profile.profile_id,
+            "core_grouping_policy": recognition.profile.core_grouping_policy,
+        },
+        "result": {
+            "semantics": mapping.get("semantics"),
+            "coordinate_system": mapping.get("coordinate_system"),
+            "teeth": mapping.get("tooth_slots"),
+            "observation_windows": mapping.get("observation_windows"),
+        },
+        "quality": {
+            "passed": True,
+            "checks": mapping.get("QA"),
+            "diagnostics": mapping.get("diagnostics"),
+        },
+        "artifacts": {
+            "result_json": str(result_path.resolve()),
+            "overview_png": str(overview_path.resolve()),
+        },
     }
-    manifest_path.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2),
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    result_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    return _validated_result(config, report_path, report, manifest_path)
+    return _validated_result(config, result_path, report)
 
 
 def identify_tooth_positions(
@@ -452,4 +531,5 @@ __all__ = [
     "ToothIdentificationResult",
     "ToothPosition",
     "identify_tooth_positions",
+    "stage_2_mapping_payload",
 ]

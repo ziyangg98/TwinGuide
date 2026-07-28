@@ -12,6 +12,7 @@ import math
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import lru_cache
 from pathlib import Path
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/tooth_guide_mapping_mpl")
@@ -26,6 +27,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import trimesh
 import yaml
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 from scipy.interpolate import PchipInterpolator, UnivariateSpline
 from scipy.ndimage import gaussian_filter1d
 
@@ -65,8 +68,15 @@ def rounded(value: np.ndarray | float, digits: int = 6) -> float | list[object]:
     return np.round(array.astype(float), digits).tolist()
 
 
-def load_mesh(path: Path) -> trimesh.Trimesh:
-    """内部算法说明。"""
+@lru_cache(maxsize=8)
+def _load_mesh_cached(
+    path: Path,
+    modified_time_ns: int,
+    size_bytes: int,
+) -> trimesh.Trimesh:
+    """载入只读网格；文件元数据变化时自动形成新的缓存项。"""
+
+    del modified_time_ns, size_bytes
     loaded = trimesh.load(path, force="mesh", process=True)
     if isinstance(loaded, trimesh.Scene):
         loaded = trimesh.util.concatenate(tuple(loaded.geometry.values()))
@@ -74,6 +84,14 @@ def load_mesh(path: Path) -> trimesh.Trimesh:
         raise RuntimeError(f"could not load mesh: {path}")
     loaded.remove_unreferenced_vertices()
     return loaded
+
+
+def load_mesh(path: Path) -> trimesh.Trimesh:
+    """复用同一次运行中未变化的只读网格。"""
+
+    resolved = Path(path).resolve()
+    stat = resolved.stat()
+    return _load_mesh_cached(resolved, stat.st_mtime_ns, stat.st_size)
 
 
 def resolve_case_path(case_dir: Path, node: dict[str, object], object_name: str) -> Path:
@@ -119,20 +137,27 @@ def resolve_active_object_paths(
     return selected
 
 
-def surgical_reference_centroid(
+def resolve_surgical_reference_paths(
     case_dir: Path,
     objects: dict[str, object],
-) -> tuple[np.ndarray | None, list[Path]]:
-    """内部算法说明。\n\nReturn the area-weighted centroid of active sleeve/surgical geometry."""
+) -> list[Path]:
+    """解析当前病例启用的手术参考文件。"""
 
     sleeve_node = objects.get("sleeve")
     if not isinstance(sleeve_node, dict):
-        return None, []
-    paths = resolve_active_object_paths(case_dir, sleeve_node, "sleeve")
+        return []
+    return resolve_active_object_paths(case_dir, sleeve_node, "sleeve")
+
+
+def surgical_reference_centroid(paths: list[Path]) -> np.ndarray | None:
+    """仅在自动左右判向需要时计算手术参考的面积加权中心。"""
+
+    if not paths:
+        return None
     meshes = [load_mesh(path) for path in paths]
     areas = np.asarray([max(float(mesh.area), EPS) for mesh in meshes], dtype=float)
     centroids = np.asarray([np.asarray(mesh.centroid, dtype=float) for mesh in meshes])
-    return np.average(centroids, axis=0, weights=areas), paths
+    return np.average(centroids, axis=0, weights=areas)
 
 
 def parse_axis(value: object) -> np.ndarray:
@@ -148,6 +173,20 @@ def parse_axis(value: object) -> np.ndarray:
     if array.shape != (3,):
         raise RuntimeError(f"axis must be +X/-X/+Y/-Y/+Z/-Z or a 3-vector, got {value!r}")
     return unit(array)
+
+
+def has_confirmed_axes(anatomy_node: dict[str, object]) -> bool:
+    """病例是否提供完整的左右、前后和牙合三轴。"""
+
+    orientation = anatomy_node.get("orientation")
+    return isinstance(orientation, dict) and all(
+        key in orientation
+        for key in (
+            "patient_right_to_left_axis",
+            "anterior_to_posterior_axis",
+            "occlusal_axis",
+        )
+    )
 
 
 @dataclass
@@ -388,11 +427,7 @@ def estimate_frame_and_arch(
     vertices = np.asarray(dental.vertices, dtype=float)
     origin = np.mean(vertices, axis=0)
     orientation = anatomy_node.get("orientation")
-    explicit = isinstance(orientation, dict) and all(
-        key in orientation for key in (
-            "patient_right_to_left_axis", "anterior_to_posterior_axis", "occlusal_axis"
-        )
-    )
+    explicit = has_confirmed_axes(anatomy_node)
     covariance = np.cov((vertices - origin).T)
     eigenvalues, eigenvectors = np.linalg.eigh(covariance)
     if explicit:
@@ -1296,130 +1331,291 @@ def render_preview(
     windows: list[dict[str, object]],
     instance_analysis: dict[str, object] | None = None,
 ) -> None:
-    """内部算法说明。"""
-    figure, axes = plt.subplots(1, 2, figsize=(18, 8), constrained_layout=True)
-    axis = axes[0]
+    """内部算法说明。
+
+    生成一张上下对齐的学术式业务图：上图直接展示真实牙冠轮廓、
+    接触分隔、FDI 和观察窗，下图在同一有向牙弓坐标上显示牙冠支持度。
+    """
+
+    plt.rcParams["font.sans-serif"] = [
+        "PingFang SC",
+        "Arial Unicode MS",
+        "DejaVu Sans",
+    ]
+    plt.rcParams["axes.unicode_minus"] = False
+    window_names = {
+        "right": "右侧观察窗",
+        "left": "左侧观察窗",
+        "anterior": "前牙区观察窗",
+        "posterior": "后牙区观察窗",
+    }
+    figure = plt.figure(figsize=(16, 10), facecolor="white", constrained_layout=True)
+    grid = figure.add_gridspec(2, 1, height_ratios=(4.2, 1.35), hspace=0.04)
+    anatomy_axis = figure.add_subplot(grid[0])
+    evidence_axis = figure.add_subplot(grid[1])
+
     points = np.column_stack([frame["point_lr"], frame["point_ap"]])
-    if len(points) > 80_000:
-        points = points[np.linspace(0, len(points) - 1, 80_000, dtype=int)]
-    axis.scatter(points[:, 0], points[:, 1], s=0.25, c="#cbd5e1", alpha=0.24)
+    if len(points) > 60_000:
+        points = points[np.linspace(0, len(points) - 1, 60_000, dtype=int)]
+    anatomy_axis.scatter(
+        points[:, 0],
+        points[:, 1],
+        s=0.32,
+        c="#cbd5e1",
+        alpha=0.18,
+        linewidths=0.0,
+        rasterized=True,
+        zorder=1,
+    )
     curve: CurveModel = frame["curve"]
-    axis.plot(curve.lr, curve.ap, color="#111827", linewidth=1.8, label="directed arch")
-    if instance_analysis is not None:
-        for index, instance in enumerate(instance_analysis.get("instances", [])):
-            contour = np.asarray(instance.get("contour_s_n_mm", []), dtype=float)
-            if contour.ndim != 2 or contour.shape[0] < 2:
-                continue
-            base = curve.at_s(contour[:, 0])
-            contour_lr = base[:, 0]
-            contour_ap = base[:, 1] + contour[:, 1]
-            color = PALETTE[index % len(PALETTE)]
-            axis.plot(contour_lr, contour_ap, color=color, linewidth=1.1, alpha=0.9)
-        assigned_ids = {
-            int(value) for value in instance_analysis.get("assignment", {}).values()
-        }
-        terminal_ids = {
-            int(value) for value in instance_analysis.get(
-                "high_confidence_unmatched_terminal_candidate_ids", []
-            )
-        }
-        for candidate in instance_analysis.get("candidates", []):
-            candidate_id = int(candidate["candidate_id"])
-            s_mm = float(candidate["arch_s_mm"])
-            lr, ap = curve.at_s(np.asarray([s_mm]))[0]
-            if candidate_id in assigned_ids:
-                axis.scatter(
-                    lr, ap, s=38, marker="o", facecolors="none",
-                    edgecolors="#16a34a", linewidths=1.1, zorder=4,
-                )
-            else:
-                color = "#dc2626" if candidate_id in terminal_ids else "#94a3b8"
-                axis.scatter(lr, ap, s=28, marker="x", c=color, linewidths=1.0, zorder=3)
+    window_colors = ("#2563eb", "#7c3aed", "#0891b2", "#c026d3")
+    for index, window in enumerate(windows):
+        lo, hi = (float(value) for value in window["arch_interval_s_mm"])
+        samples = np.linspace(min(lo, hi), max(lo, hi), 160)
+        window_path = curve.at_s(samples)
+        anatomy_axis.plot(
+            window_path[:, 0],
+            window_path[:, 1],
+            color=window_colors[index % len(window_colors)],
+            linewidth=12.0,
+            alpha=0.13,
+            solid_capstyle="round",
+            zorder=2,
+        )
+        midpoint = curve.at_s(np.asarray([(lo + hi) / 2.0]))[0]
+        anatomy_axis.annotate(
+            window_names.get(str(window["id"]), f"观察窗 {window['id']}"),
+            midpoint,
+            xytext=(0, -16),
+            textcoords="offset points",
+            ha="center",
+            va="top",
+            fontsize=8.5,
+            color=window_colors[index % len(window_colors)],
+            fontweight=600,
+            zorder=8,
+        )
+    anatomy_axis.plot(
+        curve.lr,
+        curve.ap,
+        color="#334155",
+        linewidth=1.35,
+        alpha=0.9,
+        zorder=3,
+    )
+
     centroid_by_fdi = {
         int(item["FDI"]): item
         for item in (instance_analysis or {}).get("instances", [])
     }
-    for index, slot in enumerate(slots):
-        arch_lr, arch_ap = slot["arch_LR_AP_mm"]
-        instance = centroid_by_fdi.get(int(slot["FDI"]))
-        if instance is not None and "area_centroid_arch_s_mm" in instance:
-            centroid_s = float(instance["area_centroid_arch_s_mm"])
-            centroid_n = float(instance["area_centroid_normal_n_mm"])
-            centroid_base = curve.at_s(np.asarray([centroid_s]))[0]
-            lr = float(centroid_base[0])
-            ap = float(centroid_base[1] + centroid_n)
-            axis.plot(
-                [lr, arch_lr], [ap, arch_ap], color="#64748b",
-                linewidth=0.65, linestyle="--", alpha=0.75, zorder=3,
-            )
-        else:
-            lr, ap = arch_lr, arch_ap
-        color = PALETTE[index % len(PALETTE)]
-        marker = "x" if slot["status"] == "missing_slot" else "o"
-        axis.scatter(lr, ap, s=80, marker=marker, c=color, edgecolors="black" if marker == "o" else None, zorder=5)
-        axis.text(lr + 0.35, ap + 0.35, str(slot["FDI"]), fontsize=9, weight="bold")
-    axis.set_aspect("equal", adjustable="box")
-    axis.set_xlabel("patient right → left (mm)")
-    axis.set_ylabel("anterior → posterior (mm)")
-    axis.set_title(
-        "Physical-tooth area centroids; dashed links show arch projection"
-        if instance_analysis is not None
-        else "FDI slots constrained by case.yaml"
-    )
-    axis.legend(loc="best")
-
-    axis = axes[1]
-    axis.plot(frame["support_s"], frame["support_values"], color="#64748b", linewidth=1.5, label="crown support")
     if instance_analysis is not None:
         for index, instance in enumerate(instance_analysis.get("instances", [])):
+            contour = np.asarray(instance.get("contour_lr_ap_mm", []), dtype=float)
+            if contour.ndim != 2 or contour.shape[0] < 2:
+                continue
             color = PALETTE[index % len(PALETTE)]
-            axis.axvspan(
-                float(instance["mesial_arch_s_mm"]),
-                float(instance["distal_arch_s_mm"]),
+            anatomy_axis.fill(
+                contour[:, 0],
+                contour[:, 1],
+                facecolor=color,
+                edgecolor="none",
+                alpha=0.10,
+                zorder=2,
+            )
+            anatomy_axis.plot(
+                contour[:, 0],
+                contour[:, 1],
                 color=color,
-                alpha=0.055,
+                linewidth=1.45,
+                alpha=0.95,
+                zorder=4,
             )
-        assigned_ids = {
-            int(value) for value in instance_analysis.get("assignment", {}).values()
-        }
-        terminal_ids = {
-            int(value) for value in instance_analysis.get(
-                "high_confidence_unmatched_terminal_candidate_ids", []
+        for chord in instance_analysis.get("contact_chords", []):
+            if (
+                chord.get("first_endpoint_lr_ap_mm") is None
+                or chord.get("second_endpoint_lr_ap_mm") is None
+            ):
+                continue
+            first = np.asarray(chord["first_endpoint_lr_ap_mm"], dtype=float)
+            second = np.asarray(chord["second_endpoint_lr_ap_mm"], dtype=float)
+            anatomy_axis.plot(
+                [first[0], second[0]],
+                [first[1], second[1]],
+                color="#475569",
+                linewidth=1.05,
+                alpha=0.9,
+                zorder=5,
             )
-        }
-        for candidate in instance_analysis.get("candidates", []):
-            candidate_id = int(candidate["candidate_id"])
-            if candidate_id in assigned_ids:
-                color = "#16a34a"
-                width = 0.8
-            elif candidate_id in terminal_ids:
-                color = "#dc2626"
-                width = 1.4
-            else:
-                color = "#cbd5e1"
-                width = 0.6
-            axis.axvline(
-                float(candidate["arch_s_mm"]), color=color,
-                linewidth=width, linestyle=":", alpha=0.8,
+
+    for index, slot in enumerate(slots):
+        instance = centroid_by_fdi.get(int(slot["FDI"]))
+        if instance is not None:
+            lr, ap = (float(value) for value in instance["area_centroid_lr_ap_mm"])
+            arch_lr, arch_ap = (float(value) for value in slot["arch_LR_AP_mm"])
+            anatomy_axis.plot(
+                [lr, arch_lr],
+                [ap, arch_ap],
+                color="#94a3b8",
+                linewidth=0.7,
+                linestyle=(0, (2, 2)),
+                alpha=0.8,
+                zorder=3,
             )
+        else:
+            lr, ap = (float(value) for value in slot["arch_LR_AP_mm"])
+        color = PALETTE[index % len(PALETTE)]
+        missing = slot["status"] == "missing_slot"
+        anatomy_axis.scatter(
+            lr,
+            ap,
+            s=66 if missing else 38,
+            marker="D" if missing else "o",
+            facecolor="white" if missing else color,
+            edgecolor="#dc2626" if missing else "white",
+            linewidth=1.6 if missing else 0.8,
+            zorder=6,
+        )
+        anatomy_axis.annotate(
+            f"{slot['FDI']}{' 缺失' if missing else ''}",
+            (lr, ap),
+            xytext=(5, 6),
+            textcoords="offset points",
+            fontsize=9.0,
+            color="#b91c1c" if missing else "#111827",
+            fontweight=600,
+            bbox={
+                "boxstyle": "round,pad=0.16",
+                "facecolor": "white",
+                "edgecolor": "none",
+                "alpha": 0.82,
+            },
+            zorder=7,
+        )
+
+    anatomy_axis.set_aspect("equal", adjustable="box")
+    anatomy_axis.set_xlabel("患者右 → 左（mm）")
+    anatomy_axis.set_ylabel("前 → 后（mm）")
+    anatomy_axis.set_title("实测牙冠轮廓、接触分隔与 FDI 映射", loc="left", fontweight=600)
+    anatomy_axis.grid(color="#e2e8f0", linewidth=0.55, alpha=0.7)
+    anatomy_axis.spines[["top", "right"]].set_visible(False)
+    anatomy_axis.legend(
+        handles=[
+            Line2D([0], [0], color="#334155", linewidth=1.5, label="有向牙弓"),
+            Line2D([0], [0], color="#475569", linewidth=1.1, label="接触分隔"),
+            Line2D(
+                [0],
+                [0],
+                marker="D",
+                color="none",
+                markerfacecolor="white",
+                markeredgecolor="#dc2626",
+                label="缺失牙位",
+            ),
+            Patch(facecolor="#2563eb", alpha=0.13, label="观察窗范围"),
+        ],
+        loc="upper center",
+        ncol=4,
+        frameon=False,
+        fontsize=8.5,
+    )
+
+    support_s = np.asarray(frame["support_s"], dtype=float)
+    support_values = np.asarray(frame["support_values"], dtype=float)
+    evidence_axis.fill_between(
+        support_s,
+        0.0,
+        support_values,
+        color="#cbd5e1",
+        alpha=0.46,
+        linewidth=0.0,
+    )
+    evidence_axis.plot(
+        support_s,
+        support_values,
+        color="#475569",
+        linewidth=1.35,
+        label="牙冠支持度",
+    )
     for index, slot in enumerate(slots):
         color = PALETTE[index % len(PALETTE)]
-        style = "--" if slot["status"] == "missing_slot" else "-"
-        axis.axvline(slot["arch_s_mm"], color=color, linewidth=1.1, linestyle=style)
-        axis.text(slot["arch_s_mm"], 1.02, str(slot["FDI"]), rotation=90, va="bottom", ha="center", fontsize=8)
-    for window in windows:
-        lo, hi = window["arch_interval_s_mm"]
-        axis.axvspan(min(lo, hi), max(lo, hi), alpha=0.10, label=f"window:{window['id']}")
-    axis.set_ylim(0.0, 1.15)
-    axis.set_xlabel("directed arch distance s (mm)")
-    axis.set_ylabel("normalized crown-support evidence")
-    axis.set_title(
-        "Physical contour spans and projected area-centroid positions"
-        if instance_analysis is not None
-        else "One configured FDI slot per semantic position"
+        lo, hi = (float(value) for value in slot["arch_interval_s_mm"])
+        missing = slot["status"] == "missing_slot"
+        evidence_axis.axvspan(
+            min(lo, hi),
+            max(lo, hi),
+            ymin=0.0,
+            ymax=0.16,
+            facecolor="white" if missing else color,
+            edgecolor="#dc2626" if missing else "none",
+            hatch="///" if missing else None,
+            alpha=0.78 if missing else 0.54,
+            linewidth=0.8,
+        )
+        center = float(slot["arch_s_mm"])
+        evidence_axis.plot(
+            [center, center],
+            [0.0, 0.18],
+            color="#dc2626" if missing else color,
+            linewidth=1.0,
+        )
+        evidence_axis.text(
+            center,
+            0.205,
+            str(slot["FDI"]),
+            ha="center",
+            va="bottom",
+            fontsize=8.0,
+            color="#b91c1c" if missing else "#334155",
+            fontweight=600,
+        )
+    for index, window in enumerate(windows):
+        lo, hi = (float(value) for value in window["arch_interval_s_mm"])
+        color = window_colors[index % len(window_colors)]
+        evidence_axis.plot(
+            [min(lo, hi), max(lo, hi)],
+            [1.075, 1.075],
+            color=color,
+            linewidth=5.0,
+            solid_capstyle="round",
+        )
+        evidence_axis.text(
+            (lo + hi) / 2.0,
+            1.105,
+            window_names.get(str(window["id"]), f"观察窗 {window['id']}"),
+            color=color,
+            ha="center",
+            va="bottom",
+            fontsize=8.0,
+            fontweight=600,
+        )
+    evidence_axis.set_ylim(0.0, 1.18)
+    evidence_axis.set_xlim(float(support_s[0]), float(support_s[-1]))
+    evidence_axis.set_xlabel("沿有向牙弓的距离 $s$（mm）")
+    evidence_axis.set_ylabel("支持度")
+    evidence_axis.set_title("牙冠区间、缺牙槽位与观察窗", loc="left", fontsize=10.5)
+    evidence_axis.grid(axis="y", color="#e2e8f0", linewidth=0.55, alpha=0.8)
+    evidence_axis.spines[["top", "right"]].set_visible(False)
+    evidence_axis.text(
+        0.0,
+        -0.34,
+        "患者右",
+        transform=evidence_axis.transAxes,
+        ha="left",
+        va="top",
+        fontsize=8.5,
+        color="#64748b",
     )
-    axis.legend(loc="lower center", ncol=2, fontsize=8)
-    figure.savefig(path, dpi=220)
+    evidence_axis.text(
+        1.0,
+        -0.34,
+        "患者左",
+        transform=evidence_axis.transAxes,
+        ha="right",
+        va="top",
+        fontsize=8.5,
+        color="#64748b",
+    )
+    figure.savefig(path, dpi=180, facecolor="white")
     plt.close(figure)
 
 
@@ -1428,6 +1624,7 @@ def run_case_mapping(
     output_dir: Path | None = None,
     crown_height_quantile: float = 0.55,
     minimum_normal_dot: float = 0.05,
+    write_diagnostics: bool = False,
 ) -> dict[str, object]:
     """内部算法说明。"""
     case_yaml = Path(case_yaml).resolve()
@@ -1435,14 +1632,20 @@ def run_case_mapping(
     config = yaml.safe_load(case_yaml.read_text(encoding="utf-8"))
     if not isinstance(config, dict):
         raise RuntimeError(f"case YAML must contain a mapping: {case_yaml}")
-    semantics = validate_anatomy(config.get("anatomy", {}))
+    anatomy_node = config.get("anatomy", {})
+    if not isinstance(anatomy_node, dict):
+        raise RuntimeError("anatomy must be a mapping")
+    semantics = validate_anatomy(anatomy_node)
     objects = config.get("objects", {})
     if not isinstance(objects, dict):
         raise RuntimeError("objects must be a mapping")
     dental_path = resolve_case_path(case_dir, objects.get("dental", {}), "dental")
     guide_path = resolve_case_path(case_dir, objects.get("guide", {}), "guide")
-    surgical_reference_point, surgical_reference_paths = surgical_reference_centroid(
-        case_dir, objects
+    surgical_reference_paths = resolve_surgical_reference_paths(case_dir, objects)
+    surgical_reference_point = (
+        None
+        if has_confirmed_axes(anatomy_node)
+        else surgical_reference_centroid(surgical_reference_paths)
     )
     destination = Path(output_dir).resolve() if output_dir else case_dir / "输出/tooth_guide_mapping"
     destination.mkdir(parents=True, exist_ok=True)
@@ -1450,7 +1653,7 @@ def run_case_mapping(
     dental = load_mesh(dental_path)
     guide = load_mesh(guide_path)
     frame = estimate_frame_and_arch(
-        dental, guide, config.get("anatomy", {}), semantics,
+        dental, guide, anatomy_node, semantics,
         crown_height_quantile, minimum_normal_dot,
         surgical_reference_point=surgical_reference_point,
     )
@@ -1609,13 +1812,14 @@ def run_case_mapping(
             ),
         },
         "QA": qa,
-        "outputs": {
-            "report_json": str(report_path),
+        "outputs": {"report_json": str(report_path)},
+    }
+    if write_diagnostics:
+        render_preview(preview_path, frame, slots, windows)
+        export_context(context_path, dental, guide, slots, windows)
+        report["outputs"].update({
             "preview_png": str(preview_path),
             "context_glb": str(context_path),
-        },
-    }
-    render_preview(preview_path, frame, slots, windows)
-    export_context(context_path, dental, guide, slots, windows)
+        })
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     return report

@@ -46,22 +46,22 @@ def _image(axis, values, maps, title, cmap=None, vmin=None, vmax=None):
     )
     axis.set_aspect("equal", adjustable="box")
     axis.set_title(title)
-    axis.set_xlabel("LR (mm)")
+    axis.set_xlabel("患者右 → 左（mm）")
     return artist
 
 
 def _save_comparison(path, maps, case_label):
     """内部算法说明。"""
     figure, axes = plt.subplots(2, 2, figsize=(14, 12), constrained_layout=True)
-    _image(axes[0, 0], maps["silhouette"], maps, "Continuous triangle silhouette", "gray_r", 0, 1)
-    height = _image(axes[0, 1], maps["top_height_mm"], maps, "Highest-surface height (mm)", "viridis")
+    _image(axes[0, 0], maps["silhouette"], maps, "连续牙冠投影轮廓", "gray_r", 0, 1)
+    height = _image(axes[0, 1], maps["top_height_mm"], maps, "牙冠顶面高度（mm）", "viridis")
     figure.colorbar(height, ax=axes[0, 1], shrink=0.76)
-    _image(axes[1, 0], maps["normal_rgb"], maps, "Interpolated surface-normal map")
-    edge = _image(axes[1, 1], maps["fused_edge"], maps, "Fused anatomical edge evidence", "magma", 0, 1)
+    _image(axes[1, 0], maps["normal_rgb"], maps, "表面法向映射")
+    edge = _image(axes[1, 1], maps["fused_edge"], maps, "融合解剖边界证据", "magma", 0, 1)
     figure.colorbar(edge, ax=axes[1, 1], shrink=0.76)
-    axes[0, 0].set_ylabel("AP (mm)")
-    axes[1, 0].set_ylabel("AP (mm)")
-    figure.suptitle(f"{case_label} — continuous multi-channel crown projection")
+    axes[0, 0].set_ylabel("前 → 后（mm）")
+    axes[1, 0].set_ylabel("前 → 后（mm）")
+    figure.suptitle(f"{case_label} — 连续多通道牙冠投影")
     figure.savefig(path, dpi=220, facecolor="white")
     plt.close(figure)
 
@@ -71,10 +71,10 @@ def _save_edge(path, maps, case_label):
     figure, axis = plt.subplots(figsize=(10, 8), constrained_layout=True)
     edge = _image(
         axis, maps["fused_edge"], maps,
-        f"{case_label} — enhanced crown-edge projection", "magma", 0, 1,
+        f"{case_label} — 增强牙冠边界投影", "magma", 0, 1,
     )
-    axis.set_ylabel("AP (mm)")
-    figure.colorbar(edge, ax=axis, shrink=0.78, label="edge evidence")
+    axis.set_ylabel("前 → 后（mm）")
+    figure.colorbar(edge, ax=axis, shrink=0.78, label="边界证据")
     figure.savefig(path, dpi=300, facecolor="white")
     plt.close(figure)
 
@@ -234,16 +234,18 @@ def run(args):
     height_floor = float(selected_trial["height_floor_mm"])
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    case_number = case_dir.name.lstrip("#")
-    case_label = f"Case #{case_number}"
+    case_label = f"病例 {config['case']['id']}"
     paths = {
-        "comparison": output_dir / "01_multichannel_projection_comparison.png",
-        "enhanced_edge": output_dir / "02_enhanced_crown_edge.png",
         "arrays": output_dir / "enhanced_projection_maps.npz",
         "report": output_dir / "enhanced_projection_report.json",
     }
-    _save_comparison(paths["comparison"], maps, case_label)
-    _save_edge(paths["enhanced_edge"], maps, case_label)
+    if getattr(args, "write_diagnostics", True):
+        paths.update({
+            "comparison": output_dir / "01_multichannel_projection_comparison.png",
+            "enhanced_edge": output_dir / "02_enhanced_crown_edge.png",
+        })
+        _save_comparison(paths["comparison"], maps, case_label)
+        _save_edge(paths["enhanced_edge"], maps, case_label)
     np.savez_compressed(
         paths["arrays"],
         lr_centres=maps["lr_centres"],

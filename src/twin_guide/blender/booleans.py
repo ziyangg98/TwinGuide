@@ -19,6 +19,7 @@ MANIFOLD_OUTPUT_WELD_TOLERANCE_MM = 1e-6
 MANIFOLD_OUTPUT_COLLAPSE_LIMIT_MM = 0.02
 MANIFOLD_SIMPLIFY_TOLERANCE_MM = 0.005
 MANIFOLD_CUTTER_CLEARANCE_MM = 0.020
+MANIFOLD_CUTTER_LOCALIZATION_MARGIN_MM = 0.10
 
 
 def _to_trimesh(
@@ -256,7 +257,23 @@ def apply_manifold3d_differences(
             )
             expanded_cutter = cutter_manifold
             if cutter_clearance_mm > 0.0:
-                expanded_cutter = cutter_manifold.minkowski_sum(
+                # Minkowski sum 的成本由 cutter 全部面数决定，而差集只受
+                # 目标包围盒附近的 cutter 影响。先用封闭包围盒局部化 cutter；
+                # 裁剪边界与目标相距至少一个外扩半径和固定余量，
+                # 因此人工封口的外扩不可能触及目标。
+                bounds = result_manifold.bounding_box()
+                padding = (
+                    2.0 * cutter_clearance_mm
+                    + MANIFOLD_CUTTER_LOCALIZATION_MARGIN_MM
+                )
+                minimum = tuple(float(bounds[index]) - padding for index in range(3))
+                size = tuple(
+                    float(bounds[index + 3] - bounds[index]) + 2.0 * padding
+                    for index in range(3)
+                )
+                local_box = Manifold.cube(size).translate(minimum)
+                localized_cutter = cutter_manifold ^ local_box
+                expanded_cutter = localized_cutter.minkowski_sum(
                     Manifold.sphere(cutter_clearance_mm, circular_segments=4)
                 )
             result_manifold -= expanded_cutter

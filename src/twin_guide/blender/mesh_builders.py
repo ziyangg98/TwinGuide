@@ -26,6 +26,7 @@ from twin_guide.models import WindowCutout
 # TwinGuide 内部 trimesh 算法阈值为 1.50 mm；Blender 将原多边形重新三角化后，
 # 同一足印的最近点最大偏差约增加 0.05 mm，预留 0.06 mm 离散容差。
 FOOT_PROJECTION_LIMIT_MM = 1.560
+FOOT_PROJECTION_NUMERICAL_TOLERANCE_MM = 0.010
 MINIMUM_CONFORMAL_FOOTPRINT_SCALE = 0.77
 
 
@@ -393,7 +394,9 @@ def create_conformal_fusion_foot(
                 (surface - projected_normal * embed_depth_mm).as_tuple()
             )
         maximum_projection = candidate_maximum_projection
-        if maximum_projection <= FOOT_PROJECTION_LIMIT_MM:
+        if maximum_projection <= (
+            FOOT_PROJECTION_LIMIT_MM + FOOT_PROJECTION_NUMERICAL_TOLERANCE_MM
+        ):
             footprint_scale = candidate_scale
             top_vertices = candidate_top
             bottom_vertices = candidate_bottom
@@ -479,8 +482,9 @@ def voxel_union(
         duplicate.hide_set(False)
         duplicate.select_set(True)
     bpy.context.view_layer.objects.active = duplicates[0]
-    bpy.ops.object.join()
-    result = bpy.context.object
+    if len(duplicates) > 1:
+        bpy.ops.object.join()
+    result = duplicates[0]
     result.name = name
     result.data.remesh_voxel_size = voxel_size_mm
     result.data.remesh_voxel_adaptivity = 0.0

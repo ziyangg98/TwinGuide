@@ -50,6 +50,8 @@ class GuideMappingRequest:
     output_dir: Path
     case_yaml: Path | None = None
     profile: GuideMappingProfile = field(default_factory=GuideMappingProfile)
+    write_diagnostics: bool = False
+    overview_path: Path | None = None
 
     def resolved_recognition(self) -> ToothRecognitionResult:
         """内部算法说明。"""
@@ -91,6 +93,14 @@ class GuideMappingResult:
 
     def manifest(self) -> dict[str, Any]:
         """内部算法说明。"""
+        outputs = {
+            "guide_mapping_report": str(self.report_path),
+            "workflow_manifest": str(self.manifest_path),
+        }
+        for key in ("overview_png", "preview_png", "context_glb"):
+            value = self.mapping_report["outputs"].get(key)
+            if value is not None:
+                outputs[key] = value
         return {
             "schema_version": "1.0-guide-mapping-workflow",
             "created_at": self.created_at,
@@ -102,12 +112,7 @@ class GuideMappingResult:
                 LOCKED_GUIDE_MAPPING_PARAMETERS
             ),
             "recognition_manifest": str(self.recognition_manifest_path),
-            "outputs": {
-                "guide_mapping_report": str(self.report_path),
-                "preview_png": self.mapping_report["outputs"]["preview_png"],
-                "context_glb": self.mapping_report["outputs"]["context_glb"],
-                "workflow_manifest": str(self.manifest_path),
-            },
+            "outputs": outputs,
         }
 
 
@@ -137,6 +142,12 @@ def map_recognized_teeth_to_guide(
         base_mapping_report=recognition.base_mapping_path,
         enhanced_maps=recognition.enhanced_maps_path,
         output_dir=output_dir,
+        write_diagnostics=request.write_diagnostics,
+        overview_path=(
+            None
+            if request.overview_path is None
+            else Path(request.overview_path).resolve()
+        ),
     ))
     manifest_path = output_dir / "guide_mapping_result.json"
     result = GuideMappingResult(

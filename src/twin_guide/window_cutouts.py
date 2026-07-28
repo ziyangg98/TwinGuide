@@ -6,6 +6,8 @@ from twin_guide.models import (
     CaseAnalysis,
     CutoutPlan,
     CylinderCutout,
+    GuideSleeve,
+    OperationFeature,
     WindowCutout,
     WindowPurpose,
 )
@@ -13,7 +15,6 @@ from twin_guide.observation_window_opening import build_observation_window_openi
 from twin_guide.tooth_identification import ToothIdentificationResult
 from twin_guide.types import SleeveGenerationResult
 
-WindowCutoutPlan = CutoutPlan
 
 def _plan_channels(case: CaseAnalysis) -> tuple[CylinderCutout, ...]:
     """沿全部导管轴线构造带轴向余量的牙科导板通道。"""
@@ -34,8 +35,8 @@ def _plan_channels(case: CaseAnalysis) -> tuple[CylinderCutout, ...]:
 
 def _plan_operation_window(
     case: CaseAnalysis,
-    guides: tuple[object, object],
-    operation_feature: object,
+    guides: tuple[GuideSleeve, GuideSleeve],
+    operation_feature: OperationFeature,
     site_index: int,
 ) -> WindowCutout:
     """根据两导管间距、操作特征尺寸和局部牙科导板厚度规划操作窗。"""
@@ -68,6 +69,10 @@ def _plan_operation_window(
         if abs((sample.position - center).dot(tangent)) <= long_edge_mm * 0.5 + 2.0
         and abs((sample.position - center).dot(short_direction)) <= short_edge_mm * 0.5 + 2.0
     )
+    if not local_samples:
+        raise ValueError(
+            f"种植位 {site_index} 的操作窗范围内没有导板表面采样点"
+        )
     depth_coordinates = tuple(
         (sample.position - center).dot(normal)
         for sample in local_samples

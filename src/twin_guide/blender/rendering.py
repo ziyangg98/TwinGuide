@@ -11,6 +11,7 @@ from twin_guide.blender.mesh_queries import mesh_bounds
 from twin_guide.config import RenderParameters
 
 COLORS = {
+    "source": (0.20, 0.48, 0.70, 0.35),
     "final": (0.72, 0.74, 0.78, 1.0),
     "template": (0.30, 0.62, 0.86, 1.0),
     "sleeve": (0.58, 0.61, 0.66, 1.0),
@@ -20,6 +21,9 @@ COLORS = {
     "channel": (0.88, 0.38, 0.12, 0.42),
     "operation": (1.0, 0.30, 0.02, 0.45),
     "observation": (0.0, 0.85, 0.95, 0.48),
+    "avoidance_envelope": (0.78, 0.56, 0.42, 0.28),
+    "avoidance_axis": (0.12, 0.12, 0.12, 1.0),
+    "avoidance_pivot": (0.80, 0.08, 0.08, 1.0),
 }
 
 VIEW_DIRECTIONS = {

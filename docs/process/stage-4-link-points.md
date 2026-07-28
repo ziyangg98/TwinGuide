@@ -1,63 +1,274 @@
-# 4. 导管与牙科导板联建锚点选择
+# 4. 导管与导板锚点选择
 
-## 功能
+**实现状态：实验。** 本阶段只选点，不构造连接梁。对每根标准导管生成
+高、低两组导管侧 $Q/P$ 点，并从已切窗导板的真实外壁选择两个
+$A$ 点。输出是 `TemplateLinkPointPlan`，第 6 阶段只消费这些类型化锚点。
 
-为每个导管选择两个导管侧锚点和两个牙科导板侧锚点，定义连接管的端点。
-牙科导板侧支持传统最近点模式和按牙位横断面外侧轨迹选点模式。
+## 输入与符号
 
-## 输入
+| 符号 | 含义 |
+| --- | --- |
+| $\mathbf C_i,\mathbf a_i$ | 第 $i$ 根导管中心与有符号轴 |
+| $\mathbf d_i^C$ | 导管 C 口方向 |
+| $r_s,r_b,r_c$ | 导管外半径、导孔半径、连接梁半径 |
+| $[t_i^-,t_i^+]$ | 标准导管轴向范围 |
+| $\mathbf H_j,\mathbf o_j$ | 第 $j$ 个牙位的牙冠点和局部外向 |
+| $\mathbf e_{occ}$ | 第 2 阶段确认的牙合外向 |
+| $M_T$ | 真实导板表面网格 |
 
-`TemplateLinkPointContext` 包含 `CaseAnalysis`、`SleeveGenerationResult` 和 `WindowCutoutPlan`；
-`TemplatePointSelectionConfig` 提供净距、间距和搜索数量。
+上游为第 1 阶段导管、第 2 阶段牙位和第 3 阶段切口计划。
 
-## 输出
+## 1. 导管外壁母线
 
-`TemplateLinkPointPlan` 包含导管侧上下锚点和牙科导板侧左右锚点。
+C 口反方向投影到导管轴法平面：
 
-## 依赖关系
+$$
+\mathbf r_i=
+\operatorname{unit}\left[-\mathbf d_i^C+
+(\mathbf d_i^C\cdot\mathbf a_i)\mathbf a_i\right].
+$$
 
-该步骤读取第 1 步导管几何和第 3 步切口边界，为第 6 步提供连接端点。
+对所属导管对中点 $\mathbf m_i$，必须满足
 
-## 处理逻辑
+$$
+(\mathbf C_i-\mathbf m_i)\cdot\mathbf r_i>0,
+$$
 
-1. 将导管 C 口方向投影到轴线法平面并取反，得到成对向外方向，并检查其远离双导管中点。
-2. 直接使用参数化导管的恒定主体外壁区间；上下高度分别由端缘净距和连接梁半径确定。
-3. 在同一条标准主体外壁母线上生成接触点 Q，并按壁厚/预埋规则沿外法向偏移为梁中心线点 P。
-4. `nearest` 模式剔除与导孔和窗口净距不足的导板样本，并从导管两侧选择最近点对。
-5. `tooth_section_trajectory` 模式先把两根导管轴符号对齐并取平均，再用导板外法向
-   统一其符号，得到明确指向导板外侧的正导管轴 `a`。两导管几何中点连线投影到
-   `a` 的法平面并归一化为 `b`；`a` 和 `b` 张成锚点旋转面。
-6. 对每个牙位站位，以单牙牙冠最高点或双牙最高点均值为 `H`，沿正导管轴反向下降
-   2.0 mm 得到射线原点 `T = H - 2a`。用牙位 `local_outward` 判断 `±b` 中哪一侧
-   是 U 型牙弓内侧。U 侧和背 U 侧分别使用病例 YAML 中的
-   `u_side_ray_angle_degrees` 和 `back_u_side_ray_angle_degrees`，
-   默认为 70°/90°。
-7. 从 `T` 沿两条射线取得全部导板交点，合并 0.02 mm 内的重复三角面命中，并按
-   距离由近到远选择首个法向朝射线方向的出口面；这样会跳过临牙内壁入口，直接得到
-   当前局部导板壁的真实外表面锚点 `A−/A+`。该方法不再生成牙位截面轨迹，也不使用
-   15%/85%、分段中点、侧壁姿态阈值或任何轨迹弧长参数。
-8. 每个站位的两个射线锚点按到两根导管中点的最小总距离进行一一分配；因此每根导管
-   都从第一个牙位站位取得一个锚点，并从第二个牙位站位取得一个锚点。
-9. 后续为每根导管生成 `S− → P高 → S+` 与 `S− → P低 → S+`，四根连续梁均跨接
-   两个牙位站位和两个导板分量。
+即该母线远离两导管中点。不满足时直接报错，不自动翻转 C 口。
 
-## 配置参数
+## 2. 高、低 Q 点
 
-| 参数 | 默认值 | 含义 |
-| --- | ---: | --- |
-| `template_clearance_mm` | 1.2 | 候选点到导孔和窗口的最小净距 |
-| `connector_diameter_mm` | 4.60 | 导管与牙科导板之间的连接梁直径；配置可省略 |
-| `surface_sample_limit` | 4096 | 按距离保留的表面样本上限 |
-| `candidate_limit` | 512 | 每侧参与成对评分的候选上限 |
+导管轴以 C 口高端为原点，$+\mathbf a_i$ 指向闭合低端。高、低接触
+位置为
 
-`tooth_section_trajectory` 模式在
-`case.yaml` 的 `design.guide_anchors.anchors` 中逐个声明锚点。每个锚点
-独立设置 `endpoint`、`side`、`station` 和 `ray_angle_degrees`；同一端部
-必须各有一个 `u_side` 和 `back_u_side`。站位可以是单牙中心
-`tooth_center`，也可以是相邻两牙中心中点 `tooth_pair_midpoint`。
+$$
+t_i^{U}=t_i^+-c_U-r_c,\qquad
+t_i^{L}=t_i^-+c_L+r_c,
+$$
 
-70°/90° 外壁射线模式暂不以窗口、导孔净距或最低跨度否决锚点。
+默认 $c_U=2.0$ mm、$c_L=1.0$ mm。令闭合低端为
+$\mathbf E_i=\mathbf C_i+t_i^+\mathbf a_i$，则任一轴向位置 $t$ 的截面中心与外壁
+$Q$ 点为
 
-## 结果示例
+$$
+\mathbf O_i(t)=\mathbf E_i-(t-t_i^-)\mathbf a_i,\qquad
+\mathbf Q_i(t)=\mathbf O_i(t)+r_s\mathbf r_i.
+$$
 
-![联建锚点选择](../images/link-point-selection.png)
+局部壁厚为
+
+$$
+w_i=\|\mathbf Q_i-\mathbf O_i\|-r_b=r_s-r_b.
+$$
+
+必须满足 $t_i^U>t_i^L$，且两点与轴向端部的余量不小于配置值。
+
+## 3. 从 Q 到梁中心线 P
+
+若期望梁与导管重叠深度为 $o_i$，则
+
+$$
+\mathbf P_i=\mathbf Q_i+(r_c-o_i)\mathbf r_i.
+$$
+
+高端为避免挡住标准导孔，使用
+
+$$
+o_i^U=\min(2r_c,w_i-c_b),
+$$
+
+其中 $c_b=0.01$ mm 是导孔余量。低端允许全直径预埋：
+
+$$
+o_i^L=2r_c.
+$$
+
+低梁因此可以进入导孔区，最终在导管、导板和梁架融合后再次复切导孔。
+
+## 4. 牙位射线锚点 A
+
+每个锚点在 YAML 中独立给出牙位站位、U/背 U 侧和射线角。
+代码按拓扑使用两种不同标架，不把它们混成一条规则。
+
+### 4.1 单种植位：公共导管标架
+
+将两根导管轴同向对齐后取平均，并使其指向导板外侧 $\mathbf n_T$：
+
+$$
+\widetilde{\mathbf a}_2=
+\begin{cases}
+\mathbf a_2,&\mathbf a_1\cdot\mathbf a_2\ge0,\\
+-\mathbf a_2,&\mathbf a_1\cdot\mathbf a_2<0,
+\end{cases}
+\qquad
+\mathbf a_+=\operatorname{orient}_{\mathbf n_T}
+\left(\operatorname{unit}(\mathbf a_1+\widetilde{\mathbf a}_2)\right).
+$$
+
+$\operatorname{orient}_{\mathbf n_T}$ 只在点积为负时翻转符号，结果还必须满足
+$\mathbf a_+\cdot\mathbf n_T\ge0.25$。
+
+令两导管轴向中点为 $\mathbf m_1,\mathbf m_2$，公共横向为
+
+$$
+\mathbf l=\operatorname{unit}\left[
+(\mathbf m_2-\mathbf m_1)-
+((\mathbf m_2-\mathbf m_1)\cdot\mathbf a_+)\mathbf a_+
+\right].
+$$
+
+必须有 $|\mathbf l\cdot\mathbf o_j|\ge0.10$。再定义
+
+$$
+\mathbf l_B=
+\begin{cases}
+\mathbf l,&\mathbf l\cdot\mathbf o_j>0,\\
+-\mathbf l,&\mathbf l\cdot\mathbf o_j<0,
+\end{cases}
+\qquad \mathbf l_U=-\mathbf l_B.
+$$
+
+单牙站位使用牙冠点 $\mathbf H_j$，双牙站位使用两牙冠点均值 $\mathbf H$。
+射线原点和两侧方向为
+
+$$
+\mathbf T=\mathbf H-2\mathbf a_+,
+\qquad
+\mathbf d_s(\theta)=
+\cos\theta\,\mathbf a_++\sin\theta\,\mathbf l_s,
+\quad s\in\{U,B\}.
+$$
+
+这一标架对应当前单种植位的 `tooth_section_trajectory`
+和 `terminal_distal_common_node`。
+
+### 4.2 多种植位连续路径：牙位局部标架
+
+双牙站位使用两牙中心连线，单牙站位使用最近且有导板覆盖的邻牙连线。
+记该参考切向为 $\mathbf g$，则
+
+$$
+\mathbf n_\Pi=\operatorname{unit}\left[
+\mathbf g-(\mathbf g\cdot\mathbf e_{occ})\mathbf e_{occ}
+\right],
+\qquad
+\mathbf l=\operatorname{unit}(\mathbf n_\Pi\times\mathbf e_{occ}).
+$$
+
+仍按第 4.1 节中 $\mathbf l\cdot\mathbf o_j$ 的符号得到
+$\mathbf l_U,\mathbf l_B$，但此时
+
+$$
+\mathbf T=\mathbf H-2\mathbf e_{occ},
+\qquad
+\mathbf d_s(\theta)=
+\cos\theta\,\mathbf e_{occ}+\sin\theta\,\mathbf l_s.
+$$
+
+这一标架只对应 `adjacent_two_implant_continuous_paths`
+和 `adjacent_two_implant_terminal_distal_node_paths`。
+
+### 4.3 外壁出口
+
+两种标架都使用
+
+$$
+\mathbf r(\lambda)=\mathbf T+\lambda\mathbf d_s(\theta),\qquad\lambda\ge0.
+$$
+
+求射线与 $M_T$ 的全部交点 $\{(\lambda_k,\mathbf A_k,\mathbf n_k)\}$，合并
+$0.02$ mm 内的重复命中，再取第一个外壁出口：
+
+$$
+k^*=\min\left\{k:\lambda_k>10^{-5}\ \mathrm{mm},
+\mathbf n_k\cdot\mathbf d_s(\theta)\ge0.05\right\},\qquad
+\mathbf A=\mathbf A_{k^*}.
+$$
+
+这一法向条件跳过内壁入口，选取局部导板真实外表面。
+
+## 5. 最近点备用模式
+
+对未使用牙位射线的配置，先保留满足全部切口净距的导板样本：
+
+$$
+\mathcal S'=\left\{\mathbf x\in\mathcal S:
+\min_{c\in\mathcal C}d(\mathbf x,c)\ge c_T
+\right\}.
+$$
+
+对导管上下 $P$ 中点 $\mathbf m_P$，左右方向为
+
+$$
+\mathbf l_i=\operatorname{unit}(\mathbf a_i\times\mathbf r_i).
+$$
+
+按 $(\mathbf x-\mathbf m_P)\cdot\mathbf l_i$ 的符号分左右候选，要求点对跨度
+
+$$
+\|\mathbf A^- -\mathbf A^+\|\ge
+\max(r_s,2.5r_c).
+$$
+
+可行点对按
+
+$$
+\left(
+\|\mathbf A^- -\mathbf m_P\|+\|\mathbf A^+ -\mathbf m_P\|,
+\|\mathbf A^- -\mathbf A^+\|,
+p^-,p^+
+\right)
+$$
+
+的字典序取最小，$p^-,p^+$ 为多边形索引。无左右可行点对时报错，
+不用同侧两点替代。
+
+## 6. 导管与两侧锚点分配
+
+每个端部必须恰有一个 U 侧和一个背 U 侧锚点。对导管 $i$ 的
+高低锚点中点
+
+$$
+\mathbf M_i=\frac{\mathbf P_i^-+\mathbf P_i^+}{2},
+$$
+
+单种植位在每个端部独立比较
+
+$$
+D_{direct}=\|\mathbf A_U-\mathbf M_1\|+
+\|\mathbf A_B-\mathbf M_2\|,
+$$
+
+$$
+D_{reverse}=\|\mathbf A_B-\mathbf M_1\|+
+\|\mathbf A_U-\mathbf M_2\|.
+$$
+
+取较小者，相等时保留 direct。
+
+多种植位对每个侧别 $s$ 先取路径首尾锚点中点
+
+$$
+\overline{\mathbf A}_s=
+\frac{\mathbf A_{s,start}+\mathbf A_{s,end}}{2},
+$$
+
+再对每个种植位内的两根导管以同样的 direct/reverse 距离和分配到
+$(\overline{\mathbf A}_U,\overline{\mathbf A}_B)$。最后沿路径首尾中线方向排序各种植位，
+形成第 6 阶段的同侧有序路径。
+
+## 质量检查与输出
+
+- 导管数必须为偶数，并按种植位每两根成对；
+- $t_i^U>t_i^L$ 且满足轴向余量；
+- $w_i>c_b$，否则高端梁会侵入导孔；
+- 每条配置射线必须至少有一个有效外壁出口，代码取沿射线的第一个；
+- 每个端部必须同时有 U 侧和背 U 侧锚点；
+- 所有导板锚点必须来自真实导板表面或明确的特殊结构节点。
+
+`stage-04-anchor-selection.json` 保存 $Q/P/A$、射线和分配关系；
+`stage-04-anchor-selection.png` 在真实导管与导板上显示锚点及其射线。
+
+![导管与导板锚点](../images/stage-4-anchor-selection.png)
+
+*tooth-11 完整运行的第 4 阶段结果。红色点为导管 Q/P 锚点，黄色点为导板外壁锚点，黄色细线显示牙位射线和导板交点的来源。*

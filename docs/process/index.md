@@ -7,13 +7,34 @@
 末端牙龈公共节点和手机避让切除。导管、导板和梁架整体融合后，统一复切导孔和
 观察窗，再完成 STL 导出。
 
-源码以 `GenerationContext` 传递阶段结果。完整的当前建模思想、参数语义、特殊病例接口和
-质量检查见[《TwinGuide 建模技术说明》](../guide/technical-modeling-workflow.md)。
+源码以 `GenerationContext` 传递阶段结果。各阶段页面分别说明算法公式、
+分支条件、输出和质量检查；[《TwinGuide 建模架构与实现边界》](../guide/technical-modeling-workflow.md)
+说明模块分层和整体布尔顺序。
 
-牙位识别按病例配置执行；按压结构、特殊拓扑和手机避让均为可选阶段，未配置时为
-`skipped`。
+## 统一阶段输出
 
-## 当前算法主线
+`generate` 将阶段产物写入输出根目录：七个阶段均记录 JSON，
+完成的阶段同时生成 PNG。
+
+- `stage-NN-<name>.json`：结构化结果，顶层固定为 `schema_version`、
+  `stage`、`case`、`inputs`、`parameters`、`result`、`quality`和
+  `artifacts`。
+- `stage-NN-<name>.png`：由该阶段的几何计划或实体化结果生成的结果图。
+
+| 阶段 | 文件主名 |
+| --- | --- |
+| 1 | `stage-01-sleeve-reconstruction` |
+| 2 | `stage-02-tooth-mapping` |
+| 3 | `stage-03-cutout-planning` |
+| 4 | `stage-04-anchor-selection` |
+| 5 | `stage-05-press-beam` |
+| 6 | `stage-06-structure-linking` |
+| 7 | `stage-07-clearance-adjustment` |
+
+`twin_guide.stl` 和 `guide_iso/top/bottom/side.png` 是整体建模结果。
+可再生成的内部文件按阶段写入 `.cache/stage-NN-<name>/`。
+
+## 算法流程
 
 | 步骤 | 最小几何逻辑 |
 | --- | --- |
@@ -34,5 +55,6 @@ stage-3-cutouts
 stage-4-link-points
 stage-5-press-beam
 stage-6-linking
+special-topologies
 stage-7-clearance
 ```

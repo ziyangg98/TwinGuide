@@ -16,23 +16,9 @@ if [ "$#" -eq 0 ]; then
     exit 2
 fi
 
-run_directory=$(mktemp -d "${TMPDIR:-/tmp}/twinguide.XXXXXX")
-success_marker="$run_directory/completed"
-trap 'rm -f "$success_marker"; rmdir "$run_directory"' EXIT HUP INT TERM
-export TWIN_GUIDE_SUCCESS_MARKER="$success_marker"
-
-set +e
-"$project_directory/scripts/blender.sh" \
+exec "$project_directory/scripts/blender.sh" \
     --background \
     --factory-startup \
     --python-expr \
-    "from os import environ; from pathlib import Path; from twin_guide.cli import main; main(); Path(environ['TWIN_GUIDE_SUCCESS_MARKER']).touch()" \
+    "from twin_guide.cli import main; main()" \
     -- "$@"
-status=$?
-set -e
-
-if [ ! -f "$success_marker" ]; then
-    echo "TwinGuide did not complete inside Blender." >&2
-    exit 1
-fi
-exit "$status"

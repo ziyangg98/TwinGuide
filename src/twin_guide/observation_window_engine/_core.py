@@ -1,33 +1,18 @@
-"""观察窗内部实现。\n\nCut configured observation windows from an approved tooth-guide mapping.
-
-The script consumes ``tooth_guide_mapping.json``.  It never re-identifies or
-renumbers teeth.  Each cutter follows the saved local guide contour for the
-configured height, extends 0.4 mm beyond a top-open boundary, and crosses only
-the first ray-measured labial/buccal guide wall plus a small overcut margin.
-"""
+"""根据已批准的 FDI 牙位映射构造轴扫观察窗。"""
 
 from __future__ import annotations
 
-import argparse
+import itertools
 import json
 import math
-import os
-from datetime import UTC, datetime
+from dataclasses import dataclass, replace
 from pathlib import Path
 
-os.environ.setdefault("MPLCONFIGDIR", "/tmp/cut_mapped_observation_windows_mpl")
-os.environ.setdefault("XDG_CACHE_HOME", "/tmp/cut_mapped_observation_windows_cache")
-
-import matplotlib
-
-matplotlib.use("Agg")
-import itertools
-
-import matplotlib.pyplot as plt
 import numpy as np
 import trimesh
 from manifold3d import Manifold, Mesh
 
+from twin_guide.tooth_identification import stage_2_mapping_payload
 from twin_guide.tooth_mapping.controlled_mesh_repair import (
     ControlledVolumeRepairError,
     ensure_closed_volume,
@@ -35,6 +20,30 @@ from twin_guide.tooth_mapping.controlled_mesh_repair import (
 from twin_guide.tooth_mapping.pipeline import load_mesh, unit
 
 EPS = 1e-9
+
+
+@dataclass(frozen=True, slots=True)
+class ObservationWindowRequest:
+    """第 3 阶段轴扫观察窗的唯一内部请求。"""
+
+    case: Path
+    mapping_report: Path
+    source: Path
+    output_dir: Path
+    side_extension_mm: float = 0.4
+    wall_overcut_mm: float = 0.4
+    following_wall_safety_mm: float = 0.10
+    axis_core_overcut_mm: float = 0.30
+    minimum_axis_visibility_row_fraction: float = 0.50
+    minimum_axis_clear_corridor_fraction: float = 0.95
+    union_batch_size: int = 16
+    fragment_volume_tolerance_mm3: float = 2.0
+    minimum_removed_volume_mm3: float = 1.0
+    residual_volume_tolerance_mm3: float = 1e-4
+    volume_identity_tolerance_mm3: float = 5e-2
+    volume_identity_relative_tolerance: float = 1e-4
+    local_failure_drop_targets_mm: tuple[float, ...] = ()
+    local_failure_transition_rows: int = 1
 
 
 def boolean(operation: str, meshes: list[trimesh.Trimesh]) -> trimesh.Trimesh:
@@ -129,342 +138,6 @@ def remove_submicron_degenerate_faces(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     if original.is_volume:
         return original
     raise RuntimeError("submicron-degenerate cleanup could not preserve the result volume")
-
-
-def validate_contour_window_samples(window: dict[str, object]) -> None:
-    """内部算法说明。\n\nValidate saved profiles used by a contour-following cutter.
-
-    Axis-sweep cutters derive fresh wall support from source-guide rays along
-    the saved axis. Legacy contour samples are not inputs to that method and
-    must not block an otherwise valid axis-sweep window.
-    """
-
-    samples = list(window.get("samples", []))
-    if len(samples) < 2:
-        raise RuntimeError(f"window {window['id']} has incomplete mapped profiles")
-    mapped_indices = sorted(int(item["sample_index"]) for item in samples)
-    failed_indices = sorted(
-        int(item["sample_index"]) for item in window.get("failures", [])
-    )
-    internal_failures = [
-        index for index in failed_indices
-        if mapped_indices[0] < index < mapped_indices[-1]
-    ]
-    if (
-        internal_failures
-        or mapped_indices != list(range(mapped_indices[0], mapped_indices[-1] + 1))
-    ):
-        raise RuntimeError(
-            f"window {window['id']} has internal unmapped sections: "
-            f"{internal_failures}"
-        )
-
-
-def smooth_surface_normals(
-    profiles: np.ndarray,
-    outward_rows: np.ndarray,
-    e_occ: np.ndarray,
-) -> np.ndarray:
-    """内部算法说明。"""
-    along_arch = np.gradient(profiles, axis=0)
-    along_contour = np.gradient(profiles, axis=1)
-    normals = np.cross(along_contour, along_arch)
-    for row in range(normals.shape[0]):
-        preferred = unit(outward_rows[row] + e_occ)
-        for column in range(normals.shape[1]):
-            normal = normals[row, column]
-            normal = preferred if np.linalg.norm(normal) <= EPS else unit(normal)
-            if float(np.dot(normal, preferred)) < 0.0:
-                normal = -normal
-            normals[row, column] = normal
-    padded = np.pad(normals, ((1, 1), (1, 1), (0, 0)), mode="edge")
-    averaged = (
-        4.0 * padded[1:-1, 1:-1]
-        + padded[:-2, 1:-1] + padded[2:, 1:-1]
-        + padded[1:-1, :-2] + padded[1:-1, 2:]
-    ) / 8.0
-    lengths = np.linalg.norm(averaged, axis=2)
-    return averaged / np.maximum(lengths[:, :, None], EPS)
-
-
-def adaptive_wall_thickness(
-    source: trimesh.Trimesh,
-    cutter_surface: np.ndarray,
-    normals: np.ndarray,
-    outward_margin_mm: float,
-    maximum_wall_thickness_mm: float,
-    ray_entry_tolerance_mm: float,
-    requested_wall_overcut_mm: float,
-    following_wall_safety_mm: float = 0.10,
-    minimum_valid_fraction: float = 0.75,
-) -> tuple[np.ndarray, np.ndarray, dict[str, float | int]]:
-    """内部算法说明。\n\nMeasure only the first guide wall encountered behind each profile point.
-
-    Rays start just outside the mapped labial/buccal surface and travel inward.
-    The first two distinct intersections are the entry and exit of the local
-    guide wall.  Invalid/tangent samples are filled from adjacent valid grid
-    samples; a low valid fraction is a hard failure instead of falling back to
-    an arbitrary deep cutter.
-    """
-
-    shape = cutter_surface.shape[:2]
-    origins = (cutter_surface + outward_margin_mm * normals).reshape((-1, 3))
-    directions = (-normals).reshape((-1, 3))
-    locations, ray_indices, _ = source.ray.intersects_location(
-        origins, directions, multiple_hits=True
-    )
-    grouped: list[list[float]] = [[] for _ in range(len(origins))]
-    for location, ray_index in zip(locations, ray_indices, strict=False):
-        index = int(ray_index)
-        distance = float(np.dot(location - origins[index], directions[index]))
-        if distance > 1e-5:
-            grouped[index].append(distance)
-
-    measured = np.full(len(origins), np.nan, dtype=float)
-    applied_overcut = np.full(len(origins), np.nan, dtype=float)
-    following_wall_clearances: list[float] = []
-    remaining_clearances: list[float] = []
-    curtailed_overcut_count = 0
-    duplicate_tolerance_mm = 0.02
-    for index, distances in enumerate(grouped):
-        unique: list[float] = []
-        for distance in sorted(distances):
-            if not unique or distance - unique[-1] > duplicate_tolerance_mm:
-                unique.append(distance)
-        if len(unique) < 2:
-            continue
-        entry, exit_ = unique[0], unique[1]
-        thickness = exit_ - entry
-        if abs(entry - outward_margin_mm) > ray_entry_tolerance_mm:
-            continue
-        if not 0.20 <= thickness <= maximum_wall_thickness_mm:
-            continue
-        measured[index] = thickness
-        local_overcut = requested_wall_overcut_mm
-        if len(unique) >= 3:
-            clearance = float(unique[2] - exit_)
-            following_wall_clearances.append(clearance)
-            if clearance <= following_wall_safety_mm + 0.05:
-                measured[index] = np.nan
-                continue
-            local_overcut = min(
-                requested_wall_overcut_mm,
-                clearance - following_wall_safety_mm,
-            )
-            if local_overcut < requested_wall_overcut_mm - 1e-6:
-                curtailed_overcut_count += 1
-            remaining_clearances.append(clearance - local_overcut)
-        applied_overcut[index] = local_overcut
-
-    measured = measured.reshape(shape)
-    applied_overcut = applied_overcut.reshape(shape)
-    valid = np.isfinite(measured)
-    valid_count = int(np.count_nonzero(valid))
-    valid_fraction = float(valid_count / measured.size)
-    if valid_fraction < minimum_valid_fraction:
-        raise RuntimeError(
-            "adaptive wall-thickness ray casting is incomplete "
-            f"({valid_fraction:.1%} valid, need {minimum_valid_fraction:.1%})"
-        )
-
-    filled = measured.copy()
-    # Propagate local medians into the small set of tangent/extension samples.
-    for _ in range(sum(shape)):
-        pending = np.argwhere(~np.isfinite(filled))
-        if not len(pending):
-            break
-        updates: list[tuple[int, int, float]] = []
-        for row, column in pending:
-            neighbours = []
-            for d_row, d_column in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-                other_row, other_column = row + d_row, column + d_column
-                if 0 <= other_row < shape[0] and 0 <= other_column < shape[1]:
-                    value = filled[other_row, other_column]
-                    if np.isfinite(value):
-                        neighbours.append(float(value))
-            if neighbours:
-                updates.append((int(row), int(column), float(np.median(neighbours))))
-        if not updates:
-            break
-        for row, column, value in updates:
-            filled[row, column] = value
-    if not np.all(np.isfinite(filled)):
-        filled[~np.isfinite(filled)] = float(np.nanmedian(measured))
-
-    filled_overcut = applied_overcut.copy()
-    # Use the same local-neighbour propagation for overcut values whose wall
-    # thickness ray was tangent or otherwise invalid.
-    for _ in range(sum(shape)):
-        pending = np.argwhere(~np.isfinite(filled_overcut))
-        if not len(pending):
-            break
-        updates: list[tuple[int, int, float]] = []
-        for row, column in pending:
-            neighbours = []
-            for d_row, d_column in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-                other_row, other_column = row + d_row, column + d_column
-                if 0 <= other_row < shape[0] and 0 <= other_column < shape[1]:
-                    value = filled_overcut[other_row, other_column]
-                    if np.isfinite(value):
-                        neighbours.append(float(value))
-            if neighbours:
-                updates.append((int(row), int(column), float(np.min(neighbours))))
-        if not updates:
-            break
-        for row, column, value in updates:
-            filled_overcut[row, column] = value
-    if not np.all(np.isfinite(filled_overcut)):
-        filled_overcut[~np.isfinite(filled_overcut)] = float(np.nanmin(applied_overcut))
-
-    valid_values = measured[valid]
-    return filled, filled_overcut, {
-        "ray_sample_count": int(measured.size),
-        "valid_ray_sample_count": valid_count,
-        "filled_ray_sample_count": int(measured.size - valid_count),
-        "valid_ray_fraction": valid_fraction,
-        "measured_wall_thickness_min_mm": float(np.min(valid_values)),
-        "measured_wall_thickness_median_mm": float(np.median(valid_values)),
-        "measured_wall_thickness_max_mm": float(np.max(valid_values)),
-        "applied_wall_thickness_min_mm": float(np.min(filled)),
-        "applied_wall_thickness_max_mm": float(np.max(filled)),
-        "following_wall_ray_count": len(following_wall_clearances),
-        "nearest_following_wall_clearance_mm": (
-            float(np.min(following_wall_clearances))
-            if following_wall_clearances else -1.0
-        ),
-        "requested_wall_overcut_mm": float(requested_wall_overcut_mm),
-        "applied_wall_overcut_min_mm": float(np.min(filled_overcut)),
-        "applied_wall_overcut_max_mm": float(np.max(filled_overcut)),
-        "curtailed_overcut_ray_count": int(curtailed_overcut_count),
-        "minimum_clearance_after_overcut_mm": (
-            float(np.min(remaining_clearances)) if remaining_clearances else -1.0
-        ),
-    }
-
-
-def structured_prism(outer: np.ndarray, inner: np.ndarray) -> trimesh.Trimesh:
-    """内部算法说明。\n\nCreate one indexed closed prism from paired structured surface grids.
-
-    This avoids Boolean-union seams between hundreds of convex cells.  Those
-    seams can be harmless in indexed PLY but become coincident vertices after
-    STL discards topology, producing a non-manifold welded STL.
-    """
-
-    rows, columns, _ = outer.shape
-    layer_size = rows * columns
-    vertices = np.vstack([outer.reshape((-1, 3)), inner.reshape((-1, 3))])
-
-    def outer_index(row: int, column: int) -> int:
-        """内部算法说明。"""
-        return row * columns + column
-
-    def inner_index(row: int, column: int) -> int:
-        """内部算法说明。"""
-        return layer_size + row * columns + column
-
-    faces: list[list[int]] = []
-
-    def quad(a: int, b: int, c: int, d: int, reverse: bool = False) -> None:
-        """内部算法说明。"""
-        if reverse:
-            faces.extend([[a, c, b], [a, d, c]])
-        else:
-            faces.extend([[a, b, c], [a, c, d]])
-
-    for row in range(rows - 1):
-        for column in range(columns - 1):
-            quad(
-                outer_index(row, column), outer_index(row + 1, column),
-                outer_index(row + 1, column + 1), outer_index(row, column + 1),
-            )
-            quad(
-                inner_index(row, column), inner_index(row + 1, column),
-                inner_index(row + 1, column + 1), inner_index(row, column + 1),
-                reverse=True,
-            )
-    for column in range(columns - 1):
-        quad(
-            outer_index(0, column), outer_index(0, column + 1),
-            inner_index(0, column + 1), inner_index(0, column),
-        )
-        quad(
-            outer_index(rows - 1, column), inner_index(rows - 1, column),
-            inner_index(rows - 1, column + 1), outer_index(rows - 1, column + 1),
-        )
-    for row in range(rows - 1):
-        quad(
-            outer_index(row, 0), inner_index(row, 0),
-            inner_index(row + 1, 0), outer_index(row + 1, 0),
-        )
-        quad(
-            outer_index(row, columns - 1), outer_index(row + 1, columns - 1),
-            inner_index(row + 1, columns - 1), inner_index(row, columns - 1),
-        )
-    mesh = trimesh.Trimesh(vertices=vertices, faces=np.asarray(faces, dtype=np.int64), process=False)
-    mesh.remove_unreferenced_vertices()
-    if not mesh.is_volume:
-        mesh.fix_normals(multibody=True)
-    if not mesh.is_volume:
-        raise RuntimeError("structured mapped-window cutter is not a valid closed volume")
-    return mesh
-
-
-def build_grid_cutter(
-    source: trimesh.Trimesh,
-    profiles: np.ndarray,
-    outward_rows: np.ndarray,
-    e_occ: np.ndarray,
-    top_open: bool,
-    top_extension_mm: float,
-    side_extension_mm: float,
-    outward_margin_mm: float,
-    wall_overcut_mm: float,
-    maximum_wall_thickness_mm: float,
-    ray_entry_tolerance_mm: float,
-    union_batch_size: int,
-) -> tuple[trimesh.Trimesh, np.ndarray, dict[str, float | int]]:
-    # Extend past both FDI interval ends.  Ending a cutter exactly on the guide
-    # surface can leave distinct coincident vertices: indexed PLY remains
-    # watertight, but STL welding then exposes a non-manifold tangency.
-    """内部算法说明。"""
-    start_direction = unit(np.mean(profiles[0] - profiles[1], axis=0))
-    end_direction = unit(np.mean(profiles[-1] - profiles[-2], axis=0))
-    start_row = profiles[:1] + side_extension_mm * start_direction[None, None, :]
-    end_row = profiles[-1:] + side_extension_mm * end_direction[None, None, :]
-    profiles = np.concatenate([start_row, profiles, end_row], axis=0)
-    outward_rows = np.concatenate([outward_rows[:1], outward_rows, outward_rows[-1:]], axis=0)
-    if top_open:
-        extended_top = profiles[:, :1, :] + top_extension_mm * e_occ[None, None, :]
-        cutter_surface = np.concatenate([extended_top, profiles], axis=1)
-    else:
-        cutter_surface = profiles
-    normals = smooth_surface_normals(cutter_surface, outward_rows, e_occ)
-    wall_thickness, applied_overcut, thickness_report = adaptive_wall_thickness(
-        source, cutter_surface, normals, outward_margin_mm,
-        maximum_wall_thickness_mm, ray_entry_tolerance_mm, wall_overcut_mm,
-    )
-    outer = cutter_surface + outward_margin_mm * normals
-    inner = cutter_surface - (
-        wall_thickness[:, :, None] + applied_overcut[:, :, None]
-    ) * normals
-    rows, columns, _ = cutter_surface.shape
-    cells = []
-    for row in range(rows - 1):
-        for column in range(columns - 1):
-            corners = np.vstack([
-                outer[row, column], outer[row + 1, column],
-                outer[row + 1, column + 1], outer[row, column + 1],
-                inner[row, column], inner[row + 1, column],
-                inner[row + 1, column + 1], inner[row, column + 1],
-            ])
-            cell = trimesh.convex.convex_hull(corners)
-            if not cell.is_volume:
-                raise RuntimeError(f"cutter cell ({row}, {column}) is not a closed volume")
-            cells.append(cell)
-    cutter = retain_positive_volume_components(
-        regularize_manifold(union_batched(cells, union_batch_size))
-    )
-    return cutter, cutter_surface, thickness_report
 
 
 def _fill_axis_sweep_grid(values: np.ndarray) -> np.ndarray:
@@ -854,73 +527,24 @@ def sample_vertices(mesh: trimesh.Trimesh, count: int) -> np.ndarray:
     return np.asarray(mesh.vertices)[indices]
 
 
-def colored(mesh: trimesh.Trimesh, rgba: tuple[int, int, int, int]) -> trimesh.Trimesh:
-    """内部算法说明。"""
-    result = mesh.copy()
-    result.visual.face_colors = np.tile(np.asarray(rgba, dtype=np.uint8), (len(result.faces), 1))
-    return result
-
-
-def render_preview(
-    path: Path,
-    source: trimesh.Trimesh,
-    result: trimesh.Trimesh,
-    cutter: trimesh.Trimesh,
-    surfaces: dict[str, np.ndarray],
-) -> None:
-    """内部算法说明。"""
-    source_points = sample_vertices(source, 42_000)
-    result_points = sample_vertices(result, 58_000)
-    cutter_points = sample_vertices(cutter, 30_000)
-    figure = plt.figure(figsize=(16, 11), constrained_layout=True)
-    for index, (title, first, second) in enumerate(
-        (("X-Y", 0, 1), ("X-Z", 0, 2), ("Y-Z", 1, 2)), start=1
-    ):
-        axis = figure.add_subplot(2, 2, index)
-        axis.scatter(source_points[:, first], source_points[:, second], s=0.06, c="#94a3b8", alpha=0.05)
-        axis.scatter(result_points[:, first], result_points[:, second], s=0.08, c="#c6a66b", alpha=0.24)
-        axis.scatter(cutter_points[:, first], cutter_points[:, second], s=0.06, c="#dc2626", alpha=0.06)
-        for name, surface in surfaces.items():
-            axis.plot(surface[:, 0, first], surface[:, 0, second], linewidth=2.0, label=f"{name} top")
-            axis.plot(surface[:, -1, first], surface[:, -1, second], linewidth=1.2, linestyle="--")
-        axis.set_aspect("equal", adjustable="box")
-        axis.set_title(f"{title} projection")
-        axis.set_xlabel("XYZ"[first] + " (mm)")
-        axis.set_ylabel("XYZ"[second] + " (mm)")
-        axis.legend(fontsize=7)
-    axis = figure.add_subplot(2, 2, 4)
-    axis.axis("off")
-    axis.text(
-        0.02, 0.96,
-        "Mapped FDI observation-window cut\n"
-        "gray: source guide\n"
-        "gold: Boolean result\n"
-        "red: cutter\n"
-        "solid trajectories: top-open extension\n"
-        "dashed trajectories: local-contour bottom boundary",
-        va="top", fontsize=13,
-    )
-    figure.savefig(path, dpi=220)
-    plt.close(figure)
-
-
-def _run_once(args: argparse.Namespace) -> dict[str, object]:
+def _run_once(args: ObservationWindowRequest) -> dict[str, object]:
     """内部算法说明。"""
     case_yaml = args.case.resolve()
-    case_dir = case_yaml.parent
-    mapping_path = (
-        args.mapping_report.resolve()
-        if args.mapping_report
-        else case_dir / "输出/tooth_guide_mapping/tooth_guide_mapping.json"
+    mapping_path = args.mapping_report.resolve()
+    mapping = stage_2_mapping_payload(
+        json.loads(mapping_path.read_text(encoding="utf-8"))
     )
-    mapping = json.loads(mapping_path.read_text(encoding="utf-8"))
     if mapping.get("status") != "tooth_guide_mapping_complete" or not all(mapping.get("QA", {}).values()):
         raise RuntimeError("tooth-guide mapping has not passed all QA gates")
-    source_path = args.source.resolve() if args.source else Path(mapping["sources"]["guide"])
+    source_path = args.source.resolve()
     source = load_mesh(source_path)
-    output_dir = args.output_dir.resolve() if args.output_dir else case_dir / "输出/mapped_observation_windows"
+    output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     repair_report_path = output_dir / "source_guide_controlled_repair.json"
+    repaired_mesh_path = output_dir / "source_guide_controlled_repaired.ply"
+    for stale_path in (repair_report_path, repaired_mesh_path):
+        if stale_path.is_file():
+            stale_path.unlink()
     try:
         repair = ensure_closed_volume(source)
     except ControlledVolumeRepairError as error:
@@ -932,105 +556,55 @@ def _run_once(args: argparse.Namespace) -> dict[str, object]:
     source = repair.mesh
     source_repaired_path = None
     if repair.report["applied"]:
-        source_repaired_path = output_dir / "source_guide_controlled_repaired.ply"
+        source_repaired_path = repaired_mesh_path
         source.export(source_repaired_path)
     repair_report = dict(repair.report)
-    repair_report["report_json"] = str(repair_report_path)
+    repair_report["report_json"] = (
+        str(repair_report_path) if repair.report["applied"] else None
+    )
     repair_report["repaired_mesh_ply"] = (
         str(source_repaired_path) if source_repaired_path else None
     )
-    repair_report_path.write_text(
-        json.dumps(repair_report, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    e_occ = unit(np.asarray(mapping["coordinate_system"]["e_occ"], dtype=float))
-
+    if repair.report["applied"]:
+        repair_report_path.write_text(
+            json.dumps(repair_report, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
     selected_windows = mapping["observation_windows"]
-    if args.window_id:
-        requested_ids = set(args.window_id)
-        selected_windows = [item for item in selected_windows if item["id"] in requested_ids]
-        missing_ids = sorted(requested_ids - {item["id"] for item in selected_windows})
-        if missing_ids:
-            raise RuntimeError(f"requested observation-window IDs were not found: {missing_ids}")
     if not selected_windows:
         raise RuntimeError("no observation windows were selected")
-
-    window_wall_overcut = {}
-    for item in args.window_wall_overcut_mm or []:
-        window_id, separator, value_text = item.partition("=")
-        if not separator or not window_id:
-            raise RuntimeError(
-                "--window-wall-overcut-mm must use WINDOW_ID=MM syntax"
-            )
-        try:
-            value = float(value_text)
-        except ValueError as exc:
-            raise RuntimeError(
-                f"invalid wall overcut for window {window_id!r}: {value_text!r}"
-            ) from exc
-        if value < 0.0:
-            raise RuntimeError("window wall overcut must be non-negative")
-        window_wall_overcut[window_id] = value
-    unknown_override_ids = sorted(
-        set(window_wall_overcut) - {item["id"] for item in selected_windows}
-    )
-    if unknown_override_ids:
-        raise RuntimeError(
-            f"wall-overcut overrides refer to unselected windows: {unknown_override_ids}"
-        )
 
     cutters = {}
     surfaces = {}
     window_reports = []
     for window in selected_windows:
-        opening_geometry = str(window.get("opening_geometry", "contour_following"))
+        opening_geometry = str(window.get("opening_geometry", ""))
+        if opening_geometry != "axis_sweep":
+            raise RuntimeError(
+                f"window {window['id']} must use axis_sweep, got "
+                f"{opening_geometry!r}"
+            )
         failed_indices = sorted(
             int(item["sample_index"]) for item in window.get("failures", [])
         )
-        wall_overcut_mm = window_wall_overcut.get(window["id"], args.wall_overcut_mm)
-        if opening_geometry == "axis_sweep":
-            definition = window.get("axis_sweep")
-            if not isinstance(definition, dict):
-                raise RuntimeError(
-                    f"window {window['id']} has no mapped axis-sweep definition"
-                )
-            cutter, surface, wall_report = build_axis_sweep_cutter(
-                source,
-                definition,
-                args.side_extension_mm,
-                wall_overcut_mm,
-                args.following_wall_safety_mm,
-                args.axis_core_overcut_mm,
-                args.union_batch_size,
-            )
-            profile_count = int(definition["axis_section_count"])
-            profile_point_count = int(definition["angle_section_count"])
-        elif opening_geometry == "contour_following":
-            validate_contour_window_samples(window)
-            profiles = np.asarray([
-                item["window_profile_global_mm"] for item in window["samples"]
-            ], dtype=float)
-            outward = np.asarray([
-                item["local_outward_global"] for item in window["samples"]
-            ], dtype=float)
-            cutter, surface, wall_report = build_grid_cutter(
-                source, profiles, outward, e_occ,
-                bool(window["top_open"]), args.top_extension_mm, args.side_extension_mm,
-                args.outward_margin_mm, wall_overcut_mm,
-                args.maximum_wall_thickness_mm, args.ray_entry_tolerance_mm,
-                args.union_batch_size,
-            )
-            profile_count = len(profiles)
-            profile_point_count = int(profiles.shape[1])
-        else:
+        definition = window.get("axis_sweep")
+        if not isinstance(definition, dict):
             raise RuntimeError(
-                f"window {window['id']} has unsupported opening geometry "
-                f"{opening_geometry!r}"
+                f"window {window['id']} has no mapped axis-sweep definition"
             )
+        cutter, surface, wall_report = build_axis_sweep_cutter(
+            source,
+            definition,
+            args.side_extension_mm,
+            args.wall_overcut_mm,
+            args.following_wall_safety_mm,
+            args.axis_core_overcut_mm,
+            args.union_batch_size,
+        )
+        profile_count = int(definition["axis_section_count"])
+        profile_point_count = int(definition["angle_section_count"])
         cutters[window["id"]] = cutter
         surfaces[window["id"]] = surface
-        cutter_path = output_dir / f"window_{window['id']}_cutter.ply"
-        cutter.export(cutter_path)
         window_reports.append({
             "id": window["id"],
             "opening_geometry": opening_geometry,
@@ -1043,9 +617,8 @@ def _run_once(args: argparse.Namespace) -> dict[str, object]:
             "profile_point_count": profile_point_count,
             "guide_coverage_clipped_edge_section_count": len(failed_indices),
             "cutter_volume_mm3": float(abs(cutter.volume)),
-            "adaptive_wall_thickness": wall_report,
+            "exterior_wall_sampling": wall_report,
             "axis_sweep": window.get("axis_sweep"),
-            "cutter_ply": str(cutter_path),
         })
 
     combined = retain_positive_volume_components(
@@ -1085,81 +658,61 @@ def _run_once(args: argparse.Namespace) -> dict[str, object]:
     result = remove_submicron_degenerate_faces(result)
 
     visibility_reports = {}
-    axis_window_ids = {
-        item["id"] for item in window_reports
-        if item["opening_geometry"] == "axis_sweep"
-    }
-    if axis_window_ids:
-        dental_path = Path(mapping["sources"]["dental"])
-        dental = load_mesh(dental_path)
-        for mapped_window, window_report in zip(selected_windows, window_reports, strict=False):
-            if window_report["id"] not in axis_window_ids:
-                continue
-            visibility = axis_sweep_tooth_visibility(
-                result,
-                dental,
-                mapped_window["axis_sweep"],
-                surfaces[window_report["id"]],
-            )
-            visibility_reports[window_report["id"]] = visibility
-            window_report["tooth_visibility"] = visibility
+    dental_path = Path(mapping["sources"]["dental"])
+    dental = load_mesh(dental_path)
+    for mapped_window, window_report in zip(
+        selected_windows, window_reports, strict=True
+    ):
+        visibility = axis_sweep_tooth_visibility(
+            result,
+            dental,
+            mapped_window["axis_sweep"],
+            surfaces[window_report["id"]],
+        )
+        visibility_reports[window_report["id"]] = visibility
+        window_report["tooth_visibility"] = visibility
 
-    top_crest_clearances = {}
     axis_clearances = {}
-    for mapped_window, window_report in zip(selected_windows, window_reports, strict=False):
-        if window_report["opening_geometry"] == "axis_sweep":
-            definition = mapped_window["axis_sweep"]
-            axis_points, local_drop_additions = axis_sweep_axis_points(definition)
-            dense_axis = []
-            dense_row_coordinates = []
-            samples_per_interval = 10
-            for row, (start, end) in enumerate(itertools.pairwise(axis_points)):
-                for fraction in np.linspace(
-                    0.0, 1.0, samples_per_interval, endpoint=False
-                ):
-                    dense_axis.append((1.0 - fraction) * start + fraction * end)
-                    dense_row_coordinates.append(row + float(fraction))
-            dense_axis.append(axis_points[-1])
-            dense_row_coordinates.append(float(len(axis_points) - 1))
-            dense_axis = np.asarray(dense_axis, dtype=float)
-            _, distances, _ = result.nearest.on_surface(dense_axis)
-            minimum_clearance = float(np.min(distances))
-            clearance_threshold = max(0.15, args.axis_core_overcut_mm - 0.15)
-            failed_dense = np.flatnonzero(distances < clearance_threshold)
-            failed_rows = sorted({
-                int(np.clip(
-                    round(dense_row_coordinates[int(index)]),
-                    0,
-                    len(axis_points) - 1,
-                ))
-                for index in failed_dense
-            })
-            _, row_clearances, _ = result.nearest.on_surface(axis_points)
-            axis_clearances[window_report["id"]] = minimum_clearance
-            window_report["minimum_removed_axis_clearance_mm"] = minimum_clearance
-            window_report["axis_clearance_threshold_mm"] = float(clearance_threshold)
-            window_report["axis_clearance_by_row_mm"] = [
-                float(value) for value in row_clearances
-            ]
-            window_report["axis_rows_below_clearance_threshold"] = failed_rows
-            window_report["local_axis_drop_additions_mm"] = [
-                float(value) for value in local_drop_additions
-            ]
-            continue
-        crest = np.asarray([
-            item["true_top_global_mm"] for item in mapped_window["samples"]
-        ], dtype=float)
-        dense_crest = []
-        for start, end in itertools.pairwise(crest):
-            dense_crest.extend(
-                (1.0 - fraction) * start + fraction * end
-                for fraction in np.linspace(0.0, 1.0, 6, endpoint=False)
-            )
-        dense_crest.append(crest[-1])
-        _, distances, _ = result.nearest.on_surface(np.asarray(dense_crest))
+    for mapped_window, window_report in zip(
+        selected_windows, window_reports, strict=True
+    ):
+        definition = mapped_window["axis_sweep"]
+        axis_points, local_drop_additions = axis_sweep_axis_points(definition)
+        dense_axis = []
+        dense_row_coordinates = []
+        samples_per_interval = 10
+        for row, (start, end) in enumerate(itertools.pairwise(axis_points)):
+            for fraction in np.linspace(
+                0.0, 1.0, samples_per_interval, endpoint=False
+            ):
+                dense_axis.append((1.0 - fraction) * start + fraction * end)
+                dense_row_coordinates.append(row + float(fraction))
+        dense_axis.append(axis_points[-1])
+        dense_row_coordinates.append(float(len(axis_points) - 1))
+        dense_axis = np.asarray(dense_axis, dtype=float)
+        _, distances, _ = result.nearest.on_surface(dense_axis)
         minimum_clearance = float(np.min(distances))
-        top_crest_clearances[window_report["id"]] = minimum_clearance
-        window_report["minimum_removed_top_crest_clearance_mm"] = minimum_clearance
+        clearance_threshold = max(0.15, args.axis_core_overcut_mm - 0.15)
+        failed_dense = np.flatnonzero(distances < clearance_threshold)
+        failed_rows = sorted({
+            int(np.clip(
+                round(dense_row_coordinates[int(index)]),
+                0,
+                len(axis_points) - 1,
+            ))
+            for index in failed_dense
+        })
+        _, row_clearances, _ = result.nearest.on_surface(axis_points)
+        axis_clearances[window_report["id"]] = minimum_clearance
+        window_report["minimum_removed_axis_clearance_mm"] = minimum_clearance
+        window_report["axis_clearance_threshold_mm"] = float(clearance_threshold)
+        window_report["axis_clearance_by_row_mm"] = [
+            float(value) for value in row_clearances
+        ]
+        window_report["axis_rows_below_clearance_threshold"] = failed_rows
+        window_report["local_axis_drop_additions_mm"] = [
+            float(value) for value in local_drop_additions
+        ]
 
     residual = boolean("intersection", [result, combined])
     residual_volume = 0.0 if residual.is_empty else float(abs(residual.volume))
@@ -1175,23 +728,19 @@ def _run_once(args: argparse.Namespace) -> dict[str, object]:
         * max(intersection_volume, 1.0),
     )
     qa = {
-        "source_mapping_QA_passed": True,
         "all_configured_windows_have_complete_profiles": all(item["section_count"] >= 2 for item in window_reports),
-        "adaptive_wall_thickness_raycast_succeeded": all(
-            bool(item["adaptive_wall_thickness"].get(
+        "exterior_wall_raycast_succeeded": all(
+            bool(item["exterior_wall_sampling"].get(
                 "wall_intersection_support_complete",
-                item["adaptive_wall_thickness"]["valid_ray_fraction"] >= 0.75,
+                item["exterior_wall_sampling"]["valid_ray_fraction"] >= 0.75,
             ))
             for item in window_reports
         ),
-        "adaptive_overcut_preserves_following_wall_clearance": all(
-            item["adaptive_wall_thickness"]["following_wall_ray_count"] == 0
-            or item["adaptive_wall_thickness"]["minimum_clearance_after_overcut_mm"]
+        "radial_overcut_preserves_following_wall_clearance": all(
+            item["exterior_wall_sampling"]["following_wall_ray_count"] == 0
+            or item["exterior_wall_sampling"]["minimum_clearance_after_overcut_mm"]
             >= 0.1 - 1e-6
             for item in window_reports
-        ),
-        "top_crest_is_fully_removed": all(
-            clearance >= 0.20 for clearance in top_crest_clearances.values()
         ),
         "axis_sweep_semantic_axis_is_fully_open": all(
             clearance >= max(0.15, args.axis_core_overcut_mm - 0.15)
@@ -1217,53 +766,12 @@ def _run_once(args: argparse.Namespace) -> dict[str, object]:
         "window_cut_removed_material": removed_volume >= args.minimum_removed_volume_mm3,
         "no_residual_cutter_overlap": residual_volume <= args.residual_volume_tolerance_mm3,
         "Boolean_volume_identity_holds": identity_error <= effective_identity_tolerance,
-        "dental_mesh_was_not_used_as_cutter": True,
     }
     qa_passed = all(qa.values())
-    if not qa_passed and not args.write_failed_qa_artifacts:
-        raise RuntimeError("mapped observation-window cut failed QA:\n" + json.dumps({
-            "QA": qa,
-            "source_components": source_components,
-            "result_components": len(significant),
-            "result_component_volumes_mm3": [
-                float(abs(item.volume)) for item in significant
-            ],
-            "adaptive_wall_thickness": {
-                item["id"]: item["adaptive_wall_thickness"]
-                for item in window_reports
-            },
-            "removed_volume_mm3": removed_volume,
-            "Boolean_removed_volume_mm3": boolean_removed_volume,
-            "discarded_fragment_volume_mm3": discarded_fragment_volume,
-            "intersection_volume_mm3": intersection_volume,
-            "identity_error_mm3": identity_error,
-            "effective_identity_tolerance_mm3": effective_identity_tolerance,
-            "residual_volume_mm3": residual_volume,
-            "top_crest_clearances_mm": top_crest_clearances,
-            "axis_clearances_mm": axis_clearances,
-            "axis_sweep_tooth_visibility": visibility_reports,
-        }, ensure_ascii=False, indent=2))
-
-    result_ply = output_dir / "guide_with_mapped_observation_windows.ply"
-    result_stl = output_dir / "guide_with_mapped_observation_windows.stl"
-    cutter_ply = output_dir / "mapped_observation_windows_combined_cutter.ply"
-    cutter_stl = output_dir / "mapped_observation_windows_combined_cutter.stl"
-    result.export(result_ply)
-    result.export(result_stl)
+    cutter_ply = output_dir / "observation-window-cutter.ply"
     combined.export(cutter_ply)
-    combined.export(cutter_stl)
-    preview = output_dir / "mapped_observation_windows_preview.png"
-    render_preview(preview, source, result, combined, surfaces)
-    context = output_dir / "mapped_observation_windows_context.glb"
-    scene = trimesh.Scene()
-    scene.add_geometry(colored(source, (148, 163, 184, 35)), node_name="source_guide", geom_name="source_guide")
-    scene.add_geometry(colored(result, (198, 166, 107, 210)), node_name="cut_result", geom_name="cut_result")
-    scene.add_geometry(colored(combined, (220, 38, 38, 45)), node_name="window_cutter", geom_name="window_cutter")
-    scene.export(context)
-
-    report_path = output_dir / "mapped_observation_windows.json"
+    report_path = output_dir / "observation-window-report.json"
     report = {
-        "created_at": datetime.now(UTC).isoformat(),
         "status": (
             "mapped_observation_windows_cut_complete"
             if qa_passed
@@ -1273,17 +781,13 @@ def _run_once(args: argparse.Namespace) -> dict[str, object]:
         "sources": {"mapping_report": str(mapping_path), "guide": str(source_path)},
         "method": {
             "semantic_rule": "consume approved FDI mapping; never re-identify teeth",
-            "profile_rule": "follow saved local outer-guide contour from true top",
-            "top_extension_mm": float(args.top_extension_mm),
+            "profile_rule": "sweep the approved FDI semantic axis through 90 degrees",
             "side_extension_mm": float(args.side_extension_mm),
-            "outward_margin_mm": float(args.outward_margin_mm),
-            "wall_depth_rule": "first ray entry/exit wall thickness + overcut",
+            "wall_depth_rule": "exterior guide-wall ray hit + radial overcut",
             "axis_sweep_rule": (
                 "common-height straight axis; occlusal zero; exterior first 90 degrees"
             ),
             "wall_overcut_mm": float(args.wall_overcut_mm),
-            "maximum_wall_thickness_mm": float(args.maximum_wall_thickness_mm),
-            "ray_entry_tolerance_mm": float(args.ray_entry_tolerance_mm),
             "following_wall_safety_mm": float(args.following_wall_safety_mm),
             "axis_core_overcut_mm": float(args.axis_core_overcut_mm),
             "minimum_axis_visibility_row_fraction": float(
@@ -1296,9 +800,6 @@ def _run_once(args: argparse.Namespace) -> dict[str, object]:
                 args.volume_identity_relative_tolerance
             ),
             "source_controlled_auto_repair": repair_report,
-            "diagnostic_artifacts_written_despite_failed_QA": bool(
-                args.write_failed_qa_artifacts and not qa_passed
-            ),
         },
         "windows": window_reports,
         "geometry": {
@@ -1320,13 +821,7 @@ def _run_once(args: argparse.Namespace) -> dict[str, object]:
         },
         "QA": qa,
         "outputs": {
-            "result_ply": str(result_ply),
-            "result_stl": str(result_stl),
             "combined_cutter_ply": str(cutter_ply),
-            "combined_cutter_stl": str(cutter_stl),
-            "preview_png": str(preview),
-            "context_glb": str(context),
-            "source_repair_report_json": str(repair_report_path),
             "source_repaired_mesh_ply": (
                 str(source_repaired_path) if source_repaired_path else None
             ),
@@ -1339,7 +834,7 @@ def _run_once(args: argparse.Namespace) -> dict[str, object]:
 
 def _local_axis_failure_rows(
     window_report: dict[str, object],
-    args: argparse.Namespace,
+    args: ObservationWindowRequest,
 ) -> tuple[list[int], list[str]]:
     """内部算法说明。\n\nLocate only rows responsible for a failed axis-window QA category."""
 
@@ -1413,127 +908,8 @@ def _smoothed_local_drop_additions(
     return additions
 
 
-def _run_with_local_failure_correction(
-    args: argparse.Namespace,
-) -> dict[str, object]:
-    """内部算法说明。"""
-    increment_mm = float(args.local_failure_drop_increment_mm)
-    if increment_mm < 0.0:
-        raise RuntimeError("local failure drop increment must be non-negative")
-    if increment_mm == 0.0:
-        return _run_once(args)
-    if int(args.local_failure_transition_rows) < 0:
-        raise RuntimeError("local failure transition rows must be non-negative")
-
-    case_yaml = args.case.resolve()
-    output_root = (
-        args.output_dir.resolve()
-        if args.output_dir
-        else case_yaml.parent / "输出/mapped_observation_windows_local_adaptive"
-    )
-    output_root.mkdir(parents=True, exist_ok=True)
-    initial_args = argparse.Namespace(**vars(args))
-    initial_args.output_dir = output_root / "00_initial_pass"
-    initial_args.write_failed_qa_artifacts = True
-    initial_args.local_failure_drop_increment_mm = 0.0
-    initial_report = _run_once(initial_args)
-    if all(initial_report["QA"].values()):
-        initial_report["local_failure_adaptation"] = {
-            "requested_increment_mm": increment_mm,
-            "applied": False,
-            "reason": "initial pass already satisfied all QA gates",
-        }
-        initial_path = Path(initial_report["outputs"]["report_json"])
-        initial_path.write_text(
-            json.dumps(initial_report, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        return initial_report
-
-    mapping_path = (
-        args.mapping_report.resolve()
-        if args.mapping_report
-        else case_yaml.parent / "输出/tooth_guide_mapping/tooth_guide_mapping.json"
-    )
-    corrected_mapping = json.loads(mapping_path.read_text(encoding="utf-8"))
-    mapping_windows = {
-        str(window["id"]): window
-        for window in corrected_mapping["observation_windows"]
-    }
-    adaptations = {}
-    for window_report in initial_report["windows"]:
-        if window_report["opening_geometry"] != "axis_sweep":
-            continue
-        failed_rows, reasons = _local_axis_failure_rows(window_report, args)
-        if not failed_rows:
-            continue
-        window_id = str(window_report["id"])
-        definition = mapping_windows[window_id]["axis_sweep"]
-        row_count = int(definition["axis_section_count"])
-        additions = _smoothed_local_drop_additions(
-            row_count,
-            failed_rows,
-            increment_mm,
-            int(args.local_failure_transition_rows),
-        )
-        definition["local_axis_drop_additions_mm"] = [
-            float(value) for value in additions
-        ]
-        definition["maximum_effective_axis_drop_mm"] = (
-            float(definition["axis_drop_mm"]) + float(np.max(additions))
-        )
-        definition["local_failure_adaptation"] = {
-            "failed_axis_rows": failed_rows,
-            "failure_reasons": reasons,
-            "increment_mm": increment_mm,
-            "transition_rows": int(args.local_failure_transition_rows),
-            "corrected_axis_rows": [
-                int(index) for index in np.flatnonzero(additions > 1e-9)
-            ],
-        }
-        adaptations[window_id] = definition["local_failure_adaptation"]
-    if not adaptations:
-        initial_report["local_failure_adaptation"] = {
-            "requested_increment_mm": increment_mm,
-            "applied": False,
-            "reason": "failed QA did not identify a correctable local axis row",
-        }
-        initial_path = Path(initial_report["outputs"]["report_json"])
-        initial_path.write_text(
-            json.dumps(initial_report, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        return initial_report
-
-    corrected_mapping_path = output_root / "01_local_corrected_mapping.json"
-    corrected_mapping_path.write_text(
-        json.dumps(corrected_mapping, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    corrected_args = argparse.Namespace(**vars(args))
-    corrected_args.mapping_report = corrected_mapping_path
-    corrected_args.output_dir = output_root / "02_local_corrected_cut"
-    corrected_args.write_failed_qa_artifacts = True
-    corrected_args.local_failure_drop_increment_mm = 0.0
-    corrected_report = _run_once(corrected_args)
-    corrected_report["local_failure_adaptation"] = {
-        "requested_increment_mm": increment_mm,
-        "applied": True,
-        "initial_report": str(initial_report["outputs"]["report_json"]),
-        "corrected_mapping_report": str(corrected_mapping_path),
-        "windows": adaptations,
-        "global_axis_drop_unchanged": True,
-    }
-    corrected_report_path = Path(corrected_report["outputs"]["report_json"])
-    corrected_report_path.write_text(
-        json.dumps(corrected_report, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    return corrected_report
-
-
 def _run_with_local_failure_target_sequence(
-    args: argparse.Namespace,
+    args: ObservationWindowRequest,
 ) -> dict[str, object]:
     """内部算法说明。\n\nRetry only failed axis rows at increasing effective drop targets.
 
@@ -1544,16 +920,7 @@ def _run_with_local_failure_target_sequence(
     target.
     """
 
-    targets = tuple(
-        float(value)
-        for value in getattr(args, "local_failure_drop_target_mm", None) or ()
-    )
-    if not targets:
-        return _run_with_local_failure_correction(args)
-    if float(args.local_failure_drop_increment_mm) != 0.0:
-        raise RuntimeError(
-            "local failure drop targets and increment mode are mutually exclusive"
-        )
+    targets = tuple(float(value) for value in args.local_failure_drop_targets_mm)
     if any(not math.isfinite(value) or value <= 0.0 for value in targets):
         raise RuntimeError("local failure drop targets must be positive finite values")
     if any(later <= earlier for earlier, later in itertools.pairwise(targets)):
@@ -1561,30 +928,17 @@ def _run_with_local_failure_target_sequence(
     if int(args.local_failure_transition_rows) < 0:
         raise RuntimeError("local failure transition rows must be non-negative")
 
-    case_yaml = args.case.resolve()
-    output_root = (
-        args.output_dir.resolve()
-        if args.output_dir
-        else case_yaml.parent / "输出/mapped_observation_windows_local_adaptive"
-    )
+    output_root = args.output_dir.resolve()
     output_root.mkdir(parents=True, exist_ok=True)
-    original_mapping_path = (
-        args.mapping_report.resolve()
-        if args.mapping_report
-        else case_yaml.parent / "输出/tooth_guide_mapping/tooth_guide_mapping.json"
+    original_mapping_path = args.mapping_report.resolve()
+    working_mapping = stage_2_mapping_payload(
+        json.loads(original_mapping_path.read_text(encoding="utf-8"))
     )
-    working_mapping = json.loads(original_mapping_path.read_text(encoding="utf-8"))
 
-    initial_args = argparse.Namespace(**vars(args))
-    initial_args.output_dir = output_root / "00_initial_drop"
-    initial_args.write_failed_qa_artifacts = True
-    initial_args.local_failure_drop_increment_mm = 0.0
-    initial_args.local_failure_drop_target_mm = None
-    current_report = _run_once(initial_args)
+    current_report = _run_once(args)
     attempts: list[dict[str, object]] = [{
         "attempt": 0,
         "effective_drop_target_mm": None,
-        "report": str(current_report["outputs"]["report_json"]),
         "QA_passed": bool(all(current_report["QA"].values())),
         "windows": {},
     }]
@@ -1662,28 +1016,17 @@ def _run_with_local_failure_target_sequence(
             exhausted = False
             break
 
-        mapping_path = output_root / (
-            f"{attempt_index:02d}_local_target_{target_mm:g}mm_mapping.json"
-        )
+        mapping_path = output_root / "local-corrected-mapping.json"
         mapping_path.write_text(
             json.dumps(working_mapping, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        retry_args = argparse.Namespace(**vars(args))
-        retry_args.mapping_report = mapping_path
-        retry_args.output_dir = output_root / (
-            f"{attempt_index:02d}_local_target_{target_mm:g}mm_cut"
-        )
-        retry_args.write_failed_qa_artifacts = True
-        retry_args.local_failure_drop_increment_mm = 0.0
-        retry_args.local_failure_drop_target_mm = None
+        retry_args = replace(args, mapping_report=mapping_path)
         current_report = _run_once(retry_args)
         last_target = target_mm
         attempts.append({
             "attempt": attempt_index,
             "effective_drop_target_mm": target_mm,
-            "mapping_report": str(mapping_path),
-            "report": str(current_report["outputs"]["report_json"]),
             "QA_passed": bool(all(current_report["QA"].values())),
             "windows": adaptations,
         })
@@ -1710,97 +1053,6 @@ def _run_with_local_failure_target_sequence(
     return current_report
 
 
-def run(args: argparse.Namespace) -> dict[str, object]:
-    """内部算法说明。"""
+def run(args: ObservationWindowRequest) -> dict[str, object]:
+    """构造唯一轴扫观察窗，只对失败行执行分级局部修正。"""
     return _run_with_local_failure_target_sequence(args)
-
-
-def parse_args() -> argparse.Namespace:
-    """内部算法说明。"""
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", required=True, type=Path)
-    parser.add_argument("--mapping-report", type=Path, default=None)
-    parser.add_argument("--source", type=Path, default=None)
-    parser.add_argument("--output-dir", type=Path, default=None)
-    parser.add_argument(
-        "--window-id", action="append", default=None,
-        help="Cut only the named observation window; repeat to select multiple windows.",
-    )
-    parser.add_argument("--top-extension-mm", type=float, default=0.4)
-    parser.add_argument("--side-extension-mm", type=float, default=0.4)
-    parser.add_argument("--outward-margin-mm", type=float, default=0.4)
-    parser.add_argument("--wall-overcut-mm", type=float, default=0.4)
-    parser.add_argument(
-        "--window-wall-overcut-mm", action="append", default=None,
-        metavar="WINDOW_ID=MM",
-        help="Override wall overcut for one selected window; repeat as needed.",
-    )
-    parser.add_argument("--maximum-wall-thickness-mm", type=float, default=5.0)
-    parser.add_argument("--ray-entry-tolerance-mm", type=float, default=0.65)
-    parser.add_argument("--following-wall-safety-mm", type=float, default=0.10)
-    parser.add_argument("--axis-core-overcut-mm", type=float, default=0.30)
-    parser.add_argument(
-        "--minimum-axis-visibility-row-fraction", type=float, default=0.50
-    )
-    parser.add_argument(
-        "--minimum-axis-clear-corridor-fraction", type=float, default=0.95
-    )
-    parser.add_argument("--union-batch-size", type=int, default=16)
-    parser.add_argument("--fragment-volume-tolerance-mm3", type=float, default=2.0)
-    parser.add_argument("--minimum-removed-volume-mm3", type=float, default=1.0)
-    parser.add_argument("--residual-volume-tolerance-mm3", type=float, default=1e-4)
-    parser.add_argument("--volume-identity-tolerance-mm3", type=float, default=5e-3)
-    parser.add_argument(
-        "--volume-identity-relative-tolerance", type=float, default=1e-4
-    )
-    parser.add_argument(
-        "--write-failed-qa-artifacts",
-        action="store_true",
-        help=(
-            "Write explicitly diagnostic STL/preview/report artifacts when QA fails; "
-            "the report remains failed and the command exits with status 2."
-        ),
-    )
-    parser.add_argument(
-        "--local-failure-drop-increment-mm",
-        type=float,
-        default=0.0,
-        help=(
-            "After a failed initial axis-sweep QA pass, lower only the failed "
-            "axis rows by this additional height and cut once more."
-        ),
-    )
-    parser.add_argument(
-        "--local-failure-drop-target-mm",
-        action="append",
-        type=float,
-        default=None,
-        help=(
-            "After a failed pass, set only failed axis rows to this effective "
-            "drop target; repeat in strictly increasing order for staged retries."
-        ),
-    )
-    parser.add_argument(
-        "--local-failure-transition-rows",
-        type=int,
-        default=1,
-        help="Number of adjacent rows used for a tapered local correction.",
-    )
-    return parser.parse_args()
-
-
-def main() -> int:
-    """内部算法说明。"""
-    report = run(parse_args())
-    print(json.dumps({
-        "status": report["status"],
-        "windows": report["windows"],
-        "geometry": report["geometry"],
-        "QA": report["QA"],
-        "outputs": report["outputs"],
-    }, ensure_ascii=False, indent=2))
-    return 0 if all(report["QA"].values()) else 2
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

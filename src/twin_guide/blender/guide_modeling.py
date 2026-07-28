@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import bpy
@@ -55,11 +56,36 @@ MAIN_CONNECTOR_PREFIXES = (
 
 
 def _clear_generated_artifacts(output_directory: Path) -> None:
-    """删除输出目录中上一次生成的 PNG 和 STL 产物。"""
+    """删除上一次公开产物和已废弃的缓存布局。"""
 
     for artifact_path in output_directory.iterdir():
-        if artifact_path.is_file() and artifact_path.suffix.lower() in GENERATED_SUFFIXES:
+        if (
+            artifact_path.is_file()
+            and artifact_path.suffix.lower() in GENERATED_SUFFIXES
+            and artifact_path.name != "stage-02-tooth-mapping.png"
+        ):
             artifact_path.unlink()
+
+    cache_root = output_directory / ".cache"
+    legacy_directories = (
+        output_directory / "observation_window_opening",
+        cache_root / "stage-overviews",
+        cache_root / "stage-02-tooth-mapping" / "recognition",
+        cache_root / "stage-02-tooth-mapping" / "guide_mapping",
+    )
+    for directory in legacy_directories:
+        if directory.is_dir():
+            shutil.rmtree(directory)
+    legacy_stage_2_overview = (
+        cache_root / "stage-02-tooth-mapping" / "overview.png"
+    )
+    if legacy_stage_2_overview.is_file():
+        legacy_stage_2_overview.unlink()
+    stage_7_cache = cache_root / "stage-07-clearance-adjustment"
+    if stage_7_cache.is_dir():
+        for child in stage_7_cache.iterdir():
+            if child.is_dir() and child.name != "handpieces":
+                shutil.rmtree(child)
 
 
 def _create_channel_cutters(
@@ -531,7 +557,7 @@ def _create_link_point_markers(
 ) -> tuple[tuple[bpy.types.Object, ...], tuple[bpy.types.Object, ...]]:
     """为联建选点图创建导管侧和导板侧标记球。"""
 
-    marker_radius = min(0.55, plan.radius_mm * 0.45)
+    marker_radius = min(0.80, plan.radius_mm * 0.45)
 
     def markers(kind: str, points: tuple[object, ...]) -> tuple[bpy.types.Object, ...]:
         """将去重后的一类选点转换为标记球。"""
@@ -629,7 +655,7 @@ def _create_stage_trajectory_meshes(
             create_centerline_tube(
                 f"{prefix}_{index}",
                 trajectory,
-                0.12,
+                0.24,
                 material,
                 16,
             )
@@ -659,10 +685,9 @@ def _create_stage_trajectory_meshes(
 def _render_process_images(
     output_directory: Path,
     case: CaseAnalysis,
+    cut_template_mesh: bpy.types.Object,
     sleeve_meshes: tuple[bpy.types.Object, ...],
     connector_meshes: tuple[bpy.types.Object, ...],
-    channel_cutters: tuple[bpy.types.Object, ...],
-    window_cutters: tuple[bpy.types.Object, ...],
     sleeve_point_markers: tuple[bpy.types.Object, ...],
     template_point_markers: tuple[bpy.types.Object, ...],
     anchor_trajectory_meshes: tuple[bpy.types.Object, ...],
@@ -670,26 +695,23 @@ def _render_process_images(
 ) -> tuple[Path, ...]:
     """渲染输入、标准重建导管、切口、选点和连接结果。"""
 
-    template_mesh = case.input_meshes.template_mesh
     source_assemblies = case.input_meshes.guide_sleeve_assembly_meshes
-    patient_dentition = case.input_meshes.patient_dentition_mesh
     accessory_meshes = case.retained_accessory_meshes
-    cut_template_preview = subtract_cutters(
-        duplicate_mesh_object(template_mesh, "cut_template_preview"),
-        (*channel_cutters, *window_cutters),
+    cut_template_preview = duplicate_mesh_object(
+        cut_template_mesh,
+        "cut_template_preview",
     )
-    assign_material(cut_template_preview, template_mesh.data.materials[0])
+    assign_material(cut_template_preview, cut_template_mesh.data.materials[0])
     press_beam_meshes = tuple(
         mesh for mesh in connector_meshes if mesh.name.startswith("press_beam_")
     )
-    image_specs = (
-        ("input_template.png", (template_mesh,)),
-        ("input_sleeves.png", source_assemblies),
-        ("input_patient_dentition.png", (patient_dentition,)),
-        ("generated_sleeves.png", sleeve_meshes),
-        ("guide_assembly.png", (template_mesh, *sleeve_meshes, *accessory_meshes)),
+    image_specs = [
         (
-            "link_points.png",
+            "stage-01-sleeve-reconstruction.png",
+            (*source_assemblies, *sleeve_meshes),
+        ),
+        (
+            "stage-04-anchor-selection.png",
             (
                 cut_template_preview,
                 *sleeve_meshes,
@@ -699,7 +721,7 @@ def _render_process_images(
             ),
         ),
         (
-            "guide_connectors.png",
+            "stage-06-structure-linking.png",
             (
                 cut_template_preview,
                 *sleeve_meshes,
@@ -708,18 +730,22 @@ def _render_process_images(
             ),
         ),
         (
-            "press_beam.png",
+            "stage-03-cutout-planning.png",
+            (cut_template_preview, *sleeve_meshes),
+        ),
+    ]
+    image_specs.append(
+        (
+            "stage-05-press-beam.png",
             (
                 cut_template_preview,
                 *sleeve_meshes,
                 *press_beam_meshes,
                 *press_beam_trajectory_meshes,
+                *sleeve_point_markers,
+                *template_point_markers,
             ),
-        ),
-        (
-            "cutouts.png",
-            (template_mesh, *sleeve_meshes, *window_cutters),
-        ),
+        )
     )
     image_paths = []
     for filename, visible_meshes in image_specs:
@@ -735,9 +761,9 @@ def _render_handpiece_avoidance(
     case: CaseAnalysis,
     visible_meshes: tuple[bpy.types.Object, ...],
     plans: tuple[HandpieceAvoidancePlan, ...],
-    material: bpy.types.Material,
+    materials: dict[str, bpy.types.Material],
 ) -> Path | None:
-    """渲染第 7 阶段手机摆动包络与当前几何计划。"""
+    """渲染手机摆动包络、旋转轴、枢轴和当前导板结构。"""
 
     if not plans:
         return None
@@ -747,18 +773,40 @@ def _render_handpiece_avoidance(
                 plan.envelope_mesh_path,
                 f"handpiece_{plan.avoidance_id}_preview",
             ),
-            material,
+            materials["avoidance_envelope"],
         )
         for plan in plans
     )
-    image_path = output_directory / "handpiece_avoidance.png"
+    axes = []
+    pivots = []
+    for plan in plans:
+        pivot = Vec3(*plan.pivot)
+        axis = Vec3(*plan.rotation_axis).normalized()
+        axes.append(create_axis_cylinder(
+            f"handpiece_{plan.avoidance_id}_rotation_axis",
+            pivot - axis * 24.0,
+            pivot + axis * 24.0,
+            0.35,
+            materials["avoidance_axis"],
+            48,
+        ))
+        bpy.ops.mesh.primitive_uv_sphere_add(
+            segments=48,
+            ring_count=24,
+            radius=0.9,
+            location=plan.pivot,
+        )
+        marker = bpy.context.object
+        marker.name = f"handpiece_{plan.avoidance_id}_pivot"
+        pivots.append(assign_material(marker, materials["avoidance_pivot"]))
+    image_path = output_directory / "stage-07-clearance-adjustment.png"
     render_objects(
         image_path,
-        (*visible_meshes, *envelopes),
+        (*visible_meshes, *envelopes, *axes, *pivots),
         case.config.render,
     )
-    for envelope in envelopes:
-        remove_object(envelope)
+    for temporary_object in (*envelopes, *axes, *pivots):
+        remove_object(temporary_object)
     return image_path
 
 
@@ -792,7 +840,7 @@ def build_guide_from_links(
     accessory_meshes = case.retained_accessory_meshes
     assign_material(template_mesh, materials["template"])
     for source_assembly in case.input_meshes.guide_sleeve_assembly_meshes:
-        assign_material(source_assembly, materials["sleeve"])
+        assign_material(source_assembly, materials["source"])
     for guide in case.guide_sleeves:
         assign_material(guide.guide_mesh, materials["sleeve"])
     for accessory_mesh in accessory_meshes:
@@ -826,13 +874,16 @@ def build_guide_from_links(
         point_links, materials["template_point"]
         )
     )
+    cut_template_mesh = subtract_cutters(
+        duplicate_mesh_object(template_mesh, "cut_template_for_build"),
+        (*channel_cutters, *window_cutters),
+    )
     process_image_paths = _render_process_images(
         output_directory,
         case,
+        cut_template_mesh,
         sleeve_meshes,
         link_meshes,
-        channel_cutters,
-        window_cutters,
         sleeve_point_markers,
         template_point_markers,
         anchor_trajectory_meshes,
@@ -843,11 +894,13 @@ def build_guide_from_links(
         case,
         (template_mesh, *sleeve_meshes, *link_meshes),
         handpiece_avoidance or (),
-        materials["operation"],
+        materials,
     )
     if handpiece_image is not None:
         process_image_paths = (*process_image_paths, handpiece_image)
-    cut_template_mesh = subtract_cutters(template_mesh, (*channel_cutters, *window_cutters))
+    tooth_mapping_image = output_directory / "stage-02-tooth-mapping.png"
+    if tooth_mapping_image.is_file():
+        process_image_paths = (*process_image_paths, tooth_mapping_image)
     recut_cutters = (
         (*channel_cutters, *profile_window_cutters)
         if point_links.recut_sleeve_bore

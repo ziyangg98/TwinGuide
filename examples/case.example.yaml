@@ -27,13 +27,31 @@ runtime:
     channel_axial_margin_mm: 5.0
     connector_diameter_mm: 4.6
     fusion_voxel_size_mm: 0.2
+    connector_dental_clearance_mm: 0.2
+    connector_guide_endpoint:
+      root_radius_factor: 1.08
+      transition_length_mm: 3.0
+      bulb_radius_factor: 1.08
+      bulb_forward_offset_mm: 0.08
+      foot_major_radius_mm: 3.0
+      foot_minor_radius_mm: 2.2
+      foot_peak_height_mm: 2.55
+      foot_embed_depth_mm: 0.25
   windows:
     operation_tangent_margin_mm: 1.0
     operation_bitangent_margin_mm: 3.0
+    operation_axial_margin_mm: 5.0
+    operation_corner_radius_mm: 1.0
     observation_axis_drop_mm: 0.2
     observation_sweep_angle_degrees: 90.0
     observation_local_failure_drop_targets_mm: [0.5, 1.0, 2.0]
     observation_local_failure_transition_rows: 1
+  press_beam:
+    diameter_mm: 4.6
+    guide_overlap_mm: 0.3
+    junction_sleeve_distance_mm: 6.0
+    junction_axial_lift_mm: 2.0
+    minimum_junction_angle_degrees: 25.0
   render: {width_px: 1600, height_px: 1200}
 
 anatomy:

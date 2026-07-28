@@ -1,8 +1,7 @@
 Python API 参考
 ===================
 
-TwinGuide 0.3 的稳定接口统一从 ``twin_guide`` 导入。锚点选择、牙位映射、
-网格构造和 Blender 实体化模块属于内部实现，不提供跨版本兼容承诺。
+TwinGuide 0.3 的公开接口统一从 ``twin_guide`` 导入。
 
 配置
 ----

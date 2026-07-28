@@ -75,18 +75,28 @@ class EndToEndTests(unittest.TestCase):
                     "guide_top.png",
                     "guide_bottom.png",
                     "guide_side.png",
-                    "guide_assembly.png",
-                    "guide_connectors.png",
-                    "cutouts.png",
-                    "input_template.png",
-                    "input_sleeves.png",
-                    "input_patient_dentition.png",
-                    "generated_sleeves.png",
-                    "link_points.png",
-                    "press_beam.png",
-                    "handpiece_avoidance.png",
+                    "stage-06-structure-linking.png",
+                    "stage-03-cutout-planning.png",
+                    "stage-01-sleeve-reconstruction.png",
+                    "stage-02-tooth-mapping.png",
+                    "stage-04-anchor-selection.png",
+                    "stage-05-press-beam.png",
+                    "stage-07-clearance-adjustment.png",
                 },
             )
+            for stage_number, stage_stem in {
+                1: "stage-01-sleeve-reconstruction",
+                2: "stage-02-tooth-mapping",
+                3: "stage-03-cutout-planning",
+                4: "stage-04-anchor-selection",
+                5: "stage-05-press-beam",
+                6: "stage-06-structure-linking",
+                7: "stage-07-clearance-adjustment",
+            }.items():
+                result_path = case_config.output_directory / f"{stage_stem}.json"
+                overview_path = case_config.output_directory / f"{stage_stem}.png"
+                self.assertTrue(result_path.is_file(), stage_number)
+                self.assertTrue(overview_path.is_file(), stage_number)
             self.assertEqual(
                 {result.name for result in validation_results},
                 {

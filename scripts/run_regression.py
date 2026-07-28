@@ -6,6 +6,7 @@ import hashlib
 import json
 import time
 import traceback
+import warnings
 from dataclasses import replace
 from pathlib import Path
 
@@ -47,7 +48,29 @@ def _write_summary(records: list[dict[str, object]]) -> None:
     )
 
 
+def _read_stage_statuses(output_directory: Path) -> dict[str, str]:
+    """读取七阶段报告，并拒绝缺失或重复的正式病例阶段记录。"""
+
+    statuses: dict[str, str] = {}
+    for number in range(1, 8):
+        reports = tuple(output_directory.glob(f"stage-{number:02d}-*.json"))
+        if len(reports) != 1:
+            raise RuntimeError(
+                f"阶段 {number} 报告数量应为 1，实际为 {len(reports)}："
+                f"{output_directory}"
+            )
+        report = _read_json(reports[0])
+        if report is None:
+            raise RuntimeError(f"无法读取阶段 {number} 报告：{reports[0]}")
+        stage = report.get("stage")
+        if not isinstance(stage, dict) or not isinstance(stage.get("status"), str):
+            raise RuntimeError(f"阶段 {number} 报告缺少 status：{reports[0]}")
+        statuses[str(number)] = stage["status"]
+    return statuses
+
+
 def main() -> int:
+    warnings.simplefilter("error", RuntimeWarning)
     missing = [path for path in CONFIGS if not path.is_file()]
     if missing:
         print("SKIP external case data is unavailable:")
@@ -62,8 +85,10 @@ def main() -> int:
             "case": config_path.parent.name,
             "status": "running",
         }
+        timings: dict[str, float] = {}
         print(f"CASE {index}/{len(CONFIGS)} START {config_path.name}", flush=True)
         try:
+            step_started = time.monotonic()
             bpy.ops.wm.read_factory_settings(use_empty=True)
             config = CaseConfig.from_yaml(config_path)
             if OUTPUT_ROOT is not None:
@@ -71,19 +96,20 @@ def main() -> int:
                     config,
                     output_directory=OUTPUT_ROOT / config.output_directory.name,
                 )
-            artifacts = generate_guide(config)
-            validations = validate_guide(artifacts.model_path, config)
-            recognition_manifest = _read_json(
+            timings["setup"] = time.monotonic() - step_started
+            step_started = time.monotonic()
+            try:
+                artifacts = generate_guide(config)
+            finally:
+                timings["generation"] = time.monotonic() - step_started
+            step_started = time.monotonic()
+            try:
+                validations = validate_guide(artifacts.model_path, config)
+            finally:
+                timings["validation"] = time.monotonic() - step_started
+            stage_2_result = _read_json(
                 config.output_directory
-                / "tooth_mapping/01_tooth_recognition/tooth_recognition_result.json"
-            )
-            mapping_manifest = _read_json(
-                config.output_directory
-                / "tooth_mapping/02_guide_mapping/guide_mapping_result.json"
-            )
-            wrapper_manifest = _read_json(
-                config.output_directory
-                / "tooth_mapping/twin_guide_tooth_mapping.json"
+                / "stage-02-tooth-mapping.json"
             )
             validation_rows = [
                 {
@@ -93,20 +119,28 @@ def main() -> int:
                 }
                 for item in validations
             ]
+            stage_statuses = _read_stage_statuses(config.output_directory)
+            all_validations_passed = all(item["passed"] for item in validation_rows)
+            all_stages_completed = all(
+                status == "completed" for status in stage_statuses.values()
+            )
             record.update({
                 "status": (
                     "complete"
-                    if all(item["passed"] for item in validation_rows)
-                    else "validation_failed"
+                    if all_validations_passed and all_stages_completed
+                    else (
+                        "incomplete"
+                        if all_validations_passed
+                        else "validation_failed"
+                    )
                 ),
+                "stage_statuses": stage_statuses,
                 "output_directory": str(config.output_directory),
                 "model": str(artifacts.model_path),
                 "model_sha256": hashlib.sha256(
                     artifacts.model_path.read_bytes()
                 ).hexdigest(),
-                "recognition_manifest": recognition_manifest,
-                "guide_mapping_manifest": mapping_manifest,
-                "twin_guide_mapping_manifest": wrapper_manifest,
+                "stage_2_result": stage_2_result,
                 "validation": validation_rows,
             })
         except Exception as error:
@@ -116,6 +150,9 @@ def main() -> int:
                 "error": str(error),
                 "traceback": traceback.format_exc(),
             })
+        record["timings_seconds"] = {
+            name: round(value, 3) for name, value in timings.items()
+        }
         record["elapsed_seconds"] = round(time.monotonic() - started, 3)
         records.append(record)
         _write_summary(records)

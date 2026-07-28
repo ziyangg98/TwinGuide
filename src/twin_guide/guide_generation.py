@@ -6,6 +6,7 @@ from twin_guide.blender.guide_modeling import build_guide_from_links
 from twin_guide.config import CaseConfig
 from twin_guide.generation_process import run_generation_process
 from twin_guide.models import BuildArtifacts
+from twin_guide.stage_artifacts import compose_stage_overviews
 
 
 def generate_guide(config: CaseConfig) -> BuildArtifacts:
@@ -27,9 +28,11 @@ def generate_guide(config: CaseConfig) -> BuildArtifacts:
     context = process.context
     if context.case is None or context.window_cutouts is None or context.point_linking is None:
         raise RuntimeError("生成阶段未产生完整建模上下文")
-    return build_guide_from_links(
+    artifacts = build_guide_from_links(
         context.case,
         context.window_cutouts,
         context.point_linking,
         context.clearance_adjustment,
     )
+    compose_stage_overviews(process)
+    return artifacts
