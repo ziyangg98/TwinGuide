@@ -111,14 +111,22 @@ $\mathbf n_i\cdot\mathbf e_{occ}$ 排除背向牙合面。
 以排除牙龈侧面和朝下表面。选中的三角面以 `0.12 mm` 网格投影到 LR/AP 牙弓平面，
 每个像素保留最高表面的高度和法向，而不是只画稀疏顶点。
 
+基础牙弓拟合使用顶点筛选时，如果“高度 + 法向”共同筛出的顶点少于 1000 个，
+`select_crown_points` 会保留同一高度阈值、仅取消法向门槛；该分支是短牙冠或法向质量不足时
+建立坐标系的保底，不会直接制造牙冠实例。
+
 若投影中可分辨的物理牙冠数量与 `present_teeth` 数量不一致，高度分位数依次尝试
 `0.55`、`0.50`、`0.45`、`0.40`，但不会通过增加或删除 FDI 来凑数。
 
 ### 3. 把连续投影分成一颗颗牙
 
-程序在牙弓中心线两侧 `11.5 mm` 范围内寻找牙冠核心，并按牙弓弧长排序。相邻
-牙冠之间的边界不是两中心的简单中垂线。对相邻中心
-$\mathbf c_i,\mathbf c_{i+1}$，令
+程序在牙弓中心线两侧 `11.5 mm` 范围内寻找牙冠核心，并按牙弓弧长排序。
+默认 `arch_progress` 策略只合并具有局部间距证据的相邻核心；若仍存在彼此分离的
+多余核心，可保留严格有序、与现存牙先验数目相同的一组，其余投影不编号。若最终物理核心
+少于或多于 `present_teeth`，后续质量检查失败，不能用 FDI 槽位裁剪来补出缺失实例。
+
+相邻牙冠的主分隔算法不是中点直线族，而是连接实测外轮廓凹点的最短有效弦。
+对相邻拓扑核心 $\mathbf c_i,\mathbf c_{i+1}$，令
 
 $$
 \mathbf e=\frac{\mathbf c_{i+1}-\mathbf c_i}
@@ -127,23 +135,28 @@ $$
 \mathbf m=\frac{\mathbf c_i+\mathbf c_{i+1}}2.
 $$
 
-代码对 $\delta$ 等间取 25 个值、对
-$\phi\in[-24^\circ,24^\circ]$ 等间取 17 个值，候选弦为
+代码在共同外轮廓的两侧分别选凹点，连接成候选弦。候选必须同时满足：端点来自
+实测轮廓；弦长 $1.8\le L\le12.0$ mm；弦方向不能近似平行于两核心连线；
+两核心到弦的有符号距离异号且绝对值均不小于 `0.40 mm`；弦内部落在牙冠投影内的
+采样比例不低于 `0.86`；两侧局部区域面积均达到下限；并且不与已接受分隔弦相交。
+
+每条有效弦的证据分数为
 
 $$
-\mathbf l_0=\mathbf m+\delta\mathbf e,\qquad
-\mathbf d(\phi)=\cos\phi\,\mathbf q+\sin\phi\,\mathbf e,
+E=0.42E_{concavity}+0.24E_{endpoint}+0.15E_{line}
++0.10E_{height}+0.09E_{normal},
 $$
 
-其中 $|\delta|\le\min(1.8,0.20\|\mathbf c_{i+1}-\mathbf c_i\|)$ mm。
-只保留能将两中心分在直线两侧、且在投影内形成
-$1.8\le L\le12.0$ mm 连通弦的候选。当前排序目标与代码一致为
+分别衡量端点凹度、端点边缘、弦上边缘、弦两侧相对高度谷和法向跳变。
+代码先取距最短弦不超过 `0.30 mm` 的候选，再从中取 $E$ 最大者，而不是最小化
+旧版的“长度 + 中心偏移 + 角度偏移”目标。
 
-$$
-J=L+0.42|\delta|+0.012|\phi_{deg}|+0.45\bar E,
-$$
-
-其中 $\bar E$ 是弦上 `feature_score` 的均值，取 $J$ 最小者。
+搜索顺序固定为：尖锐尺度凹点、较宽尺度凹点、接触区局部颈部。当前质量门只自动
+批准 `shortest_valid_concavity_pair`。宽尺度结果会保留诊断，但当前没有可配置批准入口，
+因此会使 `all_contacts_use_approved_anatomical_separators` 失败；局部颈部仍要求两个端点
+都是真实外轮廓点，并且必须由病例对该牙间位置显式批准。三类均失败才生成
+`legacy_midline_fallback` 诊断弦并标为 `uncertain`；该结果会使
+`no_uncertain_contact_chords` 失败，不能进入下游。
 
 相邻 FDI 之间配置了缺失牙时，该位置使用明确的 `gap` 分隔。所有有限弦必须
 互不交叉，每个牙冠核心必须落在自己的半平面分区 $\Omega_j$ 内，且
@@ -247,7 +260,7 @@ $\operatorname{span}(\mathbf e_g,\mathbf e_0)$ 正交补空间上的归一化投
 | `positions[].local_tangent` | 该牙位的近远中方向 | 锚点和特殊末端结构 |
 | `positions[].local_outward` | 从牙弓内部指向外侧 | 导板表面搜索和梁方向 |
 | `positions[].guide_top` | 真实导板顶部；无覆盖时为 `None` | 导板端锚点 |
-| `windows[].crest_points` | 观察窗的语义轴或顶部脊线采样 | 第 3 阶段观察窗 |
+| `windows[].crest_points` | 观察窗映射的诊断点；轴扫模式的实体输入是 `axis_sweep` 中的轴端点和方向 | 第 3 阶段观察窗 |
 
 后续阶段只消费这些类型化结果，不重新识别牙齿，也不重新选择坐标方向。
 
@@ -293,6 +306,17 @@ output/<case_id>/
 | 轮廓计算分辨率 | 0.18 mm | 接触弦和牙冠区域分割 |
 | 牙弓走廊半宽 | 11.5 mm | 排除远离牙弓的投影干扰 |
 | 最小投影分区覆盖率 | 0.99 | 防止大量牙冠区域未分配 |
+
+## 代码对应
+
+| 文档算法 | 当前代码入口 |
+| --- | --- |
+| 坐标系、牙弓与导板覆盖 | `tooth_mapping.pipeline._core.estimate_frame_and_arch`、`guide_physical_coverage_top` |
+| 高度阈值试探与增强投影 | `render_enhanced_crown_projection._quantile_trials`、`run` |
+| 物理牙冠核心分组 | `arch_progress_core_grouping.select_crown_core_candidates` |
+| 凹点弦搜索与回退 | `contact_chords.find_shortest_concavity_chords` |
+| 分区与 fail-closed 质量门 | `extract_contact_chord_contours.run` |
+| 观察窗语义轴 | `contact_guide_mapping.map_axis_sweep` |
 
 本阶段生成 `stage-02-tooth-mapping.png`，并在 `.cache` 中保存投影数组和
 内部报告。`write_diagnostics` 控制详细诊断 PNG 和 GLB。同一次运行重复使用的

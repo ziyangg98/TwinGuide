@@ -69,10 +69,10 @@ $$
 因此
 
 $$
-\mathbf C(0)=\mathbf p_0,quad
-\mathbf C(1)=\mathbf p_1,quad
-\mathbf C'(0)=\mathbf m_0,quad
-\mathbf C'(1)=\mathbf m_1,quad
+\mathbf C(0)=\mathbf p_0,\quad
+\mathbf C(1)=\mathbf p_1,\quad
+\mathbf C'(0)=\mathbf m_0,\quad
+\mathbf C'(1)=\mathbf m_1,\quad
 \mathbf C''(0)=\mathbf C''(1)=\mathbf0.
 $$
 
@@ -119,9 +119,10 @@ $$
 首尾切向分别使用相邻弦向，长度为弦长乘 $\tau_e$。每两个相邻点
 之间生成一段 Hermite 曲线，保证路径按病例声明顺序经过所有导管。
 
-## 5. 低端梁的局部下潜
+## 5. 单种植位低端梁的局部下潜
 
-低端 $\mathbf P^-$ 需要深埋，但整条梁不应跟着下移。先在导管外层建立代理点
+该分支只用于没有 `multi_site_paths` 的单种植位普通路径。低端 $\mathbf P^-$
+需要深埋，但整条梁不应跟着下移。先在导管外层建立代理点
 
 $$
 \mathbf P_{out}=\mathbf Q^-+(r-o_{low})\mathbf n^-.
@@ -145,6 +146,10 @@ $$
 左、右拼接点分别继承基线曲线的局部切向；$\mathbf P^-$ 处切向使用
 $\Pi(\mathbf R_m-\mathbf L_m,\mathbf n^-)$。下潜范围局限于导管附近，
 两侧基线路径保持不变。
+
+多种植位连续路径不走这段代理点算法。高、低两条同侧路径都由第 4 节的
+`_curve_through_multiple_contacts` 一次生成，低路径直接依次经过每根导管的
+$\mathbf P_i^-$；这是当前代码的明确拓扑分支。
 
 ## 6. 离散与实体化
 
@@ -171,6 +176,17 @@ $\mathbf p_i\rightarrow\mathbf J$ 的直线扫掠，汇合球半径为 $1.12r$�
 
 规划阶段要求每条路径严格经过其有序锚点，中间接触点索引唯一且递增。
 最终验证再独立检查梁中心线覆盖率、连续性、导孔保留和导板端强化结构。
+
+## 代码对应
+
+| 文档算法 | 当前代码入口 |
+| --- | --- |
+| 切平面投影与五次 Hermite 段 | `point_linking._projected_direction`、`_quintic_segment` |
+| 单导管高端路径 | `_curve_through_contact` |
+| 多种植位连续路径 | `_curve_through_multiple_contacts` |
+| 单种植位低端局部下潜 | `_lower_curve_with_local_dive` |
+| 拓扑装配与按压梁直线臂 | `point_linking.link_selected_points` |
+| 圆截面扫掠和布尔顺序 | `blender.mesh_builders`、`blender.guide_modeling` |
 
 ![连续梁架与完整结构](../images/stage-6-structure-linking.png)
 

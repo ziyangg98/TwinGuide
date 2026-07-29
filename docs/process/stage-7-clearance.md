@@ -75,6 +75,8 @@ $$
 实现使用 manifold3d 分批合并封闭网格。并集后只保留体积最大的连通分量；
 其他分量只有在体积不超过 $10^{-4}\ \mathrm{mm}^3$ 时才被视为数值碎片。
 任一更大独立分量都使本阶段失败。
+此外，非封闭、绕向不一致或有向体积非正的分量按表面积检查；表面积大于
+$10^{-4}\ \mathrm{mm}^2$ 也直接失败，不能按体积碎片静默丢弃。
 
 ## 4. 离散误差指标
 
@@ -133,6 +135,16 @@ $R_{max}$、$\varepsilon_{half}$、包络体积与额外净距。
 
 本阶段的必检项是：0° 姿态存在、输入主体封闭、包络封闭、
 无超容差独立分量、差集后主体仍唯一且最终 STL 通过结构与导孔验证。
+
+## 代码对应
+
+| 文档算法 | 当前代码入口 |
+| --- | --- |
+| 止挡轴、枢轴和输入校验 | `clearance_adjustment._stop_geometry`、`_load_mesh` |
+| 姿态采样和 manifold3d 并集 | `_adjust_single_handpiece`、`_boolean_union` |
+| 碎片与离散误差报告 | `_signed_volume`、`_adjust_single_handpiece` |
+| 缓存指纹 | `clearance_adjustment._fingerprint`、`_cached_plan` |
+| 额外净距和最终差集 | `blender.booleans.apply_manifold3d_differences`、`blender.guide_modeling` |
 
 ![手机摆动包络、旋转轴与枢轴](../images/stage-7-clearance-adjustment.png)
 

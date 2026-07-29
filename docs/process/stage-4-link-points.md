@@ -108,7 +108,7 @@ $$
 $\operatorname{orient}_{\mathbf n_T}$ 只在点积为负时翻转符号，结果还必须满足
 $\mathbf a_+\cdot\mathbf n_T\ge0.25$。
 
-令两导管轴向中点为 $\mathbf m_1,\mathbf m_2$，公共横向为
+令两导管几何轴向中点为 $\mathbf m_1,\mathbf m_2$，公共横向为
 
 $$
 \mathbf l=\operatorname{unit}\left[
@@ -189,7 +189,7 @@ $$
 
 ## 5. 最近点备用模式
 
-对未使用牙位射线的配置，先保留满足全部切口净距的导板样本：
+对未使用牙位射线的 `nearest` 配置，先保留满足全部切口净距的导板样本：
 
 $$
 \mathcal S'=\left\{\mathbf x\in\mathcal S:
@@ -197,7 +197,9 @@ $$
 \right\}.
 $$
 
-对导管上下 $P$ 中点 $\mathbf m_P$，左右方向为
+当前生成流程传入的 $c_T$ 等于连接梁半径加融合体素尺寸。解析导孔/操作窗按
+有符号距离筛选；轴扫观察窗则读取实际 PLY cutter，同时要求候选点位于切除体外且
+到其表面的距离不小于 $c_T$。对导管上下 $P$ 中点 $\mathbf m_P$，左右方向为
 
 $$
 \mathbf l_i=\operatorname{unit}(\mathbf a_i\times\mathbf r_i).
@@ -253,8 +255,20 @@ $$
 \frac{\mathbf A_{s,start}+\mathbf A_{s,end}}{2},
 $$
 
-再对每个种植位内的两根导管以同样的 direct/reverse 距离和分配到
-$(\overline{\mathbf A}_U,\overline{\mathbf A}_B)$。最后沿路径首尾中线方向排序各种植位，
+再用**两根导管中心** $\mathbf C_1,\mathbf C_2$（不是高低 P 中点）比较
+
+$$
+D_{direct}=\|\mathbf C_1-\overline{\mathbf A}_U\|+
+\|\mathbf C_2-\overline{\mathbf A}_B\|,
+$$
+
+$$
+D_{reverse}=\|\mathbf C_2-\overline{\mathbf A}_U\|+
+\|\mathbf C_1-\overline{\mathbf A}_B\|.
+$$
+
+末端远中公共节点模式只有一个近中端部，也同样用导管中心到该端部 U/背 U 锚点的
+direct/reverse 距离分配。最后沿路径首尾中线方向排序各种植位，
 形成第 6 阶段的同侧有序路径。
 
 ## 质量检查与输出
@@ -266,9 +280,22 @@ $(\overline{\mathbf A}_U,\overline{\mathbf A}_B)$。最后沿路径首尾中线�
 - 每个端部必须同时有 U 侧和背 U 侧锚点；
 - 所有导板锚点必须来自真实导板表面或明确的特殊结构节点。
 
+末端远中公共节点是例外端点：每根导管只有一个真实导板表面 A 点，另一端是
+`DISTAL_COMMON_NODE`；因此“每根导管两个 A 点”只适用于普通双端路径。
+
 `stage-04-anchor-selection.json` 保存 $Q/P/A$、射线和分配关系；
 `stage-04-anchor-selection.png` 在真实导管与导板上显示锚点及其射线。
 
 ![导管与导板锚点](../images/stage-4-anchor-selection.png)
 
 *tooth-11 完整运行的第 4 阶段结果。红色点为导管 Q/P 锚点，黄色点为导板外壁锚点，黄色细线显示牙位射线和导板交点的来源。*
+
+## 代码对应
+
+| 文档算法 | 当前代码入口 |
+| --- | --- |
+| 导管 Q/P 与预埋规则 | `sleeve_anchors.select_sleeve_anchors`、`_contact_position` |
+| 公共导管标架射线 | `tooth_section_anchors.select_independent_guide_anchors` |
+| 多种植位局部标架射线 | `tooth_section_anchors.select_local_independent_guide_anchors` |
+| 最近点备用模式 | `template_anchors._remaining_template_samples`、`_select_template_pair` |
+| 单/多种植位分配和特殊节点 | `template_anchors.select_template_points` |

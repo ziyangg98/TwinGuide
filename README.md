@@ -107,7 +107,7 @@ brew install --cask blender
   --output output/tooth-11-check
 ```
 
-只运行阶段规划或独立验证已有 STL：
+只运行七阶段计算或验证已有 STL：
 
 ```bash
 ./twinguide process --config ../data/cases/single/tooth-11/case.yaml
@@ -118,6 +118,9 @@ brew install --cask blender
 
 生成命令默认拒绝标记为 `pending`、`pending_user_input` 或 `unreviewed` 的病例。
 `--allow-unreviewed` 可在诊断运行中跳过本次审核检查。
+
+已有 8 个单种植位和 4 个双种植位病例的逐例结果、最终等轴图、阶段状态和
+验证指标见[规范病例结果](docs/guide/case-results.md)。
 
 <!-- sphinx-homepage-end -->
 

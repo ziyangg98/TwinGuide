@@ -204,6 +204,16 @@ $\theta_{cfg}=25^\circ$。第 6 阶段将三条 $\mathbf p_i\rightarrow\mathbf J
 径向方向退化、三锚点无法展开、最小夹角不足或导管最小距离不满足。
 程序不用自动更换模式或扩大容差规避失败。
 
+## 代码对应
+
+| 文档算法 | 当前代码入口 |
+| --- | --- |
+| U 侧固定射线和外壁出口 | `tooth_section_anchors.select_tooth_section_u_side_ray_anchors` |
+| 内侧导管评分与候选选择 | `press_beam_points._inner_sleeve_scores`、`select_press_beam_points` |
+| 几何中位点与条件汇合点 | `_geometric_median`、`_conditional_inner_sleeve_junction` |
+| 三导板锚点汇合 | `_lifted_three_anchor_junction` |
+| U 型延伸梁最远锚点 | `_farthest_point_from_two_anchors` |
+
 ![Y 型按压梁锚点和汇合点](../images/stage-5-press-beam.png)
 
 *tooth-11 完整运行的第 5 阶段结果。金色线为三个锚点到 Y 型汇合点的计划路径；应同时核对汇合角、导管距离和导板端位置。*

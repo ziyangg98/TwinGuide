@@ -1,7 +1,9 @@
 # 3. 导孔与窗口规划
 
 **实现状态：实验。** 本阶段把第 1 步的导管位姿和第 2 步的 FDI
-牙位映射转换为一份纯几何 `CutoutPlan`，供 Blender 实体化。
+牙位映射转换为 `CutoutPlan`。导孔和操作窗是解析几何；轴扫观察窗会用
+trimesh/manifold3d 生成 PLY 切除体，并先在导板副本上完成真实差集质量检查，
+通过后才把文件型 `ProfileWindowCutout` 交给 Blender。
 
 ## 输入与输出
 
@@ -138,8 +140,8 @@ $$
 因此前 $90^\circ$ 优先分配给牙合到牙弓外侧，只在 $\Theta>90^\circ$
 时向牙弓内侧扩展。
 
-从导板外部沿 $-\mathbf d_c$ 发射射线，得真实外壁径向距离
-$\rho_{rc}$。加上径向过切量 $m_r$ 后，外层采样点为
+从导板外部沿 $-\mathbf d_c$ 发射射线，得沿 $\mathbf d_c$ 方向最外层的真实外壁径向距离
+$\rho_{rc}$。当前固定径向过切量为 $m_r=0.40$ mm，外层采样点为
 
 $$
 \mathbf y_{rc}=\mathbf g_r+(\rho_{rc}+m_r)\mathbf d_c.
@@ -165,9 +167,10 @@ $$
 首次生成后同时检查：
 
 - 每个窗的轴截面完整，射线支撑连续；
-- 语义轴已被完整打开，可见牙面行比例和连续通道比例达标；
+- 语义轴已被完整打开；牙面可见行比例不低于 `0.50`，连续通道比例不低于 `0.95`；
 - 组合切除体和差集结果均为封闭体；
-- 差集前后的主连通分量数一致，仅丢弃阈值以下的数值碎片；
+- 差集结果只保留体积不小于 `2.0 mm³` 的主体分量；被丢弃分量必须都低于该阈值；
+- 实际移除体积不小于 `1.0 mm³`，结果与切除体的残留交叠不超过 `10⁻⁴ mm³`；
 - 实际移除体积、源网格与切除体交集体积满足布尔体积恒等式；
   两次独立网格布尔的误差上限为
   $\max(0.05\ \mathrm{mm}^3,\ 10^{-4}V_{\cap})$。
@@ -187,8 +190,9 @@ $$
 \left[(d^*-d_0)\max\left(0,1-\frac{|r-f|}{k+1}\right)\right].
 $$
 
-新轴行使用 $\delta_r\leftarrow\max(\delta_r,\Delta_r)$，因此已通过行不会随整个
-窗口一起扩大。
+这里 $\Delta_r$ 是相对基线的**附加**下移，不是总下移。代码把它与此前已接受的
+`local_axis_drop_additions_mm[r]` 逐行取最大值；失败行增加到本轮目标，过渡行线性衰减，
+远离失败区的已通过行保持不变。
 
 ## 缓存边界
 
@@ -219,6 +223,16 @@ output/<case_id>/.cache/stage-03-cutout-planning/
 | 牙面可见行比例 | 1.0 |
 | 连续通道比例 | 1.0 |
 | 局部修正 | 首次质量检查通过，未使用 |
+
+## 代码对应
+
+| 文档算法 | 当前代码入口 |
+| --- | --- |
+| 导孔与操作窗解析几何 | `window_cutouts._plan_channels`、`_plan_operation_window` |
+| 轴扫契约与固定参数 | `observation_window_opening.build_observation_window_opening` |
+| 射线网格、补值和切除体 | `observation_window_engine._core.build_axis_sweep_cutter` |
+| 差集质量门 | `observation_window_engine._core._run_once` |
+| 逐行局部修正 | `_local_axis_failure_rows`、`_smoothed_local_drop_additions`、`_run_with_local_failure_target_sequence` |
 
 ![导孔、操作窗与观察窗规划](../images/stage-3-cutout-planning.png)
 

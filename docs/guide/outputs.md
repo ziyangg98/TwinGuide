@@ -47,18 +47,21 @@ output/<case_id>/
 | `inputs` | 该阶段需要的上游结果以及本次使用的牙列、导板和导管装配体路径 |
 | `parameters` | 该阶段真正消费的主要配置，而不是整份 YAML 复制 |
 | `result` | 类型化阶段结果的 JSON 序列化；Blender 运行时网格不进入契约 |
-| `quality` | `passed`、布尔 `checks`、少量可审核 `metrics` 和跳过/失败 `reason` |
+| `quality` | `passed`、布尔 `checks`，以及通用阶段的少量 `metrics` 和跳过/失败 `reason` |
 | `artifacts` | 本 JSON 的绝对路径以及实际存在的阶段 PNG 路径 |
 
-`quality.passed` 表示阶段文档中的类型结果和业务指标是否齐备；它不等于
-最终 STL 已通过 `validate`。
+第 2 阶段由牙位工作流直接写入同一顶层契约：`inputs` 额外记录输入指纹，
+`parameters` 记录识别配置，`quality` 使用 `checks` 和 `diagnostics`，不会生成
+通用阶段的 `quality.metrics`。其余阶段由 `stage_artifacts.py` 统一序列化。
+`quality.passed` 表示阶段文档中的类型结果和业务检查是否齐备；它不等于最终 STL
+已通过 `validate`。
 
 ## 各阶段结果
 
 | 阶段文件 | `result` 主要内容 | `quality.metrics` 主要指标 | PNG 表达内容 |
 | --- | --- | --- | --- |
 | `stage-01-sleeve-reconstruction` | 逐装配体识别的导管位姿、局部标架和标准重建导管 | 导管数、导管索引、长度和导孔直径 | 蓝色输入装配体与灰色标准重建导管 |
-| `stage-02-tooth-mapping` | 牙弓坐标框、FDI 顺序、现存/缺失牙、导板映射和观察窗端点 | 现存牙数、FDI 列表、缺失牙、观察窗数和映射检查 | 实测牙冠投影、FDI 中心、牙弓距离和观察窗范围 |
+| `stage-02-tooth-mapping` | 牙弓坐标框、FDI 顺序、现存/缺失牙、导板映射和观察窗端点 | `quality.checks` 的识别、坐标、覆盖、排序和窗口映射安全门；详细数值在 `quality.diagnostics` 与 `result` | 实测牙冠投影、FDI 中心、牙弓距离和观察窗范围 |
 | `stage-03-cutout-planning` | 导孔、操作窗和 FDI 轴扫观察窗切除体 | 三类切除体数量、观察窗 ID、切除体积、最小轴线净距和局部修正状态 | 已完成切口的蓝色导板与灰色导管 |
 | `stage-04-anchor-selection` | 导管 Q/P、导板射线锚点、轨迹和特殊端点 | 导管锚点数、导板锚点数和轨迹数 | 红色导管锚点、黄色导板锚点及射线/轨迹 |
 | `stage-05-press-beam` | 按压梁三个锚点、汇合点、半径和选择模式 | 连接类型、导板锚点数、最小汇合角、导管距离和梁径 | 金色按压梁、三锚点和 Y 型汇合关系 |
@@ -85,7 +88,8 @@ output/<case_id>/
 | --- | --- | --- |
 | `process --config CASE_YAML` | 写入七个阶段 JSON、牙位工作流图和计算所需缓存；不实体化最终 STL | 每个阶段的编号、状态、key、成熟度和原因 |
 | `generate --config CASE_YAML` | 阶段 JSON/PNG、最终 STL、四张标准视图和内部缓存 | `MODEL` 路径和所有返回的 `IMAGE` 路径 |
-| `validate --config CASE_YAML --model MODEL` | 不写文件 | 逐项输出“通过/失败、检查名、指标字典”，任一失败时退出码非零 |
+| `validate --config CASE_YAML --model MODEL` | 不修改 `MODEL`；为建立验证基准会运行七阶段，因此可能更新病例默认输出目录的阶段 JSON 和第 2 阶段缓存 | 逐项输出“通过/失败、检查名、指标字典”，任一失败时退出码非零 |
 
 `generate --validate` 在生成后立即执行同样的最终 STL 检查，验证结果仍输出到终端。
 具体检查项和阈值见 {doc}`validation`。
+12 个规范病例的既有输出快照见 {doc}`case-results`。

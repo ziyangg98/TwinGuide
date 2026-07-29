@@ -12,6 +12,10 @@
 `design.guide_component_bridge` 后，第 4 阶段在两个牙位站位分别寻找
 U 侧和背 U 侧导板锚点。
 
+代码先按表面积降序分解导板，只把面积不小于
+$\max(1\ \mathrm{mm}^2,0.01A_{max})$ 的分量视为主体，再检查主体数是否等于
+`required_guide_component_count`。
+
 ### 选点与分配
 
 设站位 $i\in\{1,2\}$ 在两个导板分量上的射线出口为 $A_{i,c}^{s}$，
@@ -46,12 +50,18 @@ A1,back  → A2,back
 
 ### 方向和净距
 
-将“参考邻牙中心 $T_r$ → 末端牙中心 $T_t$”投影到牙合平面，得到远中单位方向：
+先将末端牙的局部牙弓切向 $\mathbf t_t$ 投影到牙合平面，再用
+“参考邻牙中心 $T_r$ → 末端牙中心 $T_t$”的方向确定其符号，得到远中单位方向：
 
 $$
+\widetilde{\mathbf t}_t=
+\mathbf t_t-(\mathbf t_t\cdot\mathbf e_{occ})\mathbf e_{occ},
+\qquad
 \mathbf e_d=
-\frac{(\mathbf T_t-\mathbf T_r)-[(\mathbf T_t-\mathbf T_r)\cdot\mathbf e_{occ}]\mathbf e_{occ}}
-{\left\|(\mathbf T_t-\mathbf T_r)-[(\mathbf T_t-\mathbf T_r)\cdot\mathbf e_{occ}]\mathbf e_{occ}\right\|}.
+\operatorname{sign}\!\left[
+\widetilde{\mathbf t}_t\cdot(\mathbf T_t-\mathbf T_r)
+\right]
+\frac{\widetilde{\mathbf t}_t}{\|\widetilde{\mathbf t}_t\|}.
 $$
 
 U 型中心线到牙面的计划距离为
@@ -86,10 +96,10 @@ $$
 
 远中单位方向 $\mathbf e_d$ 先由两导管中心连线与公共导管轴的叉积产生两个候选，
 再用“参考邻牙→缺失末端牙槽位”的 FDI 方向确定符号。设两根导管平均外径为 $D$，
-公共节点为
+配置倍数为 $k_D$（当前配置解析只接受 `2.0`），公共节点为
 
 $$
-\mathbf G=\mathbf B+2D\,\mathbf e_d.
+\mathbf G=\mathbf B+k_DD\,\mathbf e_d.
 $$
 
 $\mathbf G$ 和 $\mathbf B$ 保持相同导管轴向高度。这一模式不向牙龈/牙列网格发射射线，
@@ -129,3 +139,12 @@ S_mesial,back  → P16,back  → P17,back  → G
 - 第 6 阶段 JSON/PNG 记录桥接梁、U 型路径或共节点路径；
 - 最终验证分别检查跨分量连接、U 型根部/回转/净距、四梁共节点和受保护闭合段；
 - `generate --validate` 在最终 STL 上检查特殊结构的实体保留情况。
+
+## 代码对应
+
+| 特殊算法 | 当前代码入口 |
+| --- | --- |
+| 两分量识别、分配与直梁 | `guide_component_bridge._load_meaningful_components`、`select_guide_component_bridge` |
+| U 型延伸方向、轮廓净距与回转 | `guide_terminal_u_extension.select_guide_terminal_u_extension` |
+| 远中公共节点 | `terminal_distal_common_node.select_terminal_distal_common_node` |
+| 特殊端点到连续路径的装配 | `template_anchors.select_template_points`、`point_linking.link_selected_points` |

@@ -28,16 +28,21 @@ TwinGuide 把病例输入转换为可制造的双导管牙科导板。
 | 6 | [连续梁架生成](../process/stage-6-linking.md) | 所有有序锚点与特殊拓扑 | `PointLinkingPlan` | 不重新识别病例语义 |
 | 7 | [手机摆动避让](../process/stage-7-clearance.md) | 手机 STL、止挡报告、摆角 | `tuple[HandpieceAvoidancePlan, ...]` | 不保护进入包络的结构 |
 
-七阶段控制器只按顺序调用阶段函数并将结果写入 `GenerationContext`。
-一个阶段不能从下游网格反推或修改上游语义。
+七阶段控制器先调用 `analyze_case()` 导入三类网格、拆分装配体并完成第 1 阶段
+所需的病例分析，再按顺序调用阶段函数；特殊桥接和 U 型延伸计划在第 4 阶段锚点
+计算前插入，最终全部结果写入 `GenerationContext`。一个阶段不能从下游最终 STL
+反推或修改上游语义。
 
 ## 规划层、Blender 层与验证层
 
-### 规划层
+### 阶段编排与几何分析层
 
 `generation_process.py` 调度七个类型化阶段。这一层负责所有业务决策：
 导管候选、牙位语义、窗口范围、锚点、路径拓扑、手机运动轴与枢轴。
-其输出是点、轴、曲线、封闭切除体和质量指标，不依赖 Blender 场景状态。
+其输出是点、轴、曲线、封闭切除体和质量指标。它不是脱离 Blender 的纯计算层：
+`analyze_case()` 通过 `bpy` 导入 STL、清空场景、拆分连通分量并采样网格，部分窗口
+和锚点计算也消费这些 Blender 网格对象。因此 `process`、`generate` 和 `validate`
+都必须由 Blender Python 启动。
 
 ### Blender 实体化层
 
@@ -49,7 +54,9 @@ TwinGuide 把病例输入转换为可制造的双导管牙科导板。
 
 验证器使用同一配置和公开计划重建期望位置，但独立读取最终 STL
 计算闭合性、导管保留、导孔贯通、梁中心线覆盖、窗口净距和特殊结构检查。
-验证器不修改模型，也不把生成阶段的“计划通过”当作最终几何通过。
+验证器不修改待检查模型，也不把生成阶段的“计划通过”当作最终几何通过；但它会
+重新执行 `run_generation_process()`，因此可能在病例默认输出目录中复用或刷新
+第 2 阶段缓存，并重写七个阶段 JSON。
 
 ## 实体布尔顺序
 
@@ -113,7 +120,7 @@ JSON 记录数值结果与质量检查，PNG 展示对应的几何结果。
 | 导孔、操作窗、轴扫观察窗与局部修正 | {doc}`../process/stage-3-cutouts` |
 | Q/P、牙位 T 点、旋转射线和导板锚点分配 | {doc}`../process/stage-4-link-points` |
 | 三种 Y 型按压梁锚点与汇合约束 | {doc}`../process/stage-5-press-beam` |
-| 四根主梁、五次曲线、低端下潜、扫掠和强化 | {doc}`../process/stage-6-linking` |
+| 单/多种植位主梁、五次曲线、单种植位低端下潜、扫掠和强化 | {doc}`../process/stage-6-linking` |
 | 两分量桥接、末端 U 延伸和远中公共节点 | {doc}`../process/special-topologies` |
 | 手机旋转、姿态采样、包络与差集 | {doc}`../process/stage-7-clearance` |
 | 实体布尔顺序 | 本页“实体布尔顺序” |
@@ -138,3 +145,6 @@ JSON 记录数值结果与质量检查，PNG 展示对应的几何结果。
 | 手机摆动计划 | `src/twin_guide/clearance_adjustment.py` |
 | Blender 实体化和导出 | `src/twin_guide/blender/guide_modeling.py` |
 | 最终 STL 独立验证 | `src/twin_guide/guide_validation.py` |
+
+当前 12 个规范病例的实际阶段状态、验证指标、特殊结构覆盖和最终图见
+{doc}`case-results`。

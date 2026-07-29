@@ -9,11 +9,12 @@ inputs
 configuration
 running
 outputs
+case-results
 validation
 technical-modeling-workflow
 troubleshooting
 ```
 
-可按“输入数据→病例配置→运行程序→输出结果→结果检查”的顺序阅读，
+可按“输入数据→病例配置→运行程序→输出结果→规范病例结果→结果检查”的顺序阅读，
 也可直接查看[生成过程](../process/index.md)、[程序设计](../design/index.md)
 或 [Python API 参考](../public_api.rst)。

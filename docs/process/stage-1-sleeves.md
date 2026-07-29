@@ -190,6 +190,16 @@ $$
 
 组件索引和 $C_k/7$ 只进入内部拒绝原因，不进入对外 `GuideSleeve`。
 
+## 代码对应
+
+| 文档算法 | 当前代码入口 |
+| --- | --- |
+| 连通分量 PCA、内孔轴和七点资格 | `sleeve_generation._analyze_component`、`_filter_bore_candidates` |
+| 精确内孔轴拟合 | `sleeve_estimation.sleeve.estimate_sleeve_axis` |
+| 候选对排序与轴向定号 | `sleeve_generation._select_pair`、`_orient_axis_against_occlusal` |
+| C 口方向与导板标架 | `sleeve_estimation.sleeve.c_opening_toward`、`sleeve_generation._template_frame` |
+| 八参数校验和标准重建 | `blender.sleeve_reconstruction.validate_sleeve_boolean_parameters`、`create_closed_sleeve_object` |
+
 ## 输出文件与结果图
 
 - `stage-01-sleeve-reconstruction.json`：轴、C 口、标准尺寸和阶段质量检查；

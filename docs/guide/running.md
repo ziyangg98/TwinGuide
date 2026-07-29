@@ -39,7 +39,9 @@ brew install --cask blender
   --config ../data/cases/single/tooth-14/case.yaml --validate
 ```
 
-`--validate` 复用本次生成的中间语义并对最终 STL 执行独立几何检查；
+`--validate` 在生成后调用与 `validate` 子命令相同的检查器。检查器按同一份配置
+重新执行七阶段计算以建立验证基准；第 2 阶段可在输入指纹完全一致时复用缓存，
+其余阶段计划会重新计算。随后检查器独立读取最终 STL；
 任一检查失败时命令返回非零状态。对末端 U 型延伸梁和末端远中公共节点这类
 特殊拓扑模式，该选项同时检查对应结构。
 
@@ -62,7 +64,9 @@ brew install --cask blender
 
 `validate` 检查拓扑、导管、连接梁、按压梁、导孔、观察窗和特殊结构。
 手机包络差集由 `generate` 执行，`validate` 检查差集后的最终模型，
-不重新构造运动包络。检查项和阈值见 {doc}`validation`。
+不把包络重新应用到待检查模型。由于验证基准来自 `run_generation_process()`，
+命令仍可能复用或刷新第 2 阶段缓存，并重写病例默认输出目录中的七阶段 JSON；
+它不会修改 `--model` 指向的 STL。检查项和阈值见 {doc}`validation`。
 
 ## 开发检查
 
@@ -89,3 +93,5 @@ Blender 后端与端到端测试、全部病例回归分别使用：
 
 最终 STL、四个标准视图、七阶段 JSON/PNG、各阶段指标以及
 `.cache` 内部产物的完整契约见 {doc}`outputs`。
+
+已有全病例回归的逐例最终图和指标见 {doc}`case-results`。
