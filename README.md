@@ -116,6 +116,12 @@ brew install --cask blender
   --model output/tooth_11/twin_guide.stl
 ```
 
+在 Blender 中微调窗口、连接、按压点牙位和高度后重新生成：
+
+```bash
+./twinguide ui --config ../data/cases/single/tooth-11/case.yaml
+```
+
 生成命令默认拒绝标记为 `pending`、`pending_user_input` 或 `unreviewed` 的病例。
 `--allow-unreviewed` 可在诊断运行中跳过本次审核检查。
 

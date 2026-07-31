@@ -28,6 +28,12 @@ runtime:
     connector_diameter_mm: 4.6
     fusion_voxel_size_mm: 0.2
     connector_dental_clearance_mm: 0.2
+    sleeve_stop_clearance_mm: 2.0
+    sleeve_stop_front_avoidance_mm: 0.0
+    connection_blocks:
+      lower_main: true
+      upper_main: true
+      press_beam: true
     connector_guide_endpoint:
       root_radius_factor: 1.08
       transition_length_mm: 3.0
@@ -41,6 +47,8 @@ runtime:
     operation_tangent_margin_mm: 1.0
     operation_bitangent_margin_mm: 3.0
     operation_axial_margin_mm: 5.0
+    operation_front_axial_margin_mm: 5.0
+    operation_rear_axial_margin_mm: 5.0
     operation_corner_radius_mm: 1.0
     observation_axis_drop_mm: 0.2
     observation_sweep_angle_degrees: 90.0
@@ -66,7 +74,16 @@ design:
   guide_anchors: {mode: nearest}
   press_beam: {mode: disabled}
 
-planning: {}
+planning:
+  # 坐标格式、延长量定义和高度公式由医生确认后再启用。
+  # clinical_parameters:
+  #   implant_coordinates_path: input/implant-coordinates.dat
+  #   implant_coordinates_format: vendor-format-v1
+  #   extension_mm: 1.0
+  #   extension_definition: clinician-confirmed-axis-extension
+  #   mouth_opening_mm: 36.0
+  #   adapter_length_mm: 12.0
+  #   height_formula_id: clinician-formula-v1
 
 review:
   object_mapping_status: unreviewed

@@ -112,6 +112,55 @@ class PointLinkingTests(unittest.TestCase):
             self.assertEqual(guide_links[0].start, guide_links[1].start)
             self.assertEqual(guide_links[0].end, guide_links[1].end)
 
+        upper_only = link_selected_points(
+            points,
+            PointLinkingConfig(
+                radius_mm=1.2,
+                curve_resolution=30,
+                include_lower_main=False,
+            ),
+        )
+        self.assertEqual(len(upper_only.links), 2)
+        self.assertTrue(all(link.sleeve_label == "upper" for link in upper_only.links))
+        with self.assertRaisesRegex(ValueError, "至少保留"):
+            PointLinkingConfig(
+                radius_mm=1.2,
+                include_lower_main=False,
+                include_upper_main=False,
+            )
+
+        avoided = link_selected_points(
+            points,
+            PointLinkingConfig(
+                radius_mm=1.2,
+                curve_resolution=30,
+                stop_platform_front_avoidance_mm=2.0,
+            ),
+            stop_platform_avoidance_direction=Vec3(0.0, 0.0, -1.0),
+        )
+        for selection in sleeve_plan.selections:
+            upper_link = next(
+                link
+                for link in avoided.links
+                if link.guide_index == selection.guide_index
+                and link.sleeve_label == "upper"
+            )
+            candidate_routing_points = (
+                selection.upper.position
+                + (upper_link.start - selection.upper.position) * 0.35
+                + Vec3(0.0, 0.0, -2.0),
+                selection.upper.position
+                + (upper_link.end - selection.upper.position) * 0.35
+                + Vec3(0.0, 0.0, -2.0),
+            )
+            self.assertTrue(
+                any(point in upper_link.centerline for point in candidate_routing_points)
+            )
+            self.assertEqual(
+                upper_link.centerline[upper_link.contact_index],
+                selection.upper.position,
+            )
+
     def test_terminal_missing_tooth_links_share_one_distal_node(self):
         """末端缺牙模式应使两导管的上下四梁共享远中节点。"""
         from types import SimpleNamespace

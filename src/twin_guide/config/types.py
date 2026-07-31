@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
@@ -87,6 +87,15 @@ class PressBeamGuideEndpointParameters:
 
 
 @dataclass(frozen=True, slots=True)
+class ConnectionBlockParameters:
+    """控制第 6 阶段各类连接块是否进入最终模型。"""
+
+    lower_main: bool = True
+    upper_main: bool = True
+    press_beam: bool = True
+
+
+@dataclass(frozen=True, slots=True)
 class GeometryParameters:
     """导孔切除、连接管和网格融合所需的几何参数。"""
 
@@ -94,6 +103,11 @@ class GeometryParameters:
     connector_diameter_mm: float
     fusion_voxel_size_mm: float
     connector_dental_clearance_mm: float = 0.20
+    sleeve_stop_clearance_mm: float = 2.0
+    sleeve_stop_front_avoidance_mm: float = 0.0
+    connection_blocks: ConnectionBlockParameters = field(
+        default_factory=ConnectionBlockParameters
+    )
     connector_guide_endpoint: PressBeamGuideEndpointParameters = (
         PressBeamGuideEndpointParameters()
     )
@@ -112,11 +126,26 @@ class WindowParameters:
     operation_tangent_margin_mm: float
     operation_bitangent_margin_mm: float
     operation_axial_margin_mm: float
+    operation_front_axial_margin_mm: float
+    operation_rear_axial_margin_mm: float
     operation_corner_radius_mm: float
     observation_axis_drop_mm: float
     observation_sweep_angle_degrees: float
     observation_local_failure_drop_targets_mm: tuple[float, ...]
     observation_local_failure_transition_rows: int
+
+
+@dataclass(frozen=True, slots=True)
+class ClinicalPlanningParameters:
+    """等待临床定义或外部格式确认的病例级参数接口。"""
+
+    implant_coordinates_path: Path | None = None
+    implant_coordinates_format: str | None = None
+    extension_mm: float | None = None
+    extension_definition: str | None = None
+    mouth_opening_mm: float | None = None
+    adapter_length_mm: float | None = None
+    height_formula_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -358,6 +387,8 @@ __all__ = [
     "DEFAULT_GUIDE_ANCHOR_U_SIDE_RAY_ANGLE_DEGREES",
     "DEFAULT_OPERATION_BITANGENT_MARGIN_MM",
     "DEFAULT_PRESS_BEAM_DIAMETER_MM",
+    "ClinicalPlanningParameters",
+    "ConnectionBlockParameters",
     "GeometryParameters",
     "GuideAnchorLocation",
     "GuideAnchorMode",

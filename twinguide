@@ -4,7 +4,7 @@ set -eu
 project_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
 usage() {
-    echo "Usage: ./twinguide {generate|process|validate} ..."
+    echo "Usage: ./twinguide {generate|process|validate|ui} ..."
 }
 
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
@@ -14,6 +14,15 @@ fi
 if [ "$#" -eq 0 ]; then
     usage >&2
     exit 2
+fi
+
+if [ "$1" = "ui" ]; then
+    shift
+    exec "$project_directory/scripts/blender.sh" \
+        --factory-startup \
+        --python-expr \
+        "from twin_guide.blender_ui import launch_from_argv; launch_from_argv()" \
+        -- "$@"
 fi
 
 exec "$project_directory/scripts/blender.sh" \

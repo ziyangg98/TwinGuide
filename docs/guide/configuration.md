@@ -94,6 +94,9 @@ $$
 | `connector_diameter_mm` | `4.60` | 连接梁直径，$>0$ |
 | `fusion_voxel_size_mm` | 必填 | 网格融合/离散尺度，$>0$ |
 | `connector_dental_clearance_mm` | `0.20` | 连接梁与牙列的净距，$\geq0$ |
+| `sleeve_stop_clearance_mm` | `2.0` | 高位连接梁外缘到止停台侧稳定外壁边缘的净距，$\geq0$ |
+| `sleeve_stop_front_avoidance_mm` | `0.0` | 高位主连接线在正视平面下拉、避开止停台投影的距离，$\geq0$ |
+| `connection_blocks` | 全部启用 | 分别控制 `lower_main`、`upper_main` 和 `press_beam` |
 | `connector_guide_endpoint` | 见下表 | 连接梁在导板端的渐粗、根部球和贴合脚参数 |
 
 `connector_guide_endpoint` 也被 `runtime.press_beam.guide_endpoint` 复用：
@@ -118,6 +121,8 @@ $$
 | `operation_tangent_margin_mm` | 必填 | 操作窗沿局部牙弓切向的余量，$\geq0$ |
 | `operation_bitangent_margin_mm` | `3.0` | 操作窗沿局部次切向的余量，$\geq0$ |
 | `operation_axial_margin_mm` | `channel_axial_margin_mm` | 操作窗沿导管轴的余量，$\geq0$ |
+| `operation_front_axial_margin_mm` | `operation_axial_margin_mm` | 操作窗术区侧轴向余量，$\geq0$ |
+| `operation_rear_axial_margin_mm` | `operation_axial_margin_mm` | 操作窗后部轴向余量，$\geq0$ |
 | `operation_corner_radius_mm` | $\min(1,\max(0.2,m_b))$ | 操作窗圆角半径，$\geq0$ |
 | `observation_axis_drop_mm` | `0.2` | FDI 轴扫观察窗公共轴相对高端牙冠顶的下沉量，$>0$ |
 | `observation_sweep_angle_degrees` | `90.0` | 默认扫角，$0<\theta\leq180$ |
@@ -131,6 +136,8 @@ $$
 | `tangent_margin_mm` | `operation_tangent_margin_mm` |
 | `bitangent_margin_mm` | `operation_bitangent_margin_mm` |
 | `axial_margin_mm` | `operation_axial_margin_mm` |
+| `front_axial_margin_mm` | `operation_front_axial_margin_mm` |
+| `rear_axial_margin_mm` | `operation_rear_axial_margin_mm` |
 | `corner_radius_mm` | `operation_corner_radius_mm` |
 
 其余规划字段当前只接受下列固定语义：`mode: per_implant_site`、
@@ -138,6 +145,13 @@ $$
 `axis_mode: paired_sleeve_average_axis`、`overlap_rule: union_cutters` 和
 `cut_target: guide_template_only`。`sites` 如果出现必须是数组，当前作为种植位对照记录；
 窗体数量仍由实际识别的导管对决定。
+
+### `planning.clinical_parameters`
+
+该接口保留 `implant_coordinates_path`、`implant_coordinates_format`、
+`extension_mm`、`extension_definition`、`mouth_opening_mm`、
+`adapter_length_mm` 和 `height_formula_id`。坐标路径与格式、延长量与定义必须成对提供。
+在医生确认坐标格式、延长量定义和高度公式前，这些字段只记录输入，不参与几何计算。
 
 ### `design.observation_windows`
 

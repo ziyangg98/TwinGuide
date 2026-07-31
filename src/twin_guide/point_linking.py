@@ -30,6 +30,10 @@ class PointLinkingConfig:
     lower_approach_overlap_mm: float = 1.45
     lower_dive_merge_arc_mm: float = 5.0
     centerline_spacing_mm: float = 0.30
+    include_lower_main: bool = True
+    include_upper_main: bool = True
+    include_press_beam: bool = True
+    stop_platform_front_avoidance_mm: float = 0.0
     connector_guide_endpoint: PressBeamGuideEndpointParameters = field(
         default_factory=PressBeamGuideEndpointParameters
     )
@@ -47,6 +51,10 @@ class PointLinkingConfig:
             raise ValueError("低梁外层接近嵌入量必须位于 [0, 梁直径) 内")
         if min(self.lower_dive_merge_arc_mm, self.centerline_spacing_mm) <= 0.0:
             raise ValueError("低梁下潜合并弧长和中心线采样间距必须为正")
+        if not self.include_lower_main and not self.include_upper_main:
+            raise ValueError("分块连接至少保留一组主连接梁")
+        if self.stop_platform_front_avoidance_mm < 0.0:
+            raise ValueError("止停台正面避让量不得为负")
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,7 +70,7 @@ class PointLink:
     start: Vec3
     tube_contact: Vec3
     end: Vec3
-    centerline: tuple[Vec3, ...]
+    centerline: tuple[Vec3, Vec3]
     contact_index: int
     left_source: ConnectorEndpointSource = ConnectorEndpointSource.TEMPLATE
     right_source: ConnectorEndpointSource = ConnectorEndpointSource.TEMPLATE
@@ -82,7 +90,7 @@ class PressBeamLink:
     surface_normal: Vec3
     start: Vec3
     end: Vec3
-    centerline: tuple[Vec3, Vec3]
+    centerline: tuple[Vec3, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -250,6 +258,72 @@ def _curve_through_multiple_contacts(
     return centerline, tuple(waypoint_indices[1:-1])
 
 
+def _upper_curve_with_stop_platform_avoidance(
+    left: Vec3,
+    contact: Vec3,
+    right: Vec3,
+    left_normal: Vec3,
+    contact_normal: Vec3,
+    right_normal: Vec3,
+    sleeve_axis: Vec3,
+    avoidance_direction: Vec3 | None,
+    config: PointLinkingConfig,
+) -> tuple[tuple[Vec3, ...], int]:
+    """在正视平面下拉连接线，使其避开止停台的完整正面投影。"""
+
+    offset = config.stop_platform_front_avoidance_mm
+    if offset <= 0.0:
+        return _curve_through_contact(
+            left,
+            contact,
+            right,
+            left_normal,
+            contact_normal,
+            right_normal,
+            config,
+        )
+    outward = contact_normal.normalized()
+    opening = outward * -1.0
+    downward = (
+        avoidance_direction.normalized()
+        if avoidance_direction is not None
+        else sleeve_axis.normalized() * -1.0
+    )
+    left_score = (left - contact).normalized().dot(opening)
+    right_score = (right - contact).normalized().dot(opening)
+    if left_score >= right_score:
+        routing_point = (
+            contact
+            + (left - contact) * 0.35
+            + downward * offset
+        )
+        centerline, indices = _curve_through_multiple_contacts(
+            left,
+            (routing_point, contact),
+            right,
+            left_normal,
+            (downward, contact_normal),
+            right_normal,
+            config,
+        )
+        return centerline, indices[1]
+    routing_point = (
+        contact
+        + (right - contact) * 0.35
+        + downward * offset
+    )
+    centerline, indices = _curve_through_multiple_contacts(
+        left,
+        (contact, routing_point),
+        right,
+        left_normal,
+        (contact_normal, downward),
+        right_normal,
+        config,
+    )
+    return centerline, indices[0]
+
+
 def _cumulative_lengths(points: tuple[Vec3, ...]) -> tuple[float, ...]:
     """返回折线各采样点的累计弧长。"""
 
@@ -349,6 +423,7 @@ def link_selected_points(
     press_beam_points: PressBeamPointPlan | None = None,
     guide_component_bridge: GuideComponentBridgePlan | None = None,
     guide_terminal_u_extension: GuideTerminalUExtensionPlan | None = None,
+    stop_platform_avoidance_direction: Vec3 | None = None,
 ) -> PointLinkingPlan:
     """按当前 Q/P 与导板 A 点生成每导管上下两根连续梁。
 
@@ -380,6 +455,10 @@ def link_selected_points(
             start_centerline = path.start_centerline_anchor or path.start.position
             end_centerline = path.end_centerline_anchor or path.end.position
             for sleeve_label in ("lower", "upper"):
+                if sleeve_label == "lower" and not config.include_lower_main:
+                    continue
+                if sleeve_label == "upper" and not config.include_upper_main:
+                    continue
                 sleeve_points = tuple(
                     getattr(selection, sleeve_label) for selection in ordered_sleeves
                 )
@@ -431,6 +510,10 @@ def link_selected_points(
             ("lower", sleeve.lower),
             ("upper", sleeve.upper),
         ):
+            if sleeve_label == "lower" and not config.include_lower_main:
+                continue
+            if sleeve_label == "upper" and not config.include_upper_main:
+                continue
             if sleeve_label == "lower":
                 centerline, contact_index = _lower_curve_with_local_dive(
                     left_start,
@@ -443,13 +526,15 @@ def link_selected_points(
                     config,
                 )
             else:
-                centerline, contact_index = _curve_through_contact(
+                centerline, contact_index = _upper_curve_with_stop_platform_avoidance(
                     left_start,
                     sleeve_point.position,
                     right_end,
                     template.left.normal,
                     sleeve_point.surface_normal,
                     template.right.normal,
+                    (sleeve.upper.position - sleeve.lower.position).normalized(),
+                    stop_platform_avoidance_direction,
                     config,
                 )
             links.append(
@@ -475,7 +560,7 @@ def link_selected_points(
     press_junction_factor = 1.12
     press_trajectories: tuple[tuple[Vec3, ...], ...] = ()
     press_guide_endpoint = None
-    if press_beam_points is not None:
+    if press_beam_points is not None and config.include_press_beam:
         press_junction = press_beam_points.junction
         press_radius = press_beam_points.radius_mm
         press_junction_factor = press_beam_points.junction_radius_factor

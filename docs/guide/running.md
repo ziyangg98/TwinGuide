@@ -32,6 +32,16 @@ brew install --cask blender
 
 每个病例使用一份 `case.yaml`，手机避让和其他阶段参数均在其中配置。
 
+## 图形化微调
+
+```bash
+./twinguide ui --config ../data/cases/single/tooth-11/case.yaml
+```
+
+Blender 的 `TwinGuide` 侧栏可调整操作窗前后切除量、止停台净距、连接块、
+按压点牙位和导管高度，并调用同一七阶段流程重新生成。尚未确认格式或公式的
+种植体坐标、延长量、张口度和转口长度只显示状态，不参与计算。
+
 需要在生成后立即验收最终 STL 时，可使用：
 
 ```bash

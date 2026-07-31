@@ -192,11 +192,18 @@ def run_generation_process(config: CaseConfig) -> GenerationProcessResult:
         context.template_link_points,
         PointLinkingConfig(
             radius_mm=config.geometry.connector_radius_mm,
+            include_lower_main=config.geometry.connection_blocks.lower_main,
+            include_upper_main=config.geometry.connection_blocks.upper_main,
+            include_press_beam=config.geometry.connection_blocks.press_beam,
+            stop_platform_front_avoidance_mm=(
+                config.geometry.sleeve_stop_front_avoidance_mm
+            ),
             connector_guide_endpoint=config.geometry.connector_guide_endpoint,
         ),
         context.press_beam_points,
         context.guide_component_bridge,
         context.guide_terminal_u_extension,
+        context.sleeve_generation.template_frame.normal * -1.0,
     )
     results.append(StageResult(STAGES[5], StageRunStatus.COMPLETED, context.point_linking))
     if not config.handpiece_avoidance:

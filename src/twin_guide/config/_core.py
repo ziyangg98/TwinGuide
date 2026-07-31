@@ -15,6 +15,7 @@ from twin_guide.config.parsing import (
     _json_path,
     _mapping,
     _number,
+    _path,
     _positive_integer,
     _reject_unknown,
     _required,
@@ -27,6 +28,8 @@ from twin_guide.config.types import (
     DEFAULT_GUIDE_ANCHOR_U_SIDE_RAY_ANGLE_DEGREES,
     DEFAULT_OPERATION_BITANGENT_MARGIN_MM,
     DEFAULT_PRESS_BEAM_DIAMETER_MM,
+    ClinicalPlanningParameters,
+    ConnectionBlockParameters,
     GeometryParameters,
     GuideAnchorLocation,
     GuideAnchorMode,
@@ -72,6 +75,7 @@ class CaseConfig:
     guide_component_bridge: GuideComponentBridgeParameters
     guide_terminal_u_extension: GuideTerminalUExtensionParameters
     press_beam: PressBeamParameters
+    clinical_planning: ClinicalPlanningParameters
     render: RenderParameters
     output_directory: Path
 
@@ -179,6 +183,10 @@ class CaseConfig:
                 terminal_u_raw
             ),
             press_beam=_parse_press_beam(press_beam_raw),
+            clinical_planning=_parse_clinical_planning(
+                yaml_planning.get("clinical_parameters"),
+                base_directory,
+            ),
             render=_parse_render(_section(runtime, "render")),
             output_directory=Path(__file__).resolve().parents[3] / "output" / case_id,
         )
@@ -209,6 +217,11 @@ class CaseConfig:
                 "terminal_distal_common_node 与 guide_terminal_u_extension "
                 "不得在同一病例中同时启用"
             )
+        if (
+            config.guide_anchors.terminal_distal_common_node is not None
+            and not config.geometry.connection_blocks.lower_main
+        ):
+            raise ConfigurationError("末端远中公共节点必须保留低位主连接梁")
         if config.tooth_identification is not None:
             validate_special_case_anatomy(config)
         return config
@@ -409,6 +422,27 @@ def _parse_guide_endpoint(
     return parameters
 
 
+def _parse_connection_blocks(raw_value: object) -> ConnectionBlockParameters:
+    """解析可独立启用的主梁和按压梁连接块。"""
+
+    if raw_value is None:
+        return ConnectionBlockParameters()
+    raw = _mapping(raw_value, "geometry.connection_blocks")
+    _reject_unknown(
+        raw,
+        {"lower_main", "upper_main", "press_beam"},
+        "geometry.connection_blocks",
+    )
+    blocks = ConnectionBlockParameters(
+        lower_main=_boolean(raw.get("lower_main", True), "connection_blocks.lower_main"),
+        upper_main=_boolean(raw.get("upper_main", True), "connection_blocks.upper_main"),
+        press_beam=_boolean(raw.get("press_beam", True), "connection_blocks.press_beam"),
+    )
+    if not blocks.lower_main and not blocks.upper_main:
+        raise ConfigurationError("connection_blocks 至少保留一组主连接梁")
+    return blocks
+
+
 def _parse_geometry(raw: dict[str, object]) -> GeometryParameters:
     """解析并校验通道、连接和融合几何参数。"""
 
@@ -417,6 +451,9 @@ def _parse_geometry(raw: dict[str, object]) -> GeometryParameters:
         "connector_diameter_mm",
         "fusion_voxel_size_mm",
         "connector_dental_clearance_mm",
+        "sleeve_stop_clearance_mm",
+        "sleeve_stop_front_avoidance_mm",
+        "connection_blocks",
         "connector_guide_endpoint",
     }
     _reject_unknown(raw, fields, "geometry")
@@ -438,6 +475,15 @@ def _parse_geometry(raw: dict[str, object]) -> GeometryParameters:
             raw.get("connector_dental_clearance_mm", 0.20),
             "geometry.connector_dental_clearance_mm",
         ),
+        sleeve_stop_clearance_mm=_number(
+            raw.get("sleeve_stop_clearance_mm", 2.0),
+            "geometry.sleeve_stop_clearance_mm",
+        ),
+        sleeve_stop_front_avoidance_mm=_number(
+            raw.get("sleeve_stop_front_avoidance_mm", 0.0),
+            "geometry.sleeve_stop_front_avoidance_mm",
+        ),
+        connection_blocks=_parse_connection_blocks(raw.get("connection_blocks")),
         connector_guide_endpoint=_parse_guide_endpoint(
             raw.get("connector_guide_endpoint", {}),
             "geometry.connector_guide_endpoint",
@@ -456,6 +502,8 @@ def _parse_windows(
         "operation_tangent_margin_mm",
         "operation_bitangent_margin_mm",
         "operation_axial_margin_mm",
+        "operation_front_axial_margin_mm",
+        "operation_rear_axial_margin_mm",
         "operation_corner_radius_mm",
         "observation_axis_drop_mm",
         "observation_sweep_angle_degrees",
@@ -514,18 +562,27 @@ def _parse_windows(
         ),
         "windows.operation_bitangent_margin_mm",
     )
+    operation_axial_margin_mm = _number(
+        raw.get(
+            "operation_axial_margin_mm",
+            default_operation_axial_margin_mm,
+        ),
+        "windows.operation_axial_margin_mm",
+    )
     return WindowParameters(
         operation_tangent_margin_mm=_number(
             _required(raw, "operation_tangent_margin_mm"),
             "windows.operation_tangent_margin_mm",
         ),
         operation_bitangent_margin_mm=operation_bitangent_margin_mm,
-        operation_axial_margin_mm=_number(
-            raw.get(
-                "operation_axial_margin_mm",
-                default_operation_axial_margin_mm,
-            ),
-            "windows.operation_axial_margin_mm",
+        operation_axial_margin_mm=operation_axial_margin_mm,
+        operation_front_axial_margin_mm=_number(
+            raw.get("operation_front_axial_margin_mm", operation_axial_margin_mm),
+            "windows.operation_front_axial_margin_mm",
+        ),
+        operation_rear_axial_margin_mm=_number(
+            raw.get("operation_rear_axial_margin_mm", operation_axial_margin_mm),
+            "windows.operation_rear_axial_margin_mm",
         ),
         operation_corner_radius_mm=_number(
             raw.get(
@@ -657,6 +714,8 @@ def _merge_operation_window_parameters(
             "tangent_margin_mm",
             "bitangent_margin_mm",
             "axial_margin_mm",
+            "front_axial_margin_mm",
+            "rear_axial_margin_mm",
             "corner_radius_mm",
             "overlap_rule",
             "cut_target",
@@ -686,6 +745,8 @@ def _merge_operation_window_parameters(
         "tangent_margin_mm": "operation_tangent_margin_mm",
         "bitangent_margin_mm": "operation_bitangent_margin_mm",
         "axial_margin_mm": "operation_axial_margin_mm",
+        "front_axial_margin_mm": "operation_front_axial_margin_mm",
+        "rear_axial_margin_mm": "operation_rear_axial_margin_mm",
         "corner_radius_mm": "operation_corner_radius_mm",
     }
     overrides = {
@@ -694,6 +755,97 @@ def _merge_operation_window_parameters(
         if source in yaml_windows
     }
     return {**runtime_windows, **overrides}
+
+
+def _optional_text(value: object, name: str) -> str | None:
+    """读取可选非空文本参数。"""
+
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigurationError(f"{name} 必须为非空字符串")
+    return value.strip()
+
+
+def _parse_clinical_planning(
+    raw_value: object,
+    base_directory: Path,
+) -> ClinicalPlanningParameters:
+    """解析尚需临床定义确认的坐标、延长量和高度计算输入。"""
+
+    if raw_value is None:
+        return ClinicalPlanningParameters()
+    raw = _mapping(raw_value, "planning.clinical_parameters")
+    _reject_unknown(
+        raw,
+        {
+            "implant_coordinates_path",
+            "implant_coordinates_format",
+            "extension_mm",
+            "extension_definition",
+            "mouth_opening_mm",
+            "adapter_length_mm",
+            "height_formula_id",
+        },
+        "planning.clinical_parameters",
+    )
+    coordinates_path = None
+    if "implant_coordinates_path" in raw:
+        coordinates_path = _path(
+            raw["implant_coordinates_path"],
+            base_directory,
+            "planning.clinical_parameters.implant_coordinates_path",
+        )
+        if not coordinates_path.is_file():
+            raise ConfigurationError(
+                "planning.clinical_parameters.implant_coordinates_path "
+                f"必须指向已存在的文件：{coordinates_path}"
+            )
+    coordinates_format = _optional_text(
+        raw.get("implant_coordinates_format"),
+        "planning.clinical_parameters.implant_coordinates_format",
+    )
+    if (coordinates_path is None) != (coordinates_format is None):
+        raise ConfigurationError("种植体坐标路径和格式必须同时提供")
+    extension_mm = (
+        None
+        if "extension_mm" not in raw
+        else _number(raw["extension_mm"], "planning.clinical_parameters.extension_mm")
+    )
+    extension_definition = _optional_text(
+        raw.get("extension_definition"),
+        "planning.clinical_parameters.extension_definition",
+    )
+    if (extension_mm is None) != (extension_definition is None):
+        raise ConfigurationError("延长量数值和定义必须同时提供")
+    return ClinicalPlanningParameters(
+        implant_coordinates_path=coordinates_path,
+        implant_coordinates_format=coordinates_format,
+        extension_mm=extension_mm,
+        extension_definition=extension_definition,
+        mouth_opening_mm=(
+            None
+            if "mouth_opening_mm" not in raw
+            else _number(
+                raw["mouth_opening_mm"],
+                "planning.clinical_parameters.mouth_opening_mm",
+                positive=True,
+            )
+        ),
+        adapter_length_mm=(
+            None
+            if "adapter_length_mm" not in raw
+            else _number(
+                raw["adapter_length_mm"],
+                "planning.clinical_parameters.adapter_length_mm",
+                positive=True,
+            )
+        ),
+        height_formula_id=_optional_text(
+            raw.get("height_formula_id"),
+            "planning.clinical_parameters.height_formula_id",
+        ),
+    )
 
 
 def _merge_case_design_section(

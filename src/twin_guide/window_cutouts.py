@@ -78,18 +78,19 @@ def _plan_operation_window(
         for sample in local_samples
     )
     local_depth_mm = max(depth_coordinates) - min(depth_coordinates)
-    depth_mm = (
-        max(
-            local_depth_mm,
-            first_guide.length_mm,
-            second_guide.length_mm,
-        )
-        + 2.0 * case.config.windows.operation_axial_margin_mm
+    base_depth_mm = max(
+        local_depth_mm,
+        first_guide.length_mm,
+        second_guide.length_mm,
     )
+    front_margin_mm = case.config.windows.operation_front_axial_margin_mm
+    rear_margin_mm = case.config.windows.operation_rear_axial_margin_mm
+    depth_mm = base_depth_mm + front_margin_mm + rear_margin_mm
+    shifted_center = center + normal * (front_margin_mm - rear_margin_mm) * 0.5
     return WindowCutout(
         name=f"operation_window_{site_index:02d}",
         purpose=WindowPurpose.OPERATION,
-        center=center,
+        center=shifted_center,
         normal=normal,
         tangent=tangent,
         width_mm=long_edge_mm,

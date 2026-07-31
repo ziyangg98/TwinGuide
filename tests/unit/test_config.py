@@ -168,6 +168,11 @@ class CaseConfigTests(unittest.TestCase):
         self.assertEqual(config.windows.operation_bitangent_margin_mm, 3.0)
         self.assertEqual(config.windows.operation_axial_margin_mm, 5.0)
         self.assertEqual(config.windows.operation_corner_radius_mm, 1.0)
+        self.assertEqual(config.windows.operation_front_axial_margin_mm, 5.0)
+        self.assertEqual(config.windows.operation_rear_axial_margin_mm, 5.0)
+        self.assertEqual(config.geometry.sleeve_stop_clearance_mm, 2.0)
+        self.assertEqual(config.geometry.sleeve_stop_front_avoidance_mm, 0.0)
+        self.assertTrue(config.geometry.connection_blocks.lower_main)
         self.assertEqual(config.inputs.template, (self.case_directory / "template.stl").resolve())
         self.assertEqual(
             config.inputs.patient_dentition,
@@ -200,6 +205,64 @@ class CaseConfigTests(unittest.TestCase):
             config.windows.observation_local_failure_drop_targets_mm,
             (0.5, 1.0, 2.0),
         )
+
+    def test_loads_meeting_adjustment_interfaces(self):
+        config_data = self._valid_config_data()
+        windows = config_data["windows"]
+        geometry = config_data["geometry"]
+        self.assertIsInstance(windows, dict)
+        self.assertIsInstance(geometry, dict)
+        windows["operation_front_axial_margin_mm"] = 6.25
+        windows["operation_rear_axial_margin_mm"] = 2.75
+        geometry["sleeve_stop_clearance_mm"] = 3.1
+        geometry["sleeve_stop_front_avoidance_mm"] = 2.4
+        geometry["connection_blocks"] = {
+            "lower_main": False,
+            "upper_main": True,
+            "press_beam": False,
+        }
+        (self.case_directory / "implant-coordinates.dat").write_text(
+            "format supplied by clinician",
+            encoding="utf-8",
+        )
+        config_path = self._write_config(config_data)
+        raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        raw["planning"]["clinical_parameters"] = {
+            "implant_coordinates_path": "implant-coordinates.dat",
+            "implant_coordinates_format": "vendor-format-v1",
+            "extension_mm": 1.234,
+            "extension_definition": "clinician-confirmed-axis-extension",
+            "mouth_opening_mm": 36.0,
+            "adapter_length_mm": 12.0,
+            "height_formula_id": "clinician-formula-v1",
+        }
+        config_path.write_text(
+            yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+
+        config = CaseConfig.from_yaml(config_path)
+
+        self.assertEqual(config.windows.operation_front_axial_margin_mm, 6.25)
+        self.assertEqual(config.windows.operation_rear_axial_margin_mm, 2.75)
+        self.assertEqual(config.geometry.sleeve_stop_clearance_mm, 3.1)
+        self.assertEqual(config.geometry.sleeve_stop_front_avoidance_mm, 2.4)
+        self.assertFalse(config.geometry.connection_blocks.lower_main)
+        self.assertFalse(config.geometry.connection_blocks.press_beam)
+        self.assertEqual(config.clinical_planning.extension_mm, 1.234)
+        self.assertEqual(config.clinical_planning.height_formula_id, "clinician-formula-v1")
+
+    def test_rejects_partial_clinical_parameter_pairs(self):
+        config_path = self._write_config(self._valid_config_data())
+        raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        raw["planning"]["clinical_parameters"] = {"extension_mm": 1.0}
+        config_path.write_text(
+            yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(ConfigurationError, "延长量数值和定义"):
+            CaseConfig.from_yaml(config_path)
 
     def test_rejects_input_path_outside_case_directory(self):
         """病例输入不得通过上级目录跳出病例边界。"""

@@ -68,7 +68,10 @@ def select_template_link_points(
     sleeve_anchors = select_sleeve_anchors(
         context.case,
         context.sleeves,
-        SleeveAnchorSelectionConfig(connector_radius_mm=config.connector_radius_mm),
+        SleeveAnchorSelectionConfig(
+            connector_radius_mm=config.connector_radius_mm,
+            upper_edge_clearance_mm=context.case.config.geometry.sleeve_stop_clearance_mm,
+        ),
     )
     template_points = select_template_points(
         context.case,
