@@ -966,20 +966,22 @@ def _run_with_local_failure_target_sequence(
     exhausted = True
     for attempt_index, target_mm in enumerate(targets, 1):
         adaptations: dict[str, object] = {}
+        has_local_failures = False
         for window_report in current_report["windows"]:
             if window_report["opening_geometry"] != "axis_sweep":
                 continue
             failed_rows, reasons = _local_axis_failure_rows(window_report, args)
             if not failed_rows:
                 continue
+            has_local_failures = True
             window_id = str(window_report["id"])
             definition = mapping_windows[window_id]["axis_sweep"]
             baseline_drop_mm = float(definition["axis_drop_mm"])
             if target_mm <= baseline_drop_mm:
-                raise RuntimeError(
-                    f"local failure target {target_mm} mm must exceed window "
-                    f"{window_id!r} global axis drop {baseline_drop_mm} mm"
-                )
+                # 编辑器允许每个观察窗拥有独立的全局下沉量。某个重试档位
+                # 低于当前窗的基线时，它对该窗没有修正意义；继续寻找下一
+                # 个更深档位，同时仍允许同一档位修正其他较浅的观察窗。
+                continue
             row_count = int(definition["axis_section_count"])
             target_addition_mm = target_mm - baseline_drop_mm
             proposed = _smoothed_local_drop_additions(
@@ -1012,6 +1014,8 @@ def _run_with_local_failure_target_sequence(
             definition["local_failure_adaptation"] = adaptation
             adaptations[window_id] = adaptation
 
+        if not adaptations and has_local_failures:
+            continue
         if not adaptations:
             exhausted = False
             break

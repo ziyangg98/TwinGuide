@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import itertools
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 
 from twin_guide.config import (
@@ -574,7 +574,7 @@ def _select_terminal_u_extension_anchor_points(
     )
 
 
-def select_press_beam_points(context: GenerationContext) -> PressBeamPointPlan:
+def _select_press_beam_points_base(context: GenerationContext) -> PressBeamPointPlan:
     """选择牙弓内侧导管高端 P 和两个牙位导板 A/S 点。
 
     参数:
@@ -771,3 +771,69 @@ def select_press_beam_points(context: GenerationContext) -> PressBeamPointPlan:
         ),
         anchor_center_to_sleeve_axial_mm=center_above_sleeve_mm,
     )
+
+
+def _apply_editor_overrides(
+    context: GenerationContext,
+    plan: PressBeamPointPlan,
+) -> PressBeamPointPlan:
+    """把显式表面锚点和工作平面汇合点交给原有梁生成流程。"""
+
+    overrides = getattr(context.config, "editor_overrides", None)
+    if overrides is None:
+        return plan
+    anchors = []
+    for index, anchor in enumerate(plan.guide_anchors, start=1):
+        override = overrides.surface_anchor_for(f"press_anchor_{index}")
+        if override is None:
+            anchors.append(anchor)
+            continue
+        position = Vec3(*override.position_mm)
+        normal = Vec3(*override.normal).normalized()
+        anchors.append(
+            replace(
+                anchor,
+                surface_anchor=position,
+                surface_normal=normal,
+                centerline_anchor=(
+                    position
+                    + normal * (plan.radius_mm - plan.guide_overlap_mm)
+                ),
+            )
+        )
+    junction = (
+        plan.junction
+        if overrides.press_junction_mm is None
+        else Vec3(*overrides.press_junction_mm)
+    )
+    centerline_anchors = tuple(anchor.centerline_anchor for anchor in anchors)
+    if plan.sleeve_anchor is not None:
+        angle_anchors = (plan.sleeve_anchor.centerline_anchor, *centerline_anchors)
+    elif plan.extension_anchor is not None:
+        angle_anchors = (plan.extension_anchor.centerline_anchor, *centerline_anchors)
+    else:
+        angle_anchors = centerline_anchors
+    minimum_angle = (
+        _minimum_junction_angle_degrees(junction, angle_anchors)
+        if len(angle_anchors) == 3
+        else plan.junction_minimum_angle_degrees
+    )
+    return replace(
+        plan,
+        guide_anchors=tuple(anchors),
+        junction=junction,
+        junction_minimum_angle_degrees=minimum_angle,
+    )
+
+
+def select_press_beam_points(context: GenerationContext) -> PressBeamPointPlan:
+    """选择按压梁点，并应用图形编辑器的显式覆盖值。
+
+    参数:
+        context: 已完成上游阶段的生成上下文。
+
+    返回:
+        继续交给现有梁生成逻辑的按压点计划。
+    """
+
+    return _apply_editor_overrides(context, _select_press_beam_points_base(context))

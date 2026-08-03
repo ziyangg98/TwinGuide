@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from twin_guide.config.loading import load_case_yaml
@@ -15,6 +16,18 @@ from twin_guide.errors import ConfigurationError
 
 if TYPE_CHECKING:
     from twin_guide.config._core import CaseConfig
+
+
+@dataclass(frozen=True, slots=True)
+class ProductionReviewStatus:
+    """与几何检验相互独立的病例人工审核状态。"""
+
+    pending_fields: tuple[str, ...] = ()
+
+    @property
+    def confirmed(self) -> bool:
+        """返回病例是否没有待人工确认字段。"""
+        return not self.pending_fields
 
 def _load_case_yaml_anatomy(inputs: ToothIdentificationInputs) -> dict[str, object]:
     """读取特殊拓扑配置所需的病例牙位语义。"""
@@ -77,12 +90,11 @@ def case_occlusal_axis(config: CaseConfig) -> tuple[float, float, float] | None:
     return tuple(value / length for value in values)
 
 
-def require_production_review(config: CaseConfig) -> None:
-    """拒绝使用明确标记为待人工审核的病例执行生产生成。"""
-
+def production_review_status(config: CaseConfig) -> ProductionReviewStatus:
+    """读取病例审核状态，但不阻止预览或几何检验。"""
     inputs = config.tooth_identification
     if inputs is None:
-        return
+        return ProductionReviewStatus()
     raw_value = load_case_yaml(inputs.case_yaml)
     root = _mapping(raw_value, "case.yaml")
     pending_values = {"pending", "pending_user_input", "unreviewed"}
@@ -101,10 +113,17 @@ def require_production_review(config: CaseConfig) -> None:
             and isinstance(value, str)
             and value.strip().lower() in pending_values
         )
-    if pending_fields:
+    return ProductionReviewStatus(tuple(pending_fields))
+
+
+def require_production_review(config: CaseConfig) -> None:
+    """拒绝使用明确标记为待人工审核的病例执行生产生成。"""
+
+    status = production_review_status(config)
+    if not status.confirmed:
         raise ConfigurationError(
             "生产生成被 case.yaml 待审核状态阻止："
-            + ", ".join(pending_fields)
+            + ", ".join(status.pending_fields)
             + "；请完成人工确认，或在明确承担风险时使用 "
             "--allow-unreviewed"
         )
@@ -246,4 +265,3 @@ __all__ = [
     "require_production_review",
     "validate_special_case_anatomy",
 ]
-

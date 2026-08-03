@@ -6,7 +6,7 @@ import itertools
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from twin_guide.config import PressBeamGuideEndpointParameters
+from twin_guide.config import ConnectorAvoidanceOverride, PressBeamGuideEndpointParameters
 from twin_guide.geometry import Vec3
 from twin_guide.template_link_points import TemplateLinkPointPlan
 from twin_guide.types import ConnectorEndpointSource
@@ -34,6 +34,7 @@ class PointLinkingConfig:
     include_upper_main: bool = True
     include_press_beam: bool = True
     stop_platform_front_avoidance_mm: float = 0.0
+    stop_platform_overrides: tuple[ConnectorAvoidanceOverride, ...] = ()
     connector_guide_endpoint: PressBeamGuideEndpointParameters = field(
         default_factory=PressBeamGuideEndpointParameters
     )
@@ -78,6 +79,10 @@ class PointLink:
     tube_contacts: tuple[Vec3, ...] = ()
     contact_indices: tuple[int, ...] = ()
     link_label: str = ""
+    avoidance_route_side: str | None = None
+    avoidance_route_endpoint: Vec3 | None = None
+    avoidance_routing_point: Vec3 | None = None
+    avoidance_direction: Vec3 | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -267,21 +272,24 @@ def _upper_curve_with_stop_platform_avoidance(
     right_normal: Vec3,
     sleeve_axis: Vec3,
     avoidance_direction: Vec3 | None,
+    override: ConnectorAvoidanceOverride | None,
     config: PointLinkingConfig,
-) -> tuple[tuple[Vec3, ...], int]:
+) -> tuple[
+    tuple[Vec3, ...],
+    int,
+    str | None,
+    Vec3 | None,
+    Vec3 | None,
+    Vec3 | None,
+]:
     """在正视平面下拉连接线，使其避开止停台的完整正面投影。"""
 
-    offset = config.stop_platform_front_avoidance_mm
-    if offset <= 0.0:
-        return _curve_through_contact(
-            left,
-            contact,
-            right,
-            left_normal,
-            contact_normal,
-            right_normal,
-            config,
-        )
+    offset = (
+        config.stop_platform_front_avoidance_mm
+        if override is None
+        else override.downward_offset_mm
+    )
+    path_fraction = 0.35 if override is None else override.path_fraction
     outward = contact_normal.normalized()
     opening = outward * -1.0
     downward = (
@@ -291,12 +299,32 @@ def _upper_curve_with_stop_platform_avoidance(
     )
     left_score = (left - contact).normalized().dot(opening)
     right_score = (right - contact).normalized().dot(opening)
-    if left_score >= right_score:
-        routing_point = (
-            contact
-            + (left - contact) * 0.35
-            + downward * offset
+    route_side = "left" if left_score >= right_score else "right"
+    route_endpoint = left if route_side == "left" else right
+    routing_point = (
+        contact
+        + (route_endpoint - contact) * path_fraction
+        + downward * offset
+    )
+    if offset <= 0.0:
+        centerline, contact_index = _curve_through_contact(
+            left,
+            contact,
+            right,
+            left_normal,
+            contact_normal,
+            right_normal,
+            config,
         )
+        return (
+            centerline,
+            contact_index,
+            route_side,
+            route_endpoint,
+            routing_point,
+            downward,
+        )
+    if left_score >= right_score:
         centerline, indices = _curve_through_multiple_contacts(
             left,
             (routing_point, contact),
@@ -306,12 +334,14 @@ def _upper_curve_with_stop_platform_avoidance(
             right_normal,
             config,
         )
-        return centerline, indices[1]
-    routing_point = (
-        contact
-        + (right - contact) * 0.35
-        + downward * offset
-    )
+        return (
+            centerline,
+            indices[1],
+            "left",
+            left,
+            routing_point,
+            downward,
+        )
     centerline, indices = _curve_through_multiple_contacts(
         left,
         (contact, routing_point),
@@ -321,7 +351,14 @@ def _upper_curve_with_stop_platform_avoidance(
         right_normal,
         config,
     )
-    return centerline, indices[0]
+    return (
+        centerline,
+        indices[0],
+        "right",
+        right,
+        routing_point,
+        downward,
+    )
 
 
 def _cumulative_lengths(points: tuple[Vec3, ...]) -> tuple[float, ...]:
@@ -526,7 +563,22 @@ def link_selected_points(
                     config,
                 )
             else:
-                centerline, contact_index = _upper_curve_with_stop_platform_avoidance(
+                avoidance_override = next(
+                    (
+                        item
+                        for item in config.stop_platform_overrides
+                        if item.guide_index == sleeve.guide_index
+                    ),
+                    None,
+                )
+                (
+                    centerline,
+                    contact_index,
+                    avoidance_route_side,
+                    avoidance_route_endpoint,
+                    avoidance_routing_point,
+                    avoidance_direction,
+                ) = _upper_curve_with_stop_platform_avoidance(
                     left_start,
                     sleeve_point.position,
                     right_end,
@@ -535,8 +587,14 @@ def link_selected_points(
                     template.right.normal,
                     (sleeve.upper.position - sleeve.lower.position).normalized(),
                     stop_platform_avoidance_direction,
+                    avoidance_override,
                     config,
                 )
+            if sleeve_label == "lower":
+                avoidance_route_side = None
+                avoidance_route_endpoint = None
+                avoidance_routing_point = None
+                avoidance_direction = None
             links.append(
                 PointLink(
                     sleeve.guide_index,
@@ -552,6 +610,10 @@ def link_selected_points(
                     contact_index,
                     template.left_source,
                     template.right_source,
+                    avoidance_route_side=avoidance_route_side,
+                    avoidance_route_endpoint=avoidance_route_endpoint,
+                    avoidance_routing_point=avoidance_routing_point,
+                    avoidance_direction=avoidance_direction,
                 )
             )
     press_links: tuple[PressBeamLink, ...] = ()

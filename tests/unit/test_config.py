@@ -1185,6 +1185,42 @@ design:
         with self.assertRaisesRegex(ConfigurationError, "缺少必填字段：height_mm"):
             CaseConfig.from_yaml(self._write_config(config_data))
 
+    def test_loads_independent_editor_overrides(self):
+        path = self._write_config(self._valid_config_data())
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        raw["editor_overrides"] = {
+            "sleeve_guides": [
+                {
+                    "guide_index": 1,
+                    "height_mm": 16.0,
+                    "platform_height_mm": 9.0,
+                    "closed_bore_height_mm": 4.0,
+                },
+                {
+                    "guide_index": 2,
+                    "height_mm": 17.0,
+                    "platform_height_mm": 10.0,
+                    "closed_bore_height_mm": 5.0,
+                },
+            ],
+            "connector_avoidance": [
+                {"guide_index": 1, "path_fraction": 0.35, "downward_offset_mm": 2.0},
+                {"guide_index": 2, "path_fraction": 0.60, "downward_offset_mm": 3.0},
+            ],
+        }
+        path.write_text(
+            yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+
+        config = CaseConfig.from_yaml(path)
+
+        self.assertEqual(config.editor_overrides.sleeve_for(2).height_mm, 17.0)
+        self.assertEqual(
+            config.editor_overrides.connector_for(1).downward_offset_mm,
+            2.0,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

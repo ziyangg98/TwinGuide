@@ -116,11 +116,14 @@ brew install --cask blender
   --model output/tooth_11/twin_guide.stl
 ```
 
-在 Blender 中微调窗口、连接、按压点牙位和高度后重新生成：
+在 Blender 的 TwinGuide 专用工作区中，通过结构列表、三维轮廓和受约束 Gizmo
+微调窗口、连接、按压／支撑点和独立高度：
 
 ```bash
 ./twinguide ui --config ../data/cases/single/tooth-11/case.yaml
 ```
+
+界面提供保存调整、更新预览和导出检验三个操作。
 
 生成命令默认拒绝标记为 `pending`、`pending_user_input` 或 `unreviewed` 的病例。
 `--allow-unreviewed` 可在诊断运行中跳过本次审核检查。

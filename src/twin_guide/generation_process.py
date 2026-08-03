@@ -110,11 +110,22 @@ def _skipped(definition: StageDefinition, reason: str | None = None) -> StageRes
     )
 
 
-def run_generation_process(config: CaseConfig) -> GenerationProcessResult:
+def run_generation_process(
+    config: CaseConfig,
+    *,
+    require_observation_qa: bool = True,
+    write_stage_documents: bool = True,
+    include_clearance_adjustment: bool = True,
+    include_observation_window_geometry: bool = True,
+) -> GenerationProcessResult:
     """按顺序执行稳定和实验阶段。
 
     参数:
         config: 生成过程共享的病例配置。
+        require_observation_qa: 是否要求观察窗规划通过轴向余隙 QA。
+        write_stage_documents: 是否写出阶段 JSON/文档，供报告和 UI 复用。
+        include_clearance_adjustment: 是否执行第 7 阶段牙科手机余隙调整。
+        include_observation_window_geometry: 是否生成观察窗实体切割网格。
 
     返回:
         包含七个阶段状态和已完成输出的 ``GenerationProcessResult``。
@@ -152,6 +163,8 @@ def run_generation_process(config: CaseConfig) -> GenerationProcessResult:
         case,
         context.sleeve_generation,
         context.tooth_identification,
+        require_observation_qa=require_observation_qa,
+        include_observation_window_geometry=include_observation_window_geometry,
     )
     results.append(StageResult(STAGES[2], StageRunStatus.COMPLETED, context.window_cutouts))
 
@@ -198,6 +211,7 @@ def run_generation_process(config: CaseConfig) -> GenerationProcessResult:
             stop_platform_front_avoidance_mm=(
                 config.geometry.sleeve_stop_front_avoidance_mm
             ),
+            stop_platform_overrides=config.editor_overrides.connector_avoidance,
             connector_guide_endpoint=config.geometry.connector_guide_endpoint,
         ),
         context.press_beam_points,
@@ -206,7 +220,9 @@ def run_generation_process(config: CaseConfig) -> GenerationProcessResult:
         context.sleeve_generation.template_frame.normal * -1.0,
     )
     results.append(StageResult(STAGES[5], StageRunStatus.COMPLETED, context.point_linking))
-    if not config.handpiece_avoidance:
+    if not include_clearance_adjustment:
+        results.append(_skipped(STAGES[6], "当前任务不需要牙科手机避障"))
+    elif not config.handpiece_avoidance:
         results.append(_skipped(STAGES[6], "病例未配置牙科手机避障"))
     else:
         context.clearance_adjustment = adjust_clearance(context)
@@ -214,7 +230,8 @@ def run_generation_process(config: CaseConfig) -> GenerationProcessResult:
             StageResult(STAGES[6], StageRunStatus.COMPLETED, context.clearance_adjustment)
         )
     process = GenerationProcessResult(context, tuple(results))
-    from twin_guide.stage_artifacts import write_stage_result_documents
+    if write_stage_documents:
+        from twin_guide.stage_artifacts import write_stage_result_documents
 
-    write_stage_result_documents(process)
+        write_stage_result_documents(process)
     return process

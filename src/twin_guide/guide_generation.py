@@ -7,9 +7,38 @@ from twin_guide.config import CaseConfig
 from twin_guide.generation_process import run_generation_process
 from twin_guide.models import BuildArtifacts
 from twin_guide.stage_artifacts import compose_stage_overviews
+from twin_guide.types import GenerationProcessResult
 
 
-def generate_guide(config: CaseConfig) -> BuildArtifacts:
+def _generate_guide_with_process(
+    config: CaseConfig,
+    *,
+    preview: bool = False,
+) -> tuple[BuildArtifacts, GenerationProcessResult]:
+    """运行一次规划与实体化，并把同一次规划上下文交给 UI 快照。"""
+
+    process = run_generation_process(
+        config,
+        require_observation_qa=not preview,
+        write_stage_documents=not preview,
+        include_clearance_adjustment=not preview,
+    )
+    context = process.context
+    if context.case is None or context.window_cutouts is None or context.point_linking is None:
+        raise RuntimeError("生成阶段未产生完整建模上下文")
+    artifacts = build_guide_from_links(
+        context.case,
+        context.window_cutouts,
+        context.point_linking,
+        context.clearance_adjustment,
+        preview=preview,
+    )
+    if not preview:
+        compose_stage_overviews(process)
+    return artifacts, process
+
+
+def generate_guide(config: CaseConfig, *, preview: bool = False) -> BuildArtifacts:
     """生成包含双导管、窗口和连续曲线梁架的牙科导板。
 
     参数:
@@ -24,15 +53,8 @@ def generate_guide(config: CaseConfig) -> BuildArtifacts:
         几何生成必须在 Blender 提供的 Python 环境中运行。
     """
 
-    process = run_generation_process(config)
-    context = process.context
-    if context.case is None or context.window_cutouts is None or context.point_linking is None:
-        raise RuntimeError("生成阶段未产生完整建模上下文")
-    artifacts = build_guide_from_links(
-        context.case,
-        context.window_cutouts,
-        context.point_linking,
-        context.clearance_adjustment,
-    )
-    compose_stage_overviews(process)
+    artifacts, _process = _generate_guide_with_process(config, preview=preview)
     return artifacts
+
+
+__all__ = ["generate_guide"]

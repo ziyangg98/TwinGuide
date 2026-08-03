@@ -147,6 +147,162 @@ class ClinicalPlanningParameters:
     adapter_length_mm: float | None = None
     height_formula_id: str | None = None
 
+    @property
+    def effective_extension_mm(self) -> float:
+        """返回中性延长量；未定义时不改变现有几何。"""
+
+        return 0.0 if self.extension_mm is None else self.extension_mm
+
+
+@dataclass(frozen=True, slots=True)
+class SleeveGuideOverride:
+    """一根导柱独立的三项轴向高度。"""
+
+    guide_index: int
+    height_mm: float
+    platform_height_mm: float
+    closed_bore_height_mm: float
+
+    def __post_init__(self) -> None:
+        """校验导柱编号及三项严格高度关系。"""
+        if self.guide_index <= 0:
+            raise ValueError("导柱编号必须为正")
+        if not 0.0 < self.closed_bore_height_mm < self.platform_height_mm < self.height_mm:
+            raise ValueError("导柱高度必须满足：底部高度 < 平台高度 < 总高度")
+
+
+@dataclass(frozen=True, slots=True)
+class OperationWindowOverride:
+    """一个种植位操作窗口的局部几何覆盖值。"""
+
+    site_index: int
+    tangent_margin_mm: float
+    bitangent_margin_mm: float
+    front_axial_margin_mm: float
+    rear_axial_margin_mm: float
+    center_offset_mm: tuple[float, float, float] = (0.0, 0.0, 0.0)
+
+    def __post_init__(self) -> None:
+        """校验种植位编号和非负窗口边距。"""
+        if self.site_index <= 0:
+            raise ValueError("操作窗口种植位编号必须为正")
+        if min(
+            self.tangent_margin_mm,
+            self.bitangent_margin_mm,
+            self.front_axial_margin_mm,
+            self.rear_axial_margin_mm,
+        ) < 0.0:
+            raise ValueError("操作窗口边距不得为负")
+
+
+@dataclass(frozen=True, slots=True)
+class ObservationWindowOverride:
+    """一个 FDI 观察窗口的图形化覆盖值。"""
+
+    window_id: str
+    start_fdi: int
+    end_fdi: int
+    axis_drop_mm: float
+    height_mm: float
+    sweep_angle_degrees: float
+
+    def __post_init__(self) -> None:
+        """校验 FDI、下沉量、高度和扫掠角。"""
+        if not self.window_id:
+            raise ValueError("观察窗口编号不得为空")
+        if min(self.start_fdi, self.end_fdi) <= 0:
+            raise ValueError("观察窗口 FDI 编号必须为正")
+        if self.axis_drop_mm < 0.0 or self.height_mm <= 0.0:
+            raise ValueError("观察窗口下沉量不得为负且高度必须为正")
+        if not 0.0 < self.sweep_angle_degrees <= 180.0:
+            raise ValueError("观察窗口扫掠角必须位于 (0, 180]")
+
+
+@dataclass(frozen=True, slots=True)
+class ConnectorAvoidanceOverride:
+    """一根导柱高位连接线的独立止停台避让节点。"""
+
+    guide_index: int
+    path_fraction: float
+    downward_offset_mm: float
+
+    def __post_init__(self) -> None:
+        """校验导柱编号、沿线比例和下移量。"""
+        if self.guide_index <= 0:
+            raise ValueError("导柱编号必须为正")
+        if not 0.0 <= self.path_fraction <= 1.0:
+            raise ValueError("连接节点沿线比例必须位于 [0, 1]")
+        if self.downward_offset_mm < 0.0:
+            raise ValueError("连接节点下移量不得为负")
+
+
+@dataclass(frozen=True, slots=True)
+class SurfaceAnchorOverride:
+    """导板或牙面上的显式按压/支撑锚点。"""
+
+    anchor_id: str
+    surface_role: str
+    position_mm: tuple[float, float, float]
+    normal: tuple[float, float, float]
+
+    def __post_init__(self) -> None:
+        """校验表面类型及保存法向。"""
+        if not self.anchor_id:
+            raise ValueError("表面锚点编号不得为空")
+        if self.surface_role not in {"template", "dentition"}:
+            raise ValueError("表面锚点类型必须为 template 或 dentition")
+        if sum(value * value for value in self.normal) <= 1e-12:
+            raise ValueError("表面锚点法向不得为零向量")
+
+
+@dataclass(frozen=True, slots=True)
+class EditorOverrides:
+    """Blender 图形化编辑器写回病例的显式几何覆盖值。"""
+
+    sleeve_guides: tuple[SleeveGuideOverride, ...] = ()
+    operation_windows: tuple[OperationWindowOverride, ...] = ()
+    observation_windows: tuple[ObservationWindowOverride, ...] = ()
+    connector_avoidance: tuple[ConnectorAvoidanceOverride, ...] = ()
+    surface_anchors: tuple[SurfaceAnchorOverride, ...] = ()
+    press_junction_mm: tuple[float, float, float] | None = None
+
+    def sleeve_for(self, guide_index: int) -> SleeveGuideOverride | None:
+        """按导柱编号查找高度覆盖值。"""
+        return next(
+            (item for item in self.sleeve_guides if item.guide_index == guide_index),
+            None,
+        )
+
+    def operation_window_for(self, site_index: int) -> OperationWindowOverride | None:
+        """按种植位查找操作窗覆盖值。"""
+        return next(
+            (item for item in self.operation_windows if item.site_index == site_index),
+            None,
+        )
+
+    def connector_for(self, guide_index: int) -> ConnectorAvoidanceOverride | None:
+        """按导柱编号查找避让节点。"""
+        return next(
+            (item for item in self.connector_avoidance if item.guide_index == guide_index),
+            None,
+        )
+
+    def observation_window_for(
+        self, window_id: str
+    ) -> ObservationWindowOverride | None:
+        """按观察窗编号查找拖动覆盖值。"""
+        return next(
+            (item for item in self.observation_windows if item.window_id == window_id),
+            None,
+        )
+
+    def surface_anchor_for(self, anchor_id: str) -> SurfaceAnchorOverride | None:
+        """按锚点编号查找表面坐标覆盖值。"""
+        return next(
+            (item for item in self.surface_anchors if item.anchor_id == anchor_id),
+            None,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class ToothIdentificationInputs:
@@ -389,6 +545,8 @@ __all__ = [
     "DEFAULT_PRESS_BEAM_DIAMETER_MM",
     "ClinicalPlanningParameters",
     "ConnectionBlockParameters",
+    "ConnectorAvoidanceOverride",
+    "EditorOverrides",
     "GeometryParameters",
     "GuideAnchorLocation",
     "GuideAnchorMode",
@@ -402,13 +560,17 @@ __all__ = [
     "HandpieceAvoidanceParameters",
     "InputMeshPaths",
     "Jaw",
+    "ObservationWindowOverride",
+    "OperationWindowOverride",
     "PressBeamExtensionAnchorParameters",
     "PressBeamGuideEndpointParameters",
     "PressBeamMode",
     "PressBeamParameters",
     "PressBeamSleeveAnchorSelectionParameters",
     "RenderParameters",
+    "SleeveGuideOverride",
     "SleeveParameters",
+    "SurfaceAnchorOverride",
     "TerminalDistalCommonNodeParameters",
     "ToothAnchorStation",
     "ToothIdentificationInputs",

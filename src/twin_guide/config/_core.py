@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import itertools
+import math
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from pathlib import Path
 
 from twin_guide.config.loading import load_case_yaml
@@ -30,6 +32,8 @@ from twin_guide.config.types import (
     DEFAULT_PRESS_BEAM_DIAMETER_MM,
     ClinicalPlanningParameters,
     ConnectionBlockParameters,
+    ConnectorAvoidanceOverride,
+    EditorOverrides,
     GeometryParameters,
     GuideAnchorLocation,
     GuideAnchorMode,
@@ -43,13 +47,17 @@ from twin_guide.config.types import (
     HandpieceAvoidanceParameters,
     InputMeshPaths,
     Jaw,
+    ObservationWindowOverride,
+    OperationWindowOverride,
     PressBeamExtensionAnchorParameters,
     PressBeamGuideEndpointParameters,
     PressBeamMode,
     PressBeamParameters,
     PressBeamSleeveAnchorSelectionParameters,
     RenderParameters,
+    SleeveGuideOverride,
     SleeveParameters,
+    SurfaceAnchorOverride,
     TerminalDistalCommonNodeParameters,
     ToothAnchorStation,
     ToothIdentificationInputs,
@@ -78,6 +86,7 @@ class CaseConfig:
     clinical_planning: ClinicalPlanningParameters
     render: RenderParameters
     output_directory: Path
+    editor_overrides: EditorOverrides = dataclass_field(default_factory=EditorOverrides)
 
     @classmethod
     def from_yaml(cls, config_file: str | Path) -> CaseConfig:
@@ -101,6 +110,7 @@ class CaseConfig:
                 "review",
                 "tooth_recognition",
                 "qa",
+                "editor_overrides",
             },
             "configuration",
         )
@@ -187,6 +197,7 @@ class CaseConfig:
                 yaml_planning.get("clinical_parameters"),
                 base_directory,
             ),
+            editor_overrides=_parse_editor_overrides(root.get("editor_overrides")),
             render=_parse_render(_section(runtime, "render")),
             output_directory=Path(__file__).resolve().parents[3] / "output" / case_id,
         )
@@ -765,6 +776,246 @@ def _optional_text(value: object, name: str) -> str | None:
     if not isinstance(value, str) or not value.strip():
         raise ConfigurationError(f"{name} 必须为非空字符串")
     return value.strip()
+
+
+def _vector3(value: object, name: str) -> tuple[float, float, float]:
+    """解析允许正负值的有限三维向量。"""
+
+    if (
+        not isinstance(value, list | tuple)
+        or len(value) != 3
+        or any(isinstance(item, bool) or not isinstance(item, int | float) for item in value)
+    ):
+        raise ConfigurationError(f"{name} 必须为三元素数值数组")
+    result = tuple(float(item) for item in value)
+    if not all(math.isfinite(item) for item in result):
+        raise ConfigurationError(f"{name} 必须为有限三维向量")
+    return result
+
+
+def _editor_items(raw: dict[str, object], key: str) -> list[object]:
+    """返回编辑器覆盖分组中的数组。"""
+
+    value = raw.get(key, [])
+    if not isinstance(value, list):
+        raise ConfigurationError(f"editor_overrides.{key} 必须为数组")
+    return value
+
+
+def _parse_editor_overrides(raw_value: object) -> EditorOverrides:
+    """解析 Blender 图形化编辑器写回的显式几何覆盖值。"""
+
+    if raw_value is None:
+        return EditorOverrides()
+    raw = _mapping(raw_value, "editor_overrides")
+    _reject_unknown(
+        raw,
+        {
+            "sleeve_guides",
+            "operation_windows",
+            "observation_windows",
+            "connector_avoidance",
+            "surface_anchors",
+            "press_junction_mm",
+        },
+        "editor_overrides",
+    )
+    sleeves = []
+    for index, value in enumerate(_editor_items(raw, "sleeve_guides")):
+        item = _mapping(value, f"editor_overrides.sleeve_guides[{index}]")
+        _reject_unknown(
+            item,
+            {"guide_index", "height_mm", "platform_height_mm", "closed_bore_height_mm"},
+            f"editor_overrides.sleeve_guides[{index}]",
+        )
+        sleeves.append(
+            SleeveGuideOverride(
+                guide_index=_positive_integer(
+                    _required(item, "guide_index"),
+                    f"editor_overrides.sleeve_guides[{index}].guide_index",
+                ),
+                height_mm=_number(
+                    _required(item, "height_mm"),
+                    f"editor_overrides.sleeve_guides[{index}].height_mm",
+                    positive=True,
+                ),
+                platform_height_mm=_number(
+                    _required(item, "platform_height_mm"),
+                    f"editor_overrides.sleeve_guides[{index}].platform_height_mm",
+                    positive=True,
+                ),
+                closed_bore_height_mm=_number(
+                    _required(item, "closed_bore_height_mm"),
+                    f"editor_overrides.sleeve_guides[{index}].closed_bore_height_mm",
+                    positive=True,
+                ),
+            )
+        )
+    operation_windows = []
+    for index, value in enumerate(_editor_items(raw, "operation_windows")):
+        item = _mapping(value, f"editor_overrides.operation_windows[{index}]")
+        _reject_unknown(
+            item,
+            {
+                "site_index",
+                "tangent_margin_mm",
+                "bitangent_margin_mm",
+                "front_axial_margin_mm",
+                "rear_axial_margin_mm",
+                "center_offset_mm",
+            },
+            f"editor_overrides.operation_windows[{index}]",
+        )
+        operation_windows.append(
+            OperationWindowOverride(
+                site_index=_positive_integer(
+                    _required(item, "site_index"),
+                    f"editor_overrides.operation_windows[{index}].site_index",
+                ),
+                tangent_margin_mm=_number(
+                    _required(item, "tangent_margin_mm"),
+                    f"editor_overrides.operation_windows[{index}].tangent_margin_mm",
+                ),
+                bitangent_margin_mm=_number(
+                    _required(item, "bitangent_margin_mm"),
+                    f"editor_overrides.operation_windows[{index}].bitangent_margin_mm",
+                ),
+                front_axial_margin_mm=_number(
+                    _required(item, "front_axial_margin_mm"),
+                    f"editor_overrides.operation_windows[{index}].front_axial_margin_mm",
+                ),
+                rear_axial_margin_mm=_number(
+                    _required(item, "rear_axial_margin_mm"),
+                    f"editor_overrides.operation_windows[{index}].rear_axial_margin_mm",
+                ),
+                center_offset_mm=_vector3(
+                    item.get("center_offset_mm", (0.0, 0.0, 0.0)),
+                    f"editor_overrides.operation_windows[{index}].center_offset_mm",
+                ),
+            )
+        )
+    observation_windows = []
+    for index, value in enumerate(_editor_items(raw, "observation_windows")):
+        item = _mapping(value, f"editor_overrides.observation_windows[{index}]")
+        _reject_unknown(
+            item,
+            {
+                "window_id",
+                "start_fdi",
+                "end_fdi",
+                "axis_drop_mm",
+                "height_mm",
+                "sweep_angle_degrees",
+            },
+            f"editor_overrides.observation_windows[{index}]",
+        )
+        observation_windows.append(
+            ObservationWindowOverride(
+                window_id=_optional_text(
+                    _required(item, "window_id"),
+                    f"editor_overrides.observation_windows[{index}].window_id",
+                )
+                or "",
+                start_fdi=_positive_integer(
+                    _required(item, "start_fdi"),
+                    f"editor_overrides.observation_windows[{index}].start_fdi",
+                ),
+                end_fdi=_positive_integer(
+                    _required(item, "end_fdi"),
+                    f"editor_overrides.observation_windows[{index}].end_fdi",
+                ),
+                axis_drop_mm=_number(
+                    _required(item, "axis_drop_mm"),
+                    f"editor_overrides.observation_windows[{index}].axis_drop_mm",
+                ),
+                height_mm=_number(
+                    _required(item, "height_mm"),
+                    f"editor_overrides.observation_windows[{index}].height_mm",
+                    positive=True,
+                ),
+                sweep_angle_degrees=_number(
+                    _required(item, "sweep_angle_degrees"),
+                    f"editor_overrides.observation_windows[{index}].sweep_angle_degrees",
+                    positive=True,
+                ),
+            )
+        )
+    connectors = []
+    for index, value in enumerate(_editor_items(raw, "connector_avoidance")):
+        item = _mapping(value, f"editor_overrides.connector_avoidance[{index}]")
+        _reject_unknown(
+            item,
+            {"guide_index", "path_fraction", "downward_offset_mm"},
+            f"editor_overrides.connector_avoidance[{index}]",
+        )
+        connectors.append(
+            ConnectorAvoidanceOverride(
+                guide_index=_positive_integer(
+                    _required(item, "guide_index"),
+                    f"editor_overrides.connector_avoidance[{index}].guide_index",
+                ),
+                path_fraction=_number(
+                    _required(item, "path_fraction"),
+                    f"editor_overrides.connector_avoidance[{index}].path_fraction",
+                ),
+                downward_offset_mm=_number(
+                    _required(item, "downward_offset_mm"),
+                    f"editor_overrides.connector_avoidance[{index}].downward_offset_mm",
+                ),
+            )
+        )
+    anchors = []
+    for index, value in enumerate(_editor_items(raw, "surface_anchors")):
+        item = _mapping(value, f"editor_overrides.surface_anchors[{index}]")
+        _reject_unknown(
+            item,
+            {"anchor_id", "surface_role", "position_mm", "normal"},
+            f"editor_overrides.surface_anchors[{index}]",
+        )
+        anchors.append(
+            SurfaceAnchorOverride(
+                anchor_id=_optional_text(
+                    _required(item, "anchor_id"),
+                    f"editor_overrides.surface_anchors[{index}].anchor_id",
+                )
+                or "",
+                surface_role=_optional_text(
+                    _required(item, "surface_role"),
+                    f"editor_overrides.surface_anchors[{index}].surface_role",
+                )
+                or "",
+                position_mm=_vector3(
+                    _required(item, "position_mm"),
+                    f"editor_overrides.surface_anchors[{index}].position_mm",
+                ),
+                normal=_vector3(
+                    _required(item, "normal"),
+                    f"editor_overrides.surface_anchors[{index}].normal",
+                ),
+            )
+        )
+    for name, values, key in (
+        ("导柱", sleeves, "guide_index"),
+        ("操作窗口", operation_windows, "site_index"),
+        ("观察窗口", observation_windows, "window_id"),
+        ("连接节点", connectors, "guide_index"),
+        ("表面锚点", anchors, "anchor_id"),
+    ):
+        identifiers = [getattr(item, key) for item in values]
+        if len(set(identifiers)) != len(identifiers):
+            raise ConfigurationError(f"editor_overrides.{name} 编号不得重复")
+    return EditorOverrides(
+        sleeve_guides=tuple(sleeves),
+        operation_windows=tuple(operation_windows),
+        observation_windows=tuple(observation_windows),
+        connector_avoidance=tuple(connectors),
+        surface_anchors=tuple(anchors),
+        press_junction_mm=(
+            None
+            if "press_junction_mm" not in raw
+            else _vector3(raw["press_junction_mm"], "editor_overrides.press_junction_mm")
+        ),
+    )
 
 
 def _parse_clinical_planning(

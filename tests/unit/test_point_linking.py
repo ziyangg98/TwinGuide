@@ -1,5 +1,6 @@
 import unittest
 
+from twin_guide.config import ConnectorAvoidanceOverride
 from twin_guide.geometry import Vec3
 from twin_guide.models import GuideSleeve, TemplateFrame
 from twin_guide.point_linking import PointLinkingConfig, link_selected_points
@@ -160,6 +161,47 @@ class PointLinkingTests(unittest.TestCase):
                 upper_link.centerline[upper_link.contact_index],
                 selection.upper.position,
             )
+
+        independent = link_selected_points(
+            points,
+            PointLinkingConfig(
+                radius_mm=1.2,
+                curve_resolution=30,
+                stop_platform_overrides=(
+                    ConnectorAvoidanceOverride(1, 0.6, 3.0),
+                ),
+            ),
+            stop_platform_avoidance_direction=Vec3(0.0, 0.0, -1.0),
+        )
+        first_upper = next(
+            link
+            for link in independent.links
+            if link.guide_index == 1 and link.sleeve_label == "upper"
+        )
+        second_upper = next(
+            link
+            for link in independent.links
+            if link.guide_index == 2 and link.sleeve_label == "upper"
+        )
+        first_selection = sleeve_plan.selections[0]
+        expected_candidates = (
+            first_selection.upper.position
+            + (first_upper.start - first_selection.upper.position) * 0.6
+            + Vec3(0.0, 0.0, -3.0),
+            first_selection.upper.position
+            + (first_upper.end - first_selection.upper.position) * 0.6
+            + Vec3(0.0, 0.0, -3.0),
+        )
+        self.assertTrue(
+            any(point in first_upper.centerline for point in expected_candidates)
+        )
+        self.assertIn(first_upper.avoidance_route_side, {"left", "right"})
+        self.assertIn(first_upper.avoidance_route_endpoint, {first_upper.start, first_upper.end})
+        self.assertIn(first_upper.avoidance_routing_point, expected_candidates)
+        self.assertEqual(first_upper.avoidance_direction, Vec3(0.0, 0.0, -1.0))
+        self.assertFalse(
+            any(point.z < -2.0 for point in second_upper.centerline)
+        )
 
     def test_terminal_missing_tooth_links_share_one_distal_node(self):
         """末端缺牙模式应使两导管的上下四梁共享远中节点。"""

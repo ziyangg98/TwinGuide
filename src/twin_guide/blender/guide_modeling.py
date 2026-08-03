@@ -46,6 +46,7 @@ from twin_guide.point_linking import PointLinkingPlan
 from twin_guide.types import ConnectorEndpointSource
 
 GENERATED_SUFFIXES = {".png", ".stl"}
+PREVIEW_FUSION_VOXEL_SIZE_MM = 0.6
 MAIN_CONNECTOR_PREFIXES = (
     "point_link_",
     "connector_root_bulb_",
@@ -63,6 +64,7 @@ def _clear_generated_artifacts(output_directory: Path) -> None:
             artifact_path.is_file()
             and artifact_path.suffix.lower() in GENERATED_SUFFIXES
             and artifact_path.name != "stage-02-tooth-mapping.png"
+            and artifact_path.name != "ui-task.json"
         ):
             artifact_path.unlink()
 
@@ -815,6 +817,8 @@ def build_guide_from_links(
     cutout_plan: CutoutPlan,
     point_links: PointLinkingPlan,
     handpiece_avoidance: tuple[HandpieceAvoidancePlan, ...] | None = None,
+    *,
+    preview: bool = False,
 ) -> BuildArtifacts:
     """使用第 6 步光滑连接计划构造并导出正式牙科导板。
 
@@ -833,6 +837,11 @@ def build_guide_from_links(
     """
 
     output_directory = case.config.output_directory
+    fusion_voxel_size_mm = (
+        max(PREVIEW_FUSION_VOXEL_SIZE_MM, case.config.geometry.fusion_voxel_size_mm)
+        if preview
+        else case.config.geometry.fusion_voxel_size_mm
+    )
     output_directory.mkdir(parents=True, exist_ok=True)
     _clear_generated_artifacts(output_directory)
     materials = create_materials()
@@ -858,49 +867,52 @@ def build_guide_from_links(
         materials["connector"],
         template_mesh,
     )
-    if point_links.trim_against_dentition:
+    if point_links.trim_against_dentition and not preview:
         link_meshes = _trim_main_connectors_against_dentition(
             link_meshes,
             case.input_meshes.patient_dentition_mesh,
             case.config.geometry.connector_dental_clearance_mm,
-            case.config.geometry.fusion_voxel_size_mm,
+            fusion_voxel_size_mm,
             materials["connector"],
         )
-    sleeve_point_markers, template_point_markers = _create_link_point_markers(
-        point_links, materials
-    )
-    anchor_trajectory_meshes, press_beam_trajectory_meshes = (
-        _create_stage_trajectory_meshes(
-        point_links, materials["template_point"]
+    process_image_paths = ()
+    if not preview:
+        sleeve_point_markers, template_point_markers = _create_link_point_markers(
+            point_links, materials
         )
-    )
+        anchor_trajectory_meshes, press_beam_trajectory_meshes = (
+            _create_stage_trajectory_meshes(
+                point_links, materials["template_point"]
+            )
+        )
     cut_template_mesh = subtract_cutters(
         duplicate_mesh_object(template_mesh, "cut_template_for_build"),
         (*channel_cutters, *window_cutters),
     )
-    process_image_paths = _render_process_images(
-        output_directory,
-        case,
-        cut_template_mesh,
-        sleeve_meshes,
-        link_meshes,
-        sleeve_point_markers,
-        template_point_markers,
-        anchor_trajectory_meshes,
-        press_beam_trajectory_meshes,
-    )
-    handpiece_image = _render_handpiece_avoidance(
-        output_directory,
-        case,
-        (template_mesh, *sleeve_meshes, *link_meshes),
-        handpiece_avoidance or (),
-        materials,
-    )
-    if handpiece_image is not None:
-        process_image_paths = (*process_image_paths, handpiece_image)
-    tooth_mapping_image = output_directory / "stage-02-tooth-mapping.png"
-    if tooth_mapping_image.is_file():
-        process_image_paths = (*process_image_paths, tooth_mapping_image)
+    if not preview:
+        process_image_paths = _render_process_images(
+            output_directory,
+            case,
+            cut_template_mesh,
+            sleeve_meshes,
+            link_meshes,
+            sleeve_point_markers,
+            template_point_markers,
+            anchor_trajectory_meshes,
+            press_beam_trajectory_meshes,
+        )
+        handpiece_image = _render_handpiece_avoidance(
+            output_directory,
+            case,
+            (template_mesh, *sleeve_meshes, *link_meshes),
+            handpiece_avoidance or (),
+            materials,
+        )
+        if handpiece_image is not None:
+            process_image_paths = (*process_image_paths, handpiece_image)
+        tooth_mapping_image = output_directory / "stage-02-tooth-mapping.png"
+        if tooth_mapping_image.is_file():
+            process_image_paths = (*process_image_paths, tooth_mapping_image)
     recut_cutters = (
         (*channel_cutters, *profile_window_cutters)
         if point_links.recut_sleeve_bore
@@ -909,14 +921,14 @@ def build_guide_from_links(
     final_mesh = voxel_union(
         (cut_template_mesh, *sleeve_meshes, *accessory_meshes, *link_meshes),
         "twin_guide_mesh",
-        case.config.geometry.fusion_voxel_size_mm,
+        fusion_voxel_size_mm,
         materials["final"],
     )
-    if recut_cutters:
+    if recut_cutters and not preview:
         final_mesh = voxel_union(
             (final_mesh,),
             "twin_guide_pre_recut_mesh",
-            case.config.geometry.fusion_voxel_size_mm,
+            fusion_voxel_size_mm,
             materials["final"],
         )
         final_mesh = apply_manifold3d_differences(
@@ -925,8 +937,10 @@ def build_guide_from_links(
         )
         remove_excess_components(final_mesh, 1)
     else:
+        if preview:
+            remove_excess_components(final_mesh, 1)
         clean_mesh(final_mesh)
-    for avoidance in handpiece_avoidance or ():
+    for avoidance in () if preview else handpiece_avoidance or ():
         handpiece_cutter = import_polygon_mesh(
             avoidance.envelope_mesh_path,
             f"handpiece_{avoidance.avoidance_id}_current_depth_lr_sweep_cutter",
@@ -943,19 +957,20 @@ def build_guide_from_links(
     assign_material(final_mesh, materials["final"])
     model_path = output_directory / "twin_guide.stl"
     export_stl_mesh(model_path, final_mesh)
-    if requires_serialized_repair:
+    if requires_serialized_repair and not preview:
         # 最终网格来自体素尺寸控制的规则化；STL 序列化偶发坏边只允许
         # 在一个体素以内局部折叠，修复尺度不超过上游离散精度。
         repair_manifold3d_stl(
             model_path,
-            case.config.geometry.fusion_voxel_size_mm,
+            fusion_voxel_size_mm,
         )
         remove_object(final_mesh)
         final_mesh = import_stl_mesh(model_path, "twin_guide_repaired_mesh")
         assign_material(final_mesh, materials["final"])
     final_image_paths = []
-    for view_name in ("iso", "top", "bottom", "side"):
-        image_path = output_directory / f"guide_{view_name}.png"
-        render_objects(image_path, (final_mesh,), case.config.render, view_name)
-        final_image_paths.append(image_path)
+    if not preview:
+        for view_name in ("iso", "top", "bottom", "side"):
+            image_path = output_directory / f"guide_{view_name}.png"
+            render_objects(image_path, (final_mesh,), case.config.render, view_name)
+            final_image_paths.append(image_path)
     return BuildArtifacts(model_path, (*final_image_paths, *process_image_paths))

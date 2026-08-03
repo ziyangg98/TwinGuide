@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from copy import deepcopy
 from pathlib import Path
 
 from twin_guide.config import CaseConfig
@@ -26,8 +27,6 @@ def _validate_axis_sweep_contract(
     windows = mapping.get("observation_windows")
     if not isinstance(windows, list) or not windows:
         raise GeometryError("牙位映射报告中没有观察窗")
-    expected_drop = config.windows.observation_axis_drop_mm
-    expected_angle = config.windows.observation_sweep_angle_degrees
     for index, value in enumerate(windows):
         if not isinstance(value, dict):
             raise GeometryError(f"observation_windows[{index}] 必须为对象")
@@ -39,6 +38,22 @@ def _validate_axis_sweep_contract(
         definition = value.get("axis_sweep")
         if not isinstance(definition, dict):
             raise GeometryError(f"观察窗 {window_id!r} 缺少 axis_sweep 定义")
+        editor_overrides = getattr(config, "editor_overrides", None)
+        override = (
+            None
+            if editor_overrides is None
+            else editor_overrides.observation_window_for(window_id)
+        )
+        expected_drop = (
+            config.windows.observation_axis_drop_mm
+            if override is None
+            else override.axis_drop_mm
+        )
+        expected_angle = (
+            config.windows.observation_sweep_angle_degrees
+            if override is None
+            else override.sweep_angle_degrees
+        )
         drop = float(definition.get("axis_drop_mm", -1.0))
         angle = float(definition.get("sweep_angle_deg", -1.0))
         if abs(drop - expected_drop) > 1e-6:
@@ -51,6 +66,68 @@ def _validate_axis_sweep_contract(
                 f"观察窗 {window_id!r} 扫掠角为 {angle:g}°，"
                 f"但 TwinGuide 配置要求 {expected_angle:g}°"
             )
+
+
+def _mapping_with_editor_overrides(
+    config: CaseConfig,
+    tooth_identification: ToothIdentificationResult,
+    output_root: Path,
+) -> tuple[dict[str, object], Path]:
+    """生成只供第 3 阶段使用的观察窗映射副本。"""
+
+    editor_overrides = getattr(config, "editor_overrides", None)
+    if editor_overrides is None or not editor_overrides.observation_windows:
+        return (
+            tooth_identification.mapping_report,
+            tooth_identification.mapping_report_path.resolve(),
+        )
+    mapping = deepcopy(tooth_identification.mapping_report)
+    raw_windows = mapping.get("observation_windows")
+    if not isinstance(raw_windows, list):
+        raise GeometryError("牙位映射报告中没有可覆盖的观察窗")
+    positions = {item.fdi: item for item in tooth_identification.positions}
+    for raw_window in raw_windows:
+        if not isinstance(raw_window, dict):
+            continue
+        window_id = str(raw_window.get("id", ""))
+        override = editor_overrides.observation_window_for(window_id)
+        if override is None:
+            continue
+        try:
+            start_position = positions[override.start_fdi]
+            end_position = positions[override.end_fdi]
+        except KeyError as error:
+            raise GeometryError(
+                f"观察窗 {window_id!r} 端点必须吸附到当前病例的有效 FDI"
+            ) from error
+        definition = raw_window.get("axis_sweep")
+        if not isinstance(definition, dict):
+            raise GeometryError(f"观察窗 {window_id!r} 缺少 axis_sweep 定义")
+        direction_values = definition.get("zero_degree_occlusal_direction_global")
+        if not isinstance(direction_values, list) or len(direction_values) != 3:
+            raise GeometryError(f"观察窗 {window_id!r} 缺少牙合方向")
+        occlusal = Vec3(*(float(value) for value in direction_values)).normalized()
+        start = start_position.guide_top or start_position.crown_point
+        end = end_position.guide_top or end_position.crown_point
+        start = start - occlusal * override.axis_drop_mm
+        end = end - occlusal * override.axis_drop_mm
+        raw_window.update(
+            start_fdi=override.start_fdi,
+            end_fdi=override.end_fdi,
+            height_mm=override.height_mm,
+        )
+        definition.update(
+            axis_start_global_mm=[start.x, start.y, start.z],
+            axis_end_global_mm=[end.x, end.y, end.z],
+            axis_drop_mm=override.axis_drop_mm,
+            sweep_angle_deg=override.sweep_angle_degrees,
+        )
+    derived_path = output_root / "editor-observation-mapping.json"
+    derived_path.write_text(
+        json.dumps(mapping, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return mapping, derived_path
 
 
 def _fingerprint(config: CaseConfig, mapping_path: Path) -> dict[str, object]:
@@ -153,6 +230,8 @@ def _profile_from_report(report_path: Path) -> ProfileWindowCutout:
 def build_observation_window_opening(
     config: CaseConfig,
     tooth_identification: ToothIdentificationResult,
+    *,
+    require_qa: bool = True,
 ) -> ProfileWindowCutout:
     """使用现有牙位映射生成、分级修正并返回轴扫掠 cutter。
 
@@ -167,13 +246,16 @@ def build_observation_window_opening(
     0.5/1.0/2.0 mm 修正写入输出目录中的派生映射副本。
     """
 
-    mapping_path = tooth_identification.mapping_report_path.resolve()
-    mapping = tooth_identification.mapping_report
-    _validate_axis_sweep_contract(mapping, config)
     output_root = (
         config.output_directory / ".cache" / "stage-03-cutout-planning"
     )
     output_root.mkdir(parents=True, exist_ok=True)
+    mapping, mapping_path = _mapping_with_editor_overrides(
+        config,
+        tooth_identification,
+        output_root,
+    )
+    _validate_axis_sweep_contract(mapping, config)
     integration_path = output_root / INTEGRATION_REPORT_NAME
     fingerprint = _fingerprint(config, mapping_path)
     if integration_path.is_file():
@@ -181,8 +263,27 @@ def build_observation_window_opening(
             cached = json.loads(integration_path.read_text(encoding="utf-8"))
             cached_report = Path(str(cached["final_report"])).resolve()
             if cached.get("fingerprint") == fingerprint and cached_report.is_file():
+                cached_qa = cached.get("QA")
+                qa_passed = bool(
+                    isinstance(cached_qa, dict)
+                    and cached_qa
+                    and all(cached_qa.values())
+                )
+                if require_qa and not qa_passed:
+                    failed_checks = (
+                        [
+                            name
+                            for name, passed in cached_qa.items()
+                            if not passed
+                        ]
+                        if isinstance(cached_qa, dict)
+                        else ["cached_report_has_no_qa"]
+                    )
+                    raise GeometryError(
+                        "轴扫观察窗未通过最终 QA：" + "、".join(failed_checks)
+                    )
                 return _profile_from_report(cached_report)
-        except (KeyError, OSError, json.JSONDecodeError, GeometryError):
+        except (KeyError, OSError, json.JSONDecodeError):
             pass
 
     # 延迟导入项目内观察窗引擎，使纯配置测试不必加载完整网格依赖。
@@ -226,14 +327,15 @@ def build_observation_window_opening(
         report = run(request)
     except Exception as error:
         raise GeometryError(f"轴扫掠观察窗生成失败：{error}") from error
-    if not all(report["QA"].values()):
+    qa_passed = all(report["QA"].values())
+    if require_qa and not qa_passed:
         failed_checks = [name for name, passed in report["QA"].items() if not passed]
         raise GeometryError(
             "轴扫观察窗未通过最终 QA：" + "、".join(failed_checks)
         )
     final_report = Path(str(report["outputs"]["report_json"])).resolve()
     integration = {
-        "status": "complete",
+        "status": "complete" if qa_passed else "preview_qa_failed",
         "fingerprint": fingerprint,
         "mapping_report": str(mapping_path),
         "final_report": str(final_report),

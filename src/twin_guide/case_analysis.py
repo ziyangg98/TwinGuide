@@ -37,6 +37,27 @@ from twin_guide.sleeve_generation import (
 )
 
 
+def _apply_sleeve_editor_override(
+    config: CaseConfig,
+    guide: GuideSleeve,
+) -> GuideSleeve:
+    """把图形编辑器的单导柱高度覆盖值应用到已识别导柱。"""
+
+    override = config.editor_overrides.sleeve_for(guide.guide_index)
+    if override is None:
+        return guide
+    return replace(
+        guide,
+        parameters=replace(
+            guide.parameters,
+            height=override.height_mm,
+            platform_height=override.platform_height_mm,
+            closed_bore_height=override.closed_bore_height_mm,
+        ),
+        axial_max_mm=override.height_mm,
+    )
+
+
 def _load_generation_meshes(config: CaseConfig) -> GenerationMeshes:
     """导入病例配置中的三个 STL 网格。"""
 
@@ -153,7 +174,10 @@ def analyze_case(config: CaseConfig) -> CaseAnalysis:
         )
         offset = len(all_guides)
         pair = tuple(
-            replace(guide, guide_index=offset + local_index)
+            _apply_sleeve_editor_override(
+                config,
+                replace(guide, guide_index=offset + local_index),
+            )
             for local_index, guide in enumerate(sleeve_generation.sleeves, 1)
         )
         if template_frame is None:

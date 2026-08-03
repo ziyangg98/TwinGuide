@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from twin_guide.geometry import Vec3
 from twin_guide.models import (
     CaseAnalysis,
     CutoutPlan,
@@ -54,14 +55,30 @@ def _plan_operation_window(
     normal = average_guide_axis
     short_direction = normal.cross(tangent).normalized()
     guide_spacing_mm = abs(guide_offset.dot(tangent))
-    short_edge_mm = operation_feature.diameter_mm + 2.0 * (
+    editor_overrides = getattr(case.config, "editor_overrides", None)
+    override = (
+        None
+        if editor_overrides is None
+        else editor_overrides.operation_window_for(site_index)
+    )
+    tangent_margin_mm = (
+        case.config.windows.operation_tangent_margin_mm
+        if override is None
+        else override.tangent_margin_mm
+    )
+    bitangent_margin_mm = (
         case.config.windows.operation_bitangent_margin_mm
+        if override is None
+        else override.bitangent_margin_mm
+    )
+    short_edge_mm = operation_feature.diameter_mm + 2.0 * (
+        bitangent_margin_mm
     )
     long_edge_mm = (
         guide_spacing_mm
         + first_guide.body_radius_mm
         + second_guide.body_radius_mm
-        + 2.0 * case.config.windows.operation_tangent_margin_mm
+        + 2.0 * tangent_margin_mm
     )
     local_samples = tuple(
         sample
@@ -83,10 +100,20 @@ def _plan_operation_window(
         first_guide.length_mm,
         second_guide.length_mm,
     )
-    front_margin_mm = case.config.windows.operation_front_axial_margin_mm
-    rear_margin_mm = case.config.windows.operation_rear_axial_margin_mm
+    front_margin_mm = (
+        case.config.windows.operation_front_axial_margin_mm
+        if override is None
+        else override.front_axial_margin_mm
+    )
+    rear_margin_mm = (
+        case.config.windows.operation_rear_axial_margin_mm
+        if override is None
+        else override.rear_axial_margin_mm
+    )
     depth_mm = base_depth_mm + front_margin_mm + rear_margin_mm
     shifted_center = center + normal * (front_margin_mm - rear_margin_mm) * 0.5
+    if override is not None:
+        shifted_center = shifted_center + Vec3(*override.center_offset_mm)
     return WindowCutout(
         name=f"operation_window_{site_index:02d}",
         purpose=WindowPurpose.OPERATION,
@@ -104,6 +131,9 @@ def plan_window_cutouts(
     case: CaseAnalysis,
     sleeves: SleeveGenerationResult,
     tooth_identification: ToothIdentificationResult | None = None,
+    *,
+    require_observation_qa: bool = True,
+    include_observation_window_geometry: bool = True,
 ) -> CutoutPlan:
     """生成导孔、操作窗和观察缺口计划。
 
@@ -136,8 +166,14 @@ def plan_window_cutouts(
     )
     profile_windows = (
         ()
-        if tooth_identification is None
-        else (build_observation_window_opening(case.config, tooth_identification),)
+        if tooth_identification is None or not include_observation_window_geometry
+        else (
+            build_observation_window_opening(
+                case.config,
+                tooth_identification,
+                require_qa=require_observation_qa,
+            ),
+        )
     )
     return CutoutPlan(
         channels=_plan_channels(case),

@@ -373,6 +373,16 @@ Blender 阶段结果图和最终标准视图的像素尺寸。
 `generate --output DIRECTORY` 会对本次生成覆盖该目录；它不会回写 `case.yaml`。
 输出文件和 JSON 字段的详细含义见 {doc}`outputs`。
 
+## 图形编辑器覆盖值
+
+`editor_overrides` 由 Blender 面板管理；省略时使用全局参数。
+它可保存 `sleeve_guides`、`operation_windows`、`observation_windows`、
+`connector_avoidance`、`surface_anchors` 和 `press_junction_mm`。左右导柱及避让节点
+按 `guide_index` 独立；表面锚点保存表面类型、世界坐标和法向。
+
+`connector_avoidance.path_fraction` 保持旧字段兼容，其含义是从止停台接触点到
+所选侧路线端点的比例；`downward_offset_mm` 是正视方向的下拉偏移。
+
 ## 审核状态
 
 `generate` 会检查：
