@@ -386,7 +386,13 @@ def _create_operation_controls() -> None:
             feature_center + normal * (base_depth / 2.0 + front_margin)
         )
         visible_base_center = _surface_point("template", cutter_front_center)
-        visible_center = visible_base_center + working_offset
+        local_x = working_offset.dot(tangent)
+        local_y = working_offset.dot(bitangent)
+        fixed_offset = working_offset - tangent * local_x - bitangent * local_y
+        visible_center = _surface_point(
+            "template",
+            visible_base_center + tangent * local_x + bitangent * local_y,
+        )
         common = {
             "site_index": site_index,
             "center": list(visible_base_center),
@@ -400,6 +406,9 @@ def _create_operation_controls() -> None:
             "corner_radius": float(raw["corner_radius_mm"]),
             "tangent_margin_base": working_tangent,
             "bitangent_margin_base": working_bitangent,
+            "local_x": local_x,
+            "local_y": local_y,
+            "fixed_offset": list(fixed_offset),
         }
         _control(
             f"Window_{site_index}_center",
@@ -1399,8 +1408,17 @@ def _constrain_control(object_: bpy.types.Object) -> None:
         object_.location = origin + axis * distance
     elif kind == "window_center":
         origin = Vector(object_["tg_center"])
-        normal = Vector(object_["tg_normal"]).normalized()
-        object_.location -= normal * (object_.location - origin).dot(normal)
+        tangent = Vector(object_["tg_tangent"]).normalized()
+        bitangent = Vector(object_["tg_bitangent"]).normalized()
+        delta = object_.location - origin
+        object_["tg_local_x"] = delta.dot(tangent)
+        object_["tg_local_y"] = delta.dot(bitangent)
+        object_.location = _surface_point(
+            "template",
+            origin
+            + tangent * float(object_["tg_local_x"])
+            + bitangent * float(object_["tg_local_y"]),
+        )
     elif kind == "connector_node":
         route_start = Vector(object_["tg_route_start"])
         route_end = Vector(object_["tg_route_end"])
@@ -1533,6 +1551,13 @@ def _feature_adapter_value(feature_id: str) -> EditorOverrides:
         center = controls["window_center"]
         width = controls["width"]
         height = controls["height"]
+        tangent = Vector(center["tg_tangent"])
+        bitangent = Vector(center["tg_bitangent"])
+        center_offset = (
+            Vector(center["tg_fixed_offset"])
+            + tangent * float(center["tg_local_x"])
+            + bitangent * float(center["tg_local_y"])
+        )
         value = OperationWindowOverride(
             int(center["tg_site_index"]),
             max(
@@ -1549,7 +1574,7 @@ def _feature_adapter_value(feature_id: str) -> EditorOverrides:
             ),
             max(0.0, _axis_distance(controls["front"])),
             max(0.0, _axis_distance(controls["rear"])),
-            tuple(center.location - Vector(center["tg_center"])),
+            tuple(center_offset),
         )
         return with_operation_window(current, value)
     if feature_id.startswith("sleeve:"):
@@ -1657,7 +1682,7 @@ def _initial_model(
 
     assert _CONFIG is not None
     fingerprint = editor_geometry_fingerprint(_CONFIG, config_path)
-    for directory in (preview_directory(_CONFIG), _CONFIG.output_directory):
+    for directory in (_CONFIG.output_directory, preview_directory(_CONFIG)):
         matched = _matching_model_snapshot(directory, fingerprint)
         if matched is not None:
             return matched
@@ -1738,6 +1763,8 @@ def _poll_job() -> float:
         "starting": "正在启动",
         "running": "运行中",
         "validating": "正在检验",
+        "cancel_requested": "正在取消",
+        "promoting": "正在更新正式模型",
         "completed": "已完成",
         "validation_failed": "检验失败",
         "failed": "任务失败",
@@ -1915,6 +1942,8 @@ def _gizmo_value(axis_index: int) -> float:
         return 0.0
     if object_.get("tg_kind") == "window_size":
         return _axis_distance(object_)
+    if object_.get("tg_kind") == "window_center":
+        return float(object_[f"tg_local_{'x' if axis_index == 0 else 'y'}"])
     axes = _gizmo_axes(object_)
     if axis_index >= len(axes):
         return 0.0
@@ -1953,6 +1982,24 @@ def _gizmo_set_value(axis_index: int, value: float) -> None:
         object_["tg_tangent"] = list(tangent)
         object_.location = base + down * offset
         _update_connector_overlay(int(object_["tg_guide_index"]))
+        _preview_feature_edit(str(object_["tg_feature_id"]))
+        bpy.context.scene.twin_guide_state.dirty = _SESSION.dirty
+        return
+    if object_.get("tg_kind") == "window_center":
+        local_key = f"tg_local_{'x' if axis_index == 0 else 'y'}"
+        object_[local_key] = value
+        origin = Vector(object_["tg_center"])
+        tangent = Vector(object_["tg_tangent"])
+        bitangent = Vector(object_["tg_bitangent"])
+        object_.location = _surface_point(
+            "template",
+            origin
+            + tangent * float(object_["tg_local_x"])
+            + bitangent * float(object_["tg_local_y"]),
+        )
+        _translate_operation_handles(object_, previous_location)
+        site_index = int(object_["tg_site_index"])
+        _update_window_overlay(site_index)
         _preview_feature_edit(str(object_["tg_feature_id"]))
         bpy.context.scene.twin_guide_state.dirty = _SESSION.dirty
         return
@@ -2026,7 +2073,10 @@ def _semantic_values(
         value = raw[0] * float(object_.get("tg_scale", 1.0))
         return ((labels[role], value),)
     if kind == "window_center":
-        return (("局部横向 (mm)", raw[0]), ("局部纵向 (mm)", raw[1]))
+        return (
+            ("局部横向 (mm)", float(object_["tg_local_x"])),
+            ("局部纵向 (mm)", float(object_["tg_local_y"])),
+        )
     if kind == "junction":
         return (("工作平面 X (mm)", raw[0]), ("工作平面 Y (mm)", raw[1]))
     return ()
@@ -2503,8 +2553,8 @@ class TwinGuideCancelOperator(bpy.types.Operator):
 
     def execute(self, _context: bpy.types.Context) -> set[str]:
         """终止子进程并保留既有正式文件。"""
-        if _JOB is not None:
-            _JOB.cancel()
+        if _JOB is not None and not _JOB.cancel():
+            self.report({"INFO"}, "正式模型正在更新，当前阶段不能取消")
         return {"FINISHED"}
 
 

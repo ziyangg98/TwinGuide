@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -8,7 +9,12 @@ from unittest.mock import Mock, patch
 
 from twin_guide.blender_ui_worker import _remove_stage_documents, run_job
 from twin_guide.config import EditorOverrides
-from twin_guide.ui_jobs import promote_candidate, read_manifest, write_manifest
+from twin_guide.ui_jobs import (
+    BackgroundJob,
+    promote_candidate,
+    read_manifest,
+    write_manifest,
+)
 
 
 class UiJobTests(unittest.TestCase):
@@ -49,6 +55,74 @@ class UiJobTests(unittest.TestCase):
             self.assertEqual(promoted, (formal / "twin_guide.stl",))
             self.assertFalse((formal / "ui-task.json").exists())
             json.loads(manifest.read_text(encoding="utf-8"))
+
+    def test_candidate_promotion_rolls_back_every_formal_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            candidate = root / "candidate"
+            formal = root / "formal"
+            candidate.mkdir()
+            formal.mkdir()
+            for name in ("a-before.txt", "z-after.txt", "twin_guide.stl"):
+                (candidate / name).write_text("new", encoding="utf-8")
+                (formal / name).write_text("old", encoding="utf-8")
+            original_replace = os.replace
+            call_count = 0
+
+            def fail_after_stl(source, target):
+                nonlocal call_count
+                call_count += 1
+                if call_count == 4:
+                    raise OSError("simulated promotion failure")
+                original_replace(source, target)
+
+            with patch(
+                "twin_guide.ui_jobs.os.replace",
+                side_effect=fail_after_stl,
+            ), self.assertRaises(OSError):
+                promote_candidate(candidate, formal)
+
+            self.assertEqual((formal / "twin_guide.stl").read_text(), "old")
+            self.assertEqual((formal / "a-before.txt").read_text(), "old")
+            self.assertEqual((formal / "z-after.txt").read_text(), "old")
+
+    def test_cancel_waits_for_running_process_before_marking_cancelled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "task.json"
+            process = Mock()
+            process.poll.return_value = None
+            job = BackgroundJob("preview", process, manifest, 3)
+
+            self.assertTrue(job.cancel())
+
+            process.terminate.assert_called_once()
+            process.wait.assert_called_once_with(timeout=5.0)
+            self.assertEqual(read_manifest(manifest)["status"], "cancelled")
+
+    def test_final_validation_uses_cooperative_cancellation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "task.json"
+            write_manifest(manifest, {"status": "validating"})
+            process = Mock()
+            process.poll.return_value = None
+            job = BackgroundJob("final", process, manifest, 4)
+
+            self.assertTrue(job.cancel())
+
+            process.terminate.assert_not_called()
+            self.assertEqual(read_manifest(manifest)["status"], "cancel_requested")
+
+    def test_final_promotion_cannot_be_interrupted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "task.json"
+            write_manifest(manifest, {"status": "promoting"})
+            process = Mock()
+            job = BackgroundJob("final", process, manifest, 5)
+
+            self.assertFalse(job.cancel())
+
+            process.terminate.assert_not_called()
+            self.assertEqual(read_manifest(manifest)["status"], "promoting")
 
     def test_preview_skips_validation_and_failed_final_keeps_formal_model(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -216,6 +290,61 @@ class UiJobTests(unittest.TestCase):
                 (formal / "ui-editor-snapshot.json").read_text(encoding="utf-8"),
                 "snapshot",
             )
+
+    def test_final_cancel_request_prevents_formal_promotion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            formal = root / "formal"
+            candidate = root / "candidate"
+            manifest = candidate / "task.json"
+            formal.mkdir()
+            (formal / "twin_guide.stl").write_text("old", encoding="utf-8")
+            config = SimpleNamespace(output_directory=formal)
+
+            def generate(job_config, *, preview=False):
+                self.assertFalse(preview)
+                job_config.output_directory.mkdir(parents=True, exist_ok=True)
+                model = job_config.output_directory / "twin_guide.stl"
+                model.write_text("candidate", encoding="utf-8")
+                return SimpleNamespace(model_path=model), SimpleNamespace(
+                    context=object()
+                )
+
+            def write_snapshot(_context, _config_path, output, **_values):
+                path = output / "ui-editor-snapshot.json"
+                path.write_text("snapshot", encoding="utf-8")
+                return path
+
+            passed = SimpleNamespace(name="topology", passed=True, metrics={})
+
+            def validate_then_cancel(_model_path, _config):
+                write_manifest(manifest, {"status": "cancel_requested"})
+                return (passed,)
+
+            with patch(
+                "twin_guide.blender_ui_worker.CaseConfig.from_yaml",
+                return_value=config,
+            ), patch(
+                "twin_guide.blender_ui_worker.replace",
+                side_effect=lambda _config, **values: SimpleNamespace(**values),
+            ), patch(
+                "twin_guide.blender_ui_worker._generate_with_process",
+                side_effect=generate,
+            ), patch(
+                "twin_guide.editor_plan.write_editor_plan",
+                side_effect=write_snapshot,
+            ), patch(
+                "twin_guide.editor_plan.editor_geometry_fingerprint",
+                return_value="geometry-cancelled",
+            ), patch(
+                "twin_guide.blender_ui_worker._validate",
+                side_effect=validate_then_cancel,
+            ), patch("twin_guide.blender_ui_worker.promote_candidate") as promote:
+                run_job("final", root / "case.yaml", candidate, manifest, revision=9)
+
+            promote.assert_not_called()
+            self.assertEqual((formal / "twin_guide.stl").read_text(), "old")
+            self.assertEqual(read_manifest(manifest)["status"], "cancelled")
 
     def test_plan_mode_runs_planning_without_entity_generation(self):
         with tempfile.TemporaryDirectory() as directory:

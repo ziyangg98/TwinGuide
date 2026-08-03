@@ -10,7 +10,7 @@ from pathlib import Path
 
 from twin_guide.config import CaseConfig, EditorOverrides
 from twin_guide.models import BuildArtifacts, ValidationResult
-from twin_guide.ui_jobs import promote_candidate, write_manifest
+from twin_guide.ui_jobs import promote_candidate, read_manifest, write_manifest
 
 
 def _remove_stage_documents(output_directory: Path) -> None:
@@ -152,6 +152,29 @@ def run_job(
     passed = all(item.passed for item in results)
     promoted = ()
     if passed:
+        current = read_manifest(manifest_path) or {}
+        if current.get("status") == "cancel_requested":
+            write_manifest(
+                manifest_path,
+                {
+                    "status": "cancelled",
+                    "mode": mode,
+                    "validation": "passed",
+                    "validation_results": result_values,
+                    "revision": revision,
+                    "geometry_fingerprint": geometry_fingerprint,
+                },
+            )
+            return
+        write_manifest(
+            manifest_path,
+            {
+                "status": "promoting",
+                "mode": mode,
+                "revision": revision,
+                "geometry_fingerprint": geometry_fingerprint,
+            },
+        )
         promoted = promote_candidate(output_directory, formal_directory)
     write_manifest(
         manifest_path,

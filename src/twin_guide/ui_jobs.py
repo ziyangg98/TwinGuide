@@ -44,19 +44,46 @@ def read_manifest(path: Path) -> dict[str, object] | None:
 
 
 def promote_candidate(candidate: Path, destination: Path) -> tuple[Path, ...]:
-    """逐文件原子提升已验证候选，并保留任何未被候选替换的缓存。"""
+    """整批提升已验证候选；任一替换失败时恢复原有正式文件。"""
 
     destination.mkdir(parents=True, exist_ok=True)
-    promoted = []
-    for source in sorted(candidate.iterdir()):
-        if not source.is_file() or source.name == "ui-task.json":
-            continue
-        target = destination / source.name
-        temporary = destination / f".{source.name}.{uuid.uuid4().hex}.promoting"
-        shutil.copy2(source, temporary)
-        os.replace(temporary, target)
-        promoted.append(target)
-    return tuple(promoted)
+    transaction = uuid.uuid4().hex
+    entries: list[tuple[Path, Path, Path]] = []
+    sources = sorted(
+        candidate.iterdir(),
+        key=lambda path: (path.name == "twin_guide.stl", path.name),
+    )
+    for source in sources:
+        if source.is_file() and source.name != "ui-task.json":
+            target = destination / source.name
+            staged = destination / f".{source.name}.{transaction}.staged"
+            shutil.copy2(source, staged)
+            backup = destination / f".{source.name}.{transaction}.backup"
+            entries.append((target, staged, backup))
+    touched: list[tuple[Path, Path, bool]] = []
+    try:
+        for target, staged, backup in entries:
+            if target.name == "twin_guide.stl":
+                os.replace(staged, target)
+                continue
+            had_target = target.exists()
+            touched.append((target, backup, had_target))
+            if had_target:
+                os.replace(target, backup)
+            os.replace(staged, target)
+    except OSError:
+        for target, backup, had_target in reversed(touched):
+            if had_target and backup.exists():
+                os.replace(backup, target)
+            elif not had_target:
+                target.unlink(missing_ok=True)
+        raise
+    finally:
+        for _target, staged, _backup in entries:
+            staged.unlink(missing_ok=True)
+    for _target, _staged, backup in entries:
+        backup.unlink(missing_ok=True)
+    return tuple(target for target, _staged, _backup in entries)
 
 
 @dataclass(slots=True)
@@ -68,10 +95,30 @@ class BackgroundJob:
     manifest_path: Path
     revision: int = 0
 
-    def cancel(self) -> None:
-        """终止后台进程并写入可见的取消状态。"""
+    def cancel(self) -> bool:
+        """取消生成；正式文件提升开始后不再中断进程。"""
+
+        manifest = read_manifest(self.manifest_path) or {}
+        status = str(manifest.get("status", ""))
+        if self.mode == "final" and status == "promoting":
+            return False
+        if self.mode == "final" and status in {"validating", "cancel_requested"}:
+            write_manifest(
+                self.manifest_path,
+                {
+                    "status": "cancel_requested",
+                    "mode": self.mode,
+                    "revision": self.revision,
+                },
+            )
+            return True
         if self.process.poll() is None:
             self.process.terminate()
+            try:
+                self.process.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait()
         write_manifest(
             self.manifest_path,
             {
@@ -80,6 +127,7 @@ class BackgroundJob:
                 "revision": self.revision,
             },
         )
+        return True
 
 
 def start_background_job(
