@@ -109,6 +109,39 @@ class ObservationWindowOpeningTests(unittest.TestCase):
             self.assertEqual(request.volume_identity_tolerance_mm3, 0.05)
             self.assertEqual(request.volume_identity_relative_tolerance, 1e-4)
 
+    def test_fast_preview_skips_full_observation_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, identification = self._inputs(root)
+            preview_report = {
+                "QA": {},
+                "outputs": {
+                    "report_json": str(root / "preview-report.json"),
+                    "combined_cutter_ply": str(root / "preview-cutter.ply"),
+                },
+            }
+            sentinel = object()
+
+            with patch(
+                "twin_guide.observation_window_engine.build_preview",
+                return_value=preview_report,
+            ) as build_preview, patch(
+                "twin_guide.observation_window_engine.run"
+            ) as full_run, patch(
+                "twin_guide.observation_window_opening._profile_from_report",
+                return_value=sentinel,
+            ):
+                result = build_observation_window_opening(
+                    config,
+                    identification,
+                    require_qa=False,
+                    fast_preview=True,
+                )
+
+            self.assertIs(result, sentinel)
+            build_preview.assert_called_once()
+            full_run.assert_not_called()
+
     def test_preview_cache_ignores_regenerated_report_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -163,6 +196,48 @@ class ObservationWindowOpeningTests(unittest.TestCase):
             self.assertIs(first, sentinel)
             self.assertIs(second, sentinel)
             mocked_run.assert_called_once()
+
+    def test_formal_run_rebuilds_a_preview_only_cached_cutter(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, identification = self._inputs(root)
+            preview_report = root / "preview-report.json"
+            preview_report.write_text("{}", encoding="utf-8")
+            preview_result = {
+                "QA": {"axis_sweep_exposes_dental_surface": False},
+                "outputs": {
+                    "report_json": str(preview_report),
+                    "combined_cutter_ply": str(root / "preview-cutter.ply"),
+                },
+            }
+            formal_report = root / "formal-report.json"
+            formal_report.write_text("{}", encoding="utf-8")
+            formal_result = {
+                "QA": {"axis_sweep_exposes_dental_surface": True},
+                "outputs": {
+                    "report_json": str(formal_report),
+                    "combined_cutter_ply": str(root / "formal-cutter.ply"),
+                },
+            }
+            with patch(
+                "twin_guide.observation_window_engine.run",
+                side_effect=(preview_result, formal_result),
+            ) as mocked_run, patch(
+                "twin_guide.observation_window_opening._profile_from_report",
+                return_value=object(),
+            ):
+                build_observation_window_opening(
+                    config,
+                    identification,
+                    require_qa=False,
+                )
+                build_observation_window_opening(
+                    config,
+                    identification,
+                    require_qa=True,
+                )
+
+            self.assertEqual(mocked_run.call_count, 2)
 
 
 if __name__ == "__main__":

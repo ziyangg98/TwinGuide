@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import shutil
 import sys
+import time
 import traceback
 from dataclasses import replace
 from pathlib import Path
+from time import perf_counter
 
 from twin_guide.config import CaseConfig, EditorOverrides
 from twin_guide.models import BuildArtifacts, ValidationResult
@@ -45,12 +49,17 @@ def _generate_with_process(
     config: CaseConfig,
     *,
     preview: bool = True,
+    changed_feature_ids: tuple[str, ...] = (),
 ) -> tuple[BuildArtifacts, object]:
     """运行一次实体生成并保留同一次规划上下文。"""
 
     from twin_guide.guide_generation import _generate_guide_with_process
 
-    return _generate_guide_with_process(config, preview=preview)
+    return _generate_guide_with_process(
+        config,
+        preview=preview,
+        changed_feature_ids=changed_feature_ids,
+    )
 
 
 def _validate(
@@ -64,12 +73,43 @@ def _validate(
     return validate_guide(model_path, config)
 
 
+def _process_timings(process: object) -> dict[str, float]:
+    """返回七阶段耗时；测试替身和旧调用结果没有该字段时为空。"""
+
+    return dict(getattr(process, "timings_seconds", {}))
+
+
+def _handpiece_cache_hits(process: object) -> list[str]:
+    """返回本次规划直接复用的手机包络编号。"""
+
+    plans = getattr(getattr(process, "context", None), "clearance_adjustment", ())
+    return [plan.avoidance_id for plan in plans or () if plan.cache_reused]
+
+
+def _planning_cache_hits(process: object) -> list[str]:
+    """返回本次按编辑依赖直接复用的规划阶段。"""
+
+    return list(getattr(process, "cache_hits", ()))
+
+
+def _entity_cache_hits(output_directory: Path) -> dict[str, bool]:
+    """读取本次实体构建写出的检查点命中记录。"""
+
+    path = output_directory / ".cache" / "entity-preview" / "last-build.json"
+    if not path.is_file():
+        return {}
+    value = json.loads(path.read_text(encoding="utf-8"))
+    return dict(value.get("cache_hits", {}))
+
+
 def run_job(
     mode: str,
     config_path: Path,
     output_directory: Path,
     manifest_path: Path,
     revision: int = 0,
+    job_id: str = "",
+    changed_feature_ids: tuple[str, ...] = (),
 ) -> None:
     """运行不检验的预览，或运行候选生成、检验和正式提升。"""
 
@@ -87,14 +127,18 @@ def run_job(
             "status": "running",
             "mode": mode,
             "revision": revision,
+            "job_id": job_id,
+            "changed_feature_ids": list(changed_feature_ids),
             "geometry_fingerprint": geometry_fingerprint,
         },
     )
+    timings: dict[str, float] = {}
     if mode == "plan":
         from twin_guide.editor_plan import write_editor_plan
         from twin_guide.generation_process import run_generation_process
 
         baseline_config = replace(job_config, editor_overrides=EditorOverrides())
+        started = perf_counter()
         process = run_generation_process(
             baseline_config,
             require_observation_qa=False,
@@ -102,12 +146,17 @@ def run_job(
             include_clearance_adjustment=False,
             include_observation_window_geometry=False,
         )
+        process_timings = _process_timings(process)
+        timings.update(process_timings)
+        timings["planning_total"] = perf_counter() - started
+        started = perf_counter()
         plan_path = write_editor_plan(
             process.context,
             config_path,
             output_directory,
             revision=revision,
         )
+        timings["editor_plan"] = perf_counter() - started
         _remove_stage_documents(output_directory)
         write_manifest(
             manifest_path,
@@ -115,15 +164,34 @@ def run_job(
                 "status": "completed",
                 "mode": mode,
                 "revision": revision,
+                "job_id": job_id,
+                "changed_feature_ids": list(changed_feature_ids),
                 "plan_path": str(plan_path),
                 "geometry_fingerprint": geometry_fingerprint,
+                "timings_seconds": timings,
             },
         )
         return
     if mode == "preview":
         from twin_guide.editor_plan import write_editor_plan
 
-        artifacts, process = _generate_with_process(job_config)
+        started = perf_counter()
+        if changed_feature_ids:
+            artifacts, process = _generate_with_process(
+                job_config,
+                changed_feature_ids=changed_feature_ids,
+            )
+        else:
+            artifacts, process = _generate_with_process(job_config)
+        generation_elapsed = perf_counter() - started
+        process_timings = _process_timings(process)
+        timings.update(process_timings)
+        timings["planning_total"] = sum(process_timings.values())
+        timings["entity_build"] = max(
+            0.0,
+            generation_elapsed - timings["planning_total"],
+        )
+        started = perf_counter()
         snapshot_path = write_editor_plan(
             process.context,
             config_path,
@@ -131,6 +199,7 @@ def run_job(
             revision=revision,
             snapshot=True,
         )
+        timings["editor_snapshot"] = perf_counter() - started
         _remove_stage_documents(output_directory)
         write_manifest(
             manifest_path,
@@ -140,8 +209,16 @@ def run_job(
                 "model_path": str(artifacts.model_path),
                 "validation": "not_run",
                 "revision": revision,
+                "job_id": job_id,
+                "changed_feature_ids": list(changed_feature_ids),
                 "geometry_fingerprint": geometry_fingerprint,
                 "editor_snapshot_path": str(snapshot_path),
+                "timings_seconds": timings,
+                "cache_hits": {
+                    "planning": _planning_cache_hits(process),
+                    "handpiece_avoidance": _handpiece_cache_hits(process),
+                    "entities": _entity_cache_hits(output_directory),
+                },
             },
         )
         return
@@ -149,7 +226,17 @@ def run_job(
         raise ValueError(f"不支持的 UI 后台任务：{mode}")
     from twin_guide.editor_plan import write_editor_plan
 
+    started = perf_counter()
     artifacts, process = _generate_with_process(job_config, preview=False)
+    generation_elapsed = perf_counter() - started
+    process_timings = _process_timings(process)
+    timings.update(process_timings)
+    timings["planning_total"] = sum(process_timings.values())
+    timings["entity_build"] = max(
+        0.0,
+        generation_elapsed - timings["planning_total"],
+    )
+    started = perf_counter()
     snapshot_path = write_editor_plan(
         process.context,
         config_path,
@@ -157,16 +244,22 @@ def run_job(
         revision=revision,
         snapshot=True,
     )
+    timings["editor_snapshot"] = perf_counter() - started
     write_manifest(
         manifest_path,
         {
             "status": "validating",
             "mode": mode,
             "revision": revision,
+            "job_id": job_id,
+            "changed_feature_ids": list(changed_feature_ids),
             "geometry_fingerprint": geometry_fingerprint,
+            "timings_seconds": timings,
         },
     )
+    started = perf_counter()
     results = _validate(artifacts.model_path, job_config)
+    timings["validation"] = perf_counter() - started
     result_values = [
         {"name": item.name, "passed": item.passed, "metrics": item.metrics}
         for item in results
@@ -184,7 +277,9 @@ def run_job(
                     "validation": "passed",
                     "validation_results": result_values,
                     "revision": revision,
+                    "job_id": job_id,
                     "geometry_fingerprint": geometry_fingerprint,
+                    "timings_seconds": timings,
                 },
             )
             return
@@ -194,10 +289,21 @@ def run_job(
                 "status": "promoting",
                 "mode": mode,
                 "revision": revision,
+                "job_id": job_id,
                 "geometry_fingerprint": geometry_fingerprint,
+                "timings_seconds": timings,
             },
         )
+        started = perf_counter()
         promoted = promote_candidate(output_directory, formal_directory)
+        timings["promotion"] = perf_counter() - started
+        from twin_guide.guide_generation import _write_formal_artifacts_cache
+
+        formal_artifacts = BuildArtifacts(
+            formal_directory / artifacts.model_path.name,
+            tuple(formal_directory / path.name for path in artifacts.image_paths),
+        )
+        _write_formal_artifacts_cache(config, formal_artifacts)
     write_manifest(
         manifest_path,
         {
@@ -208,8 +314,11 @@ def run_job(
             "validation_results": result_values,
             "promoted_paths": [str(path) for path in promoted],
             "revision": revision,
+            "job_id": job_id,
+            "changed_feature_ids": list(changed_feature_ids),
             "geometry_fingerprint": geometry_fingerprint,
             "editor_snapshot_path": str(snapshot_path),
+            "timings_seconds": timings,
         },
     )
 
@@ -223,6 +332,8 @@ def launch_from_argv() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--revision", type=int, default=0)
+    parser.add_argument("--job-id", default="")
+    parser.add_argument("--changed-feature-id", action="append", default=[])
     parsed = parser.parse_args(arguments)
     try:
         run_job(
@@ -231,6 +342,8 @@ def launch_from_argv() -> None:
             parsed.output,
             parsed.manifest,
             parsed.revision,
+            parsed.job_id,
+            tuple(parsed.changed_feature_id),
         )
     except Exception as error:
         write_manifest(
@@ -239,6 +352,7 @@ def launch_from_argv() -> None:
                 "status": "failed",
                 "mode": parsed.mode,
                 "revision": parsed.revision,
+                "job_id": parsed.job_id,
                 "error": str(error),
                 "traceback": traceback.format_exc(),
             },
@@ -246,4 +360,59 @@ def launch_from_argv() -> None:
         raise
 
 
-__all__ = ["launch_from_argv", "run_job"]
+def _parent_is_running(parent_pid: int) -> bool:
+    """检查启动 UI 是否仍在运行。"""
+
+    try:
+        os.kill(parent_pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def serve(request_path: Path, parent_pid: int) -> None:
+    """循环消费文件式任务请求，任务之间保留 Blender 进程。"""
+
+    while _parent_is_running(parent_pid):
+        request = read_manifest(request_path)
+        if request is None:
+            time.sleep(0.1)
+            continue
+        request_path.unlink(missing_ok=True)
+        manifest_path = Path(str(request["manifest_path"]))
+        try:
+            run_job(
+                str(request["mode"]),
+                Path(str(request["config_path"])),
+                Path(str(request["output_directory"])),
+                manifest_path,
+                int(request.get("revision", 0)),
+                str(request.get("job_id", "")),
+                tuple(str(item) for item in request.get("changed_feature_ids", [])),
+            )
+        except Exception as error:
+            write_manifest(
+                manifest_path,
+                {
+                    "status": "failed",
+                    "mode": request.get("mode", ""),
+                    "revision": request.get("revision", 0),
+                    "job_id": request.get("job_id", ""),
+                    "error": str(error),
+                    "traceback": traceback.format_exc(),
+                },
+            )
+
+
+def launch_worker_from_argv() -> None:
+    """启动病例专用常驻 worker。"""
+
+    arguments = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else []
+    parser = argparse.ArgumentParser(prog="twinguide-ui-worker-server")
+    parser.add_argument("--request", type=Path, required=True)
+    parser.add_argument("--parent-pid", type=int, required=True)
+    parsed = parser.parse_args(arguments)
+    serve(parsed.request, parsed.parent_pid)
+
+
+__all__ = ["launch_from_argv", "launch_worker_from_argv", "run_job", "serve"]

@@ -40,6 +40,7 @@ from twin_guide.guide_validation import (
 )
 from twin_guide.models import GuideSleeve, TemplateFrame
 from twin_guide.sleeve_anchors import SleeveAnchorSelectionConfig, select_sleeve_anchors
+from twin_guide.sleeve_estimation.mesh_integrity import inspect_triangle_mesh
 from twin_guide.sleeve_estimation.types import SleeveEstimate
 from twin_guide.types import SleeveGenerationResult
 
@@ -116,6 +117,26 @@ class BlenderBackendTests(unittest.TestCase):
         )
         self.assertAlmostEqual(min(axial), 0.0, delta=1e-6)
         self.assertAlmostEqual(max(axial), estimate.height, delta=1e-6)
+
+    def test_reconstructed_sleeve_accepts_an_edited_total_height(self):
+        estimate = SleeveEstimate(
+            axis_origin=Vec3(-6.3477875194, 14.5231135498, 5.7193765152),
+            axis=Vec3(-0.4426520149, 0.0039038047, -0.8966849804),
+            c_opening_direction=Vec3(-0.8929016718, -0.09378444, 0.4403760703),
+            height=16.5430000408,
+            platform_height=9.8750001702,
+            closed_bore_height=4.7770001507,
+            platform_width=2.036,
+            inner_radius=1.05,
+            outer_radius=2.15,
+            inner_arc_angle=4.6239706005,
+            outer_arc_angle=3.6945827738,
+        )
+
+        sleeve = create_closed_sleeve_object(estimate, "edited_height_sleeve")
+        integrity = inspect_triangle_mesh(mesh_object_to_triangle_data(sleeve))
+
+        self.assertTrue(integrity.valid, integrity)
 
     def test_generated_sleeve_parameters_drive_q_and_wall_thickness(self):
         estimates = tuple(

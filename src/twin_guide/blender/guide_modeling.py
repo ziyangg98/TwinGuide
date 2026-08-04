@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import shutil
+import uuid
+from dataclasses import fields, is_dataclass, replace
+from enum import Enum
 from pathlib import Path
 
 import bpy
@@ -23,6 +29,7 @@ from twin_guide.blender.mesh_builders import (
     voxel_union,
 )
 from twin_guide.blender.mesh_queries import (
+    LocalAlignedSurfaceData,
     clean_mesh,
     prepare_local_aligned_surface,
     remove_excess_components,
@@ -43,7 +50,7 @@ from twin_guide.models import (
     CutoutPlan,
     WindowPurpose,
 )
-from twin_guide.point_linking import PointLinkingPlan
+from twin_guide.point_linking import PointLink, PointLinkingPlan
 from twin_guide.types import ConnectorEndpointSource
 
 GENERATED_SUFFIXES = {".png", ".stl"}
@@ -54,6 +61,193 @@ MAIN_CONNECTOR_PREFIXES = (
     "guide_component_bridge_",
     "guide_terminal_u_extension_",
 )
+
+
+def _stable_value(value: object) -> object:
+    """将主连接规划转换为稳定 JSON 值。"""
+
+    if value is None or isinstance(value, str | int | float | bool):
+        return value
+    if isinstance(value, Path):
+        return str(value.resolve())
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, dict):
+        return {str(key): _stable_value(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_stable_value(item) for item in value]
+    if is_dataclass(value) and not isinstance(value, type):
+        return {
+            field.name: _stable_value(getattr(value, field.name))
+            for field in fields(value)
+        }
+    raise TypeError(f"无法建立实体缓存指纹：{type(value).__name__}")
+
+
+def _file_identity(path: Path) -> dict[str, object]:
+    """返回参与实体缓存指纹的文件身份。"""
+
+    stat = path.stat()
+    return {
+        "path": str(path.resolve()),
+        "size": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
+    }
+
+
+def _connector_feature_cache_path(
+    case: CaseAnalysis,
+    plan: PointLinkingPlan,
+    link: PointLink,
+) -> Path:
+    """返回单根主连接梁及其端点加强的检查点路径。"""
+
+    payload = {
+        "version": "connector-feature-v1",
+        "link": _stable_value(link),
+        "radius_mm": plan.radius_mm,
+        "curve_resolution": plan.curve_resolution,
+        "connector_guide_endpoint": _stable_value(plan.connector_guide_endpoint),
+        "dental_clearance_mm": (
+            case.config.geometry.connector_dental_clearance_mm
+        ),
+        "voxel_size_mm": case.config.geometry.fusion_voxel_size_mm,
+        "template": _file_identity(case.config.inputs.template),
+        "dentition": _file_identity(case.config.inputs.patient_dentition),
+    }
+    digest = hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()
+    ).hexdigest()
+    return (
+        case.config.output_directory
+        / ".cache"
+        / "entity-preview"
+        / "connector-features"
+        / f"guide-{link.guide_index}-{link.sleeve_label}-{digest}.blend"
+    )
+
+
+def _cut_template_cache_path(
+    case: CaseAnalysis,
+    cutout_plan: CutoutPlan,
+) -> Path:
+    """返回由窗口和导孔语义决定的已切导板检查点路径。"""
+
+    payload = {
+        "version": "cut-template-v1",
+        "template": _file_identity(case.config.inputs.template),
+        "channels": _stable_value(cutout_plan.channels),
+        "windows": _stable_value(cutout_plan.windows),
+        "profile_windows": [
+            {
+                "window_ids": profile.window_ids,
+                "cutter": _file_identity(profile.cutter_mesh_path),
+            }
+            for profile in cutout_plan.profile_windows
+        ],
+    }
+    digest = hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()
+    ).hexdigest()
+    return (
+        case.config.output_directory
+        / ".cache"
+        / "entity-preview"
+        / "cut-template"
+        / f"{digest}.blend"
+    )
+
+
+def _static_cut_template_cache_path(
+    case: CaseAnalysis,
+    cutout_plan: CutoutPlan,
+) -> Path:
+    """返回不包含操作窗的静态导孔和观察窗导板检查点。"""
+
+    payload = {
+        "version": "static-cut-template-v1",
+        "template": _file_identity(case.config.inputs.template),
+        "channels": _stable_value(cutout_plan.channels),
+        "profile_windows": [
+            {
+                "window_ids": profile.window_ids,
+                "cutter": _file_identity(profile.cutter_mesh_path),
+            }
+            for profile in cutout_plan.profile_windows
+        ],
+    }
+    digest = hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()
+    ).hexdigest()
+    return (
+        case.config.output_directory
+        / ".cache"
+        / "entity-preview"
+        / "static-cut-template"
+        / f"{digest}.blend"
+    )
+
+
+def _profile_cut_template_cache_path(
+    case: CaseAnalysis,
+    cutout_plan: CutoutPlan,
+) -> Path:
+    """返回仅完成观察窗切割的导板检查点。"""
+
+    payload = {
+        "version": "profile-cut-template-v1",
+        "template": _file_identity(case.config.inputs.template),
+        "profile_windows": [
+            {
+                "window_ids": profile.window_ids,
+                "cutter": _file_identity(profile.cutter_mesh_path),
+            }
+            for profile in cutout_plan.profile_windows
+        ],
+    }
+    digest = hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()
+    ).hexdigest()
+    return (
+        case.config.output_directory
+        / ".cache"
+        / "entity-preview"
+        / "profile-cut-template"
+        / f"{digest}.blend"
+    )
+
+
+def _write_mesh_checkpoint(path: Path, mesh_object: bpy.types.Object) -> None:
+    """原子保存单个 Blender 对象及其 Mesh 数据块。"""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.stem}.{uuid.uuid4().hex}.blend")
+    bpy.data.libraries.write(str(temporary), {mesh_object}, fake_user=True)
+    os.replace(temporary, path)
+
+
+def _load_mesh_checkpoint(
+    path: Path,
+    name: str,
+    material: bpy.types.Material,
+) -> bpy.types.Object | None:
+    """从 Blender 检查点加载单个对象。"""
+
+    if not path.is_file():
+        return None
+    try:
+        with bpy.data.libraries.load(str(path), link=False) as (source, target):
+            if not source.objects:
+                return None
+            target.objects = [source.objects[0]]
+        mesh_object = target.objects[0]
+    except (OSError, RuntimeError):
+        return None
+    if mesh_object is None:
+        return None
+    bpy.context.collection.objects.link(mesh_object)
+    mesh_object.name = name
+    return assign_material(mesh_object, material)
 
 
 def _clear_generated_artifacts(output_directory: Path) -> None:
@@ -161,6 +355,65 @@ def _trim_main_connectors_against_dentition(
     return (trimmed, *other_meshes)
 
 
+def _incremental_main_connector_meshes(
+    case: CaseAnalysis,
+    plan: PointLinkingPlan,
+    template_mesh: bpy.types.Object,
+    material: bpy.types.Material,
+    *,
+    force_rebuild: bool,
+) -> tuple[tuple[bpy.types.Object, ...], bool]:
+    """按单根主连接梁检查点重建并完成牙面裁切。"""
+
+    meshes = []
+    all_cached = True
+    for link in plan.links:
+        cache_path = _connector_feature_cache_path(case, plan, link)
+        cached = (
+            None
+            if force_rebuild
+            else _load_mesh_checkpoint(
+                cache_path,
+                f"connector_guide_{link.guide_index}_{link.sleeve_label}",
+                material,
+            )
+        )
+        if cached is not None:
+            meshes.append(cached)
+            continue
+        all_cached = False
+        link_plan = replace(
+            plan,
+            links=(link,),
+            anchor_trajectories=(),
+            press_beam_links_included=False,
+            press_beam_links=(),
+            press_beam_junction=None,
+            press_beam_radius_mm=None,
+            press_beam_trajectories=(),
+            press_beam_guide_endpoint=None,
+            guide_component_bridge=None,
+            guide_terminal_u_extension=None,
+            terminal_distal_common_node=None,
+        )
+        feature_meshes = create_point_link_meshes(
+            link_plan,
+            material,
+            template_mesh,
+        )
+        trimmed = _trim_main_connectors_against_dentition(
+            feature_meshes,
+            case.input_meshes.patient_dentition_mesh,
+            case.config.geometry.connector_dental_clearance_mm,
+            case.config.geometry.fusion_voxel_size_mm,
+            material,
+        )[0]
+        trimmed.name = f"connector_guide_{link.guide_index}_{link.sleeve_label}"
+        _write_mesh_checkpoint(cache_path, trimmed)
+        meshes.append(trimmed)
+    return tuple(meshes), all_cached
+
+
 def _create_window_cutters(
     cutout_plan: CutoutPlan,
     materials: dict[str, bpy.types.Material],
@@ -189,6 +442,82 @@ def _create_profile_window_cutters(
         )
         for profile in cutout_plan.profile_windows
     )
+
+
+def _create_press_beam_meshes(
+    plan: PointLinkingPlan,
+    material: bpy.types.Material,
+    template_mesh: bpy.types.Object | None,
+    surface_data: LocalAlignedSurfaceData | None = None,
+) -> tuple[bpy.types.Object, ...]:
+    """只实体化按压梁和汇合球，供增量预览独立重建。"""
+
+    if not plan.press_beam_links:
+        return ()
+    if plan.press_beam_radius_mm is None or plan.press_beam_junction is None:
+        raise ValueError("按压梁计划缺少半径或汇合点")
+    meshes = []
+    endpoint = plan.press_beam_guide_endpoint
+    for index, link in enumerate(plan.press_beam_links, 1):
+        link_name = f"press_beam_link_{index}_{link.label}"
+        if link.source != "tooth_section_trajectory" or endpoint is None:
+            meshes.append(
+                create_centerline_tube(
+                    link_name,
+                    link.centerline,
+                    plan.press_beam_radius_mm,
+                    material,
+                    plan.curve_resolution,
+                )
+            )
+            continue
+        if template_mesh is None:
+            raise ValueError("按压梁导板端增强需要原始导板网格")
+        meshes.append(
+            create_root_tapered_centerline_tube(
+                link_name,
+                link.centerline,
+                plan.press_beam_radius_mm,
+                plan.press_beam_radius_mm * endpoint.root_radius_factor,
+                endpoint.transition_length_mm,
+                material,
+                plan.curve_resolution,
+            )
+        )
+        outward_tangent = (link.start - link.centerline[1]).normalized()
+        bulb_center = link.start + outward_tangent * endpoint.bulb_forward_offset_mm
+        bpy.ops.mesh.primitive_ico_sphere_add(
+            subdivisions=3,
+            radius=plan.press_beam_radius_mm * endpoint.bulb_radius_factor,
+            location=bulb_center.as_tuple(),
+        )
+        root_bulb = bpy.context.object
+        root_bulb.name = f"press_beam_root_bulb_{link.label}"
+        meshes.append(assign_material(root_bulb, material))
+        meshes.append(
+            create_conformal_fusion_foot(
+                f"press_beam_conformal_foot_{link.label}",
+                template_mesh,
+                link.surface_anchor,
+                link.surface_normal,
+                link.end - link.start,
+                endpoint.foot_major_radius_mm,
+                endpoint.foot_minor_radius_mm,
+                endpoint.foot_peak_height_mm,
+                endpoint.foot_embed_depth_mm,
+                material,
+                surface_data=surface_data,
+            )
+        )
+    bpy.ops.mesh.primitive_ico_sphere_add(
+        subdivisions=3,
+        radius=plan.press_beam_radius_mm * plan.press_beam_junction_radius_factor,
+        location=plan.press_beam_junction.as_tuple(),
+    )
+    junction = bpy.context.object
+    junction.name = "press_beam_y_junction"
+    meshes.append(assign_material(junction, material))
+    return tuple(meshes)
 
 
 def create_point_link_meshes(
@@ -509,75 +838,14 @@ def create_point_link_meshes(
                         surface_data=surface_data,
                     )
                 )
-    if plan.press_beam_links:
-        if plan.press_beam_radius_mm is None or plan.press_beam_junction is None:
-            raise ValueError("按压梁计划缺少半径或汇合点")
-        endpoint = plan.press_beam_guide_endpoint
-        for index, link in enumerate(plan.press_beam_links, 1):
-            link_name = f"press_beam_link_{index}_{link.label}"
-            if link.source != "tooth_section_trajectory" or endpoint is None:
-                meshes.append(
-                    create_centerline_tube(
-                        link_name,
-                        link.centerline,
-                        plan.press_beam_radius_mm,
-                        material,
-                        plan.curve_resolution,
-                    )
-                )
-                continue
-            if template_mesh is None:
-                raise ValueError("按压梁导板端增强需要原始导板网格")
-            meshes.append(
-                create_root_tapered_centerline_tube(
-                    link_name,
-                    link.centerline,
-                    plan.press_beam_radius_mm,
-                    plan.press_beam_radius_mm * endpoint.root_radius_factor,
-                    endpoint.transition_length_mm,
-                    material,
-                    plan.curve_resolution,
-                )
-            )
-            outward_tangent = (link.start - link.centerline[1]).normalized()
-            bulb_center = (
-                link.start
-                + outward_tangent * endpoint.bulb_forward_offset_mm
-            )
-            bpy.ops.mesh.primitive_ico_sphere_add(
-                subdivisions=3,
-                radius=plan.press_beam_radius_mm * endpoint.bulb_radius_factor,
-                location=bulb_center.as_tuple(),
-            )
-            root_bulb = bpy.context.object
-            root_bulb.name = f"press_beam_root_bulb_{link.label}"
-            meshes.append(assign_material(root_bulb, material))
-            meshes.append(
-                create_conformal_fusion_foot(
-                    f"press_beam_conformal_foot_{link.label}",
-                    template_mesh,
-                    link.surface_anchor,
-                    link.surface_normal,
-                    link.end - link.start,
-                    endpoint.foot_major_radius_mm,
-                    endpoint.foot_minor_radius_mm,
-                    endpoint.foot_peak_height_mm,
-                    endpoint.foot_embed_depth_mm,
-                    material,
-                    surface_data=surface_data,
-                )
-            )
-        bpy.ops.mesh.primitive_ico_sphere_add(
-            subdivisions=3,
-            radius=(
-                plan.press_beam_radius_mm
-                * plan.press_beam_junction_radius_factor
-            ),
-            location=plan.press_beam_junction.as_tuple(),
+    meshes.extend(
+        _create_press_beam_meshes(
+            plan,
+            material,
+            template_mesh,
+            surface_data,
         )
-        junction = bpy.context.object
-        junction.name = "press_beam_y_junction"
-        meshes.append(assign_material(junction, material))
+    )
     return tuple(meshes)
 
 
@@ -847,6 +1115,7 @@ def build_guide_from_links(
     handpiece_avoidance: tuple[HandpieceAvoidancePlan, ...] | None = None,
     *,
     preview: bool = False,
+    force_rebuild: bool = False,
 ) -> BuildArtifacts:
     """使用第 6 步光滑连接计划构造并导出牙科导板。
 
@@ -887,19 +1156,52 @@ def build_guide_from_links(
         materials["observation"],
     )
     window_cutters = (*analytic_window_cutters, *profile_window_cutters)
-    link_meshes = create_point_link_meshes(
-        point_links,
-        materials["connector"],
-        template_mesh,
+    connector_cache_hit = False
+    incremental_connectors = (
+        preview
+        and point_links.trim_against_dentition
+        and point_links.guide_component_bridge is None
+        and point_links.guide_terminal_u_extension is None
+        and point_links.terminal_distal_common_node is None
     )
-    if point_links.trim_against_dentition:
-        link_meshes = _trim_main_connectors_against_dentition(
-            link_meshes,
-            case.input_meshes.patient_dentition_mesh,
-            case.config.geometry.connector_dental_clearance_mm,
-            fusion_voxel_size_mm,
-            materials["connector"],
+    if incremental_connectors:
+        main_connector_meshes, connector_cache_hit = (
+            _incremental_main_connector_meshes(
+                case,
+                point_links,
+                template_mesh,
+                materials["connector"],
+                force_rebuild=force_rebuild,
+            )
         )
+        press_surface_data = (
+            prepare_local_aligned_surface(template_mesh)
+            if point_links.press_beam_guide_endpoint is not None
+            else None
+        )
+        link_meshes = (
+            *main_connector_meshes,
+            *_create_press_beam_meshes(
+                point_links,
+                materials["connector"],
+                template_mesh,
+                press_surface_data,
+            ),
+        )
+    else:
+        link_meshes = create_point_link_meshes(
+            point_links,
+            materials["connector"],
+            template_mesh,
+        )
+        if point_links.trim_against_dentition:
+            link_meshes = _trim_main_connectors_against_dentition(
+                link_meshes,
+                case.input_meshes.patient_dentition_mesh,
+                case.config.geometry.connector_dental_clearance_mm,
+                fusion_voxel_size_mm,
+                materials["connector"],
+            )
     process_image_paths = ()
     if not preview:
         sleeve_point_markers, template_point_markers = _create_link_point_markers(
@@ -910,9 +1212,95 @@ def build_guide_from_links(
                 point_links, materials["template_point"]
             )
         )
-    cut_template_mesh = subtract_cutters(
-        duplicate_mesh_object(template_mesh, "cut_template_for_build"),
-        (*channel_cutters, *window_cutters),
+    cut_template_cache_hit = False
+    static_cut_template_cache_hit = False
+    profile_cut_template_cache_hit = False
+    cut_template_cache_path = _cut_template_cache_path(case, cutout_plan)
+    cut_template_mesh = (
+        None
+        if force_rebuild or not preview
+        else _load_mesh_checkpoint(
+            cut_template_cache_path,
+            "cut_template_for_build",
+            materials["template"],
+        )
+    )
+    if cut_template_mesh is None:
+        if preview:
+            static_cache_path = _static_cut_template_cache_path(case, cutout_plan)
+            cut_template_mesh = (
+                None
+                if force_rebuild
+                else _load_mesh_checkpoint(
+                    static_cache_path,
+                    "static_cut_template_for_build",
+                    materials["template"],
+                )
+            )
+            if cut_template_mesh is None:
+                profile_cache_path = _profile_cut_template_cache_path(
+                    case,
+                    cutout_plan,
+                )
+                cut_template_mesh = (
+                    None
+                    if force_rebuild
+                    else _load_mesh_checkpoint(
+                        profile_cache_path,
+                        "profile_cut_template_for_build",
+                        materials["template"],
+                    )
+                )
+                if cut_template_mesh is None:
+                    cut_template_mesh = subtract_cutters(
+                        duplicate_mesh_object(
+                            template_mesh,
+                            "profile_cut_template_for_build",
+                        ),
+                        profile_window_cutters,
+                    )
+                    _write_mesh_checkpoint(profile_cache_path, cut_template_mesh)
+                else:
+                    profile_cut_template_cache_hit = True
+                cut_template_mesh = subtract_cutters(
+                    cut_template_mesh,
+                    channel_cutters,
+                )
+                _write_mesh_checkpoint(static_cache_path, cut_template_mesh)
+            else:
+                static_cut_template_cache_hit = True
+            if analytic_window_cutters:
+                cut_template_mesh = subtract_cutters(
+                    cut_template_mesh,
+                    analytic_window_cutters,
+                )
+        else:
+            cut_template_mesh = subtract_cutters(
+                duplicate_mesh_object(template_mesh, "cut_template_for_build"),
+                (*channel_cutters, *window_cutters),
+            )
+        if preview:
+            _write_mesh_checkpoint(cut_template_cache_path, cut_template_mesh)
+    else:
+        cut_template_cache_hit = True
+    entity_report_path = (
+        output_directory / ".cache" / "entity-preview" / "last-build.json"
+    )
+    entity_report_path.parent.mkdir(parents=True, exist_ok=True)
+    entity_report_path.write_text(
+        json.dumps(
+            {
+                "cache_hits": {
+                    "main_connectors": connector_cache_hit,
+                    "cut_template": cut_template_cache_hit,
+                    "static_cut_template": static_cut_template_cache_hit,
+                    "profile_cut_template": profile_cut_template_cache_hit,
+                }
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
     )
     if not preview:
         process_image_paths = _render_process_images(
@@ -959,6 +1347,8 @@ def build_guide_from_links(
         final_mesh = apply_manifold3d_differences(
             final_mesh,
             recut_cutters,
+            validate_inputs=not preview,
+            validate_result=not preview,
         )
         remove_excess_components(final_mesh, 1)
     else:
@@ -974,6 +1364,8 @@ def build_guide_from_links(
             (handpiece_cutter,),
             cutter_clearance_mm=avoidance.extra_clearance_mm,
             simplify_tolerance_mm=0.0,
+            validate_inputs=not preview,
+            validate_result=not preview,
         )
         remove_excess_components(final_mesh, 1)
         remove_object(handpiece_cutter)
@@ -981,7 +1373,7 @@ def build_guide_from_links(
     assign_material(final_mesh, materials["final"])
     model_path = output_directory / "twin_guide.stl"
     export_stl_mesh(model_path, final_mesh)
-    if requires_serialized_repair:
+    if requires_serialized_repair and not preview:
         # 最终网格来自体素尺寸控制的规则化；STL 序列化偶发坏边只允许
         # 在一个体素以内局部折叠，修复尺度不超过上游离散精度。
         repair_manifold3d_stl(

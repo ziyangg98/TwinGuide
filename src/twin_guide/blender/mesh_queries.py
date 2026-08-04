@@ -33,6 +33,12 @@ class LocalAlignedSurfaceData:
     normals: tuple[Vec3, ...]
 
 
+_LOCAL_SURFACE_CACHE: dict[
+    tuple[int, int, int, tuple[float, ...]],
+    LocalAlignedSurfaceData,
+] = {}
+
+
 def to_vec3(vector: Vector) -> Vec3:
     """将 Blender 向量转换为包内部向量。"""
 
@@ -50,11 +56,25 @@ def sample_mesh_surface(
 ) -> tuple[SurfaceSample, ...]:
     """按三角形面积分层，返回确定性表面样本。"""
 
+    samples, _triangles = sample_mesh_surface_and_triangles(mesh_object, limit)
+    return samples
+
+
+def sample_mesh_surface_and_triangles(
+    mesh_object: bpy.types.Object,
+    limit: int = 180_000,
+) -> tuple[
+    tuple[SurfaceSample, ...],
+    tuple[tuple[Vec3, Vec3, Vec3], ...],
+]:
+    """一次遍历同时返回确定性表面样本和世界坐标三角形。"""
+
     if limit <= 0:
         raise ValueError("limit 必须为正数")
     world_matrix = mesh_object.matrix_world
     normal_matrix = world_matrix.to_3x3().inverted_safe().transposed()
     weighted_samples: list[tuple[float, SurfaceSample]] = []
+    triangles: list[tuple[Vec3, Vec3, Vec3]] = []
     for polygon in mesh_object.data.polygons:
         vertex_indices = tuple(polygon.vertices)
         if len(vertex_indices) < 3:
@@ -64,6 +84,7 @@ def sample_mesh_surface(
         for offset in range(1, len(vertex_indices) - 1):
             second = world_matrix @ mesh_object.data.vertices[vertex_indices[offset]].co
             third = world_matrix @ mesh_object.data.vertices[vertex_indices[offset + 1]].co
+            triangles.append((to_vec3(first), to_vec3(second), to_vec3(third)))
             area = (second - first).cross(third - first).length * 0.5
             if area <= 1e-12:
                 continue
@@ -75,7 +96,7 @@ def sample_mesh_surface(
                 )
             )
     if not weighted_samples:
-        return ()
+        return (), tuple(triangles)
     cumulative: list[float] = []
     total_area = 0.0
     for area, _ in weighted_samples:
@@ -83,9 +104,17 @@ def sample_mesh_surface(
         cumulative.append(total_area)
     sample_count = min(limit, len(weighted_samples))
     targets = ((index + 0.5) * total_area / sample_count for index in range(sample_count))
-    return tuple(
-        weighted_samples[min(bisect.bisect_left(cumulative, target), len(weighted_samples) - 1)][1]
-        for target in targets
+    return (
+        tuple(
+            weighted_samples[
+                min(
+                    bisect.bisect_left(cumulative, target),
+                    len(weighted_samples) - 1,
+                )
+            ][1]
+            for target in targets
+        ),
+        tuple(triangles),
     )
 
 
@@ -171,6 +200,16 @@ def prepare_local_aligned_surface(
 ) -> LocalAlignedSurfaceData:
     """一次性准备多个局部贴合脚共用的导板网格数据。"""
 
+    cache_key = (
+        mesh_object.data.as_pointer(),
+        len(mesh_object.data.vertices),
+        len(mesh_object.data.polygons),
+        tuple(value for row in mesh_object.matrix_world for value in row),
+    )
+    cached = _LOCAL_SURFACE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     dependency_graph = bpy.context.evaluated_depsgraph_get()
     evaluated = mesh_object.evaluated_get(dependency_graph)
     mesh = evaluated.to_mesh()
@@ -192,12 +231,14 @@ def prepare_local_aligned_surface(
         centers.append(to_vec3(center))
         normals.append(to_vec3(normal_matrix @ polygon.normal).normalized())
     evaluated.to_mesh_clear()
-    return LocalAlignedSurfaceData(
+    result = LocalAlignedSurfaceData(
         vertices,
         tuple(polygons),
         tuple(centers),
         tuple(normals),
     )
+    _LOCAL_SURFACE_CACHE[cache_key] = result
+    return result
 
 
 def build_local_aligned_bvh(

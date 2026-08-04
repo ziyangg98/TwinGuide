@@ -114,6 +114,8 @@ class GenerationProcessResult:
 
     context: GenerationContext
     stages: tuple[StageResult, ...] = field(default_factory=tuple)
+    timings_seconds: dict[str, float] = field(default_factory=dict)
+    cache_hits: tuple[str, ...] = field(default_factory=tuple)
 
     def stage(self, number: int) -> StageResult:
         """按从 1 开始的阶段编号返回运行结果。"""

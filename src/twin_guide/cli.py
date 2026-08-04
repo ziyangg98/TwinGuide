@@ -39,12 +39,22 @@ def _parser() -> argparse.ArgumentParser:
         help="生成后立即运行同一配置的最终 STL 验证",
     )
     generate_command.add_argument(
+        "--force",
+        action="store_true",
+        help="忽略计算缓存并完整重建",
+    )
+    generate_command.add_argument(
         "--allow-unreviewed",
         action="store_true",
         help="允许生成 case.yaml 中仍明确标记为待审核的病例",
     )
     process_command = commands.add_parser("process", help="运行已实现的生成阶段")
     process_command.add_argument("--config", required=True, type=Path)
+    process_command.add_argument(
+        "--force",
+        action="store_true",
+        help="忽略计算缓存并完整重建",
+    )
     validate_command = commands.add_parser("validate", help="检查已导出的牙科导板 STL")
     validate_command.add_argument("--config", required=True, type=Path)
     validate_command.add_argument("--model", required=True, type=Path)
@@ -72,7 +82,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             config = replace(config, output_directory=arguments.output.resolve())
         if not arguments.allow_unreviewed:
             require_production_review(config)
-        artifacts = generate_guide(config)
+        artifacts = generate_guide(config, force_rebuild=arguments.force)
         print(f"MODEL {artifacts.model_path}")
         for image_path in artifacts.image_paths:
             print(f"IMAGE {image_path}")
@@ -89,7 +99,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     if arguments.command == "process":
         from twin_guide import run_generation_process
 
-        result = run_generation_process(config)
+        result = run_generation_process(config, force_rebuild=arguments.force)
         for stage in result.stages:
             print(
                 f"STAGE {stage.definition.number} {stage.status.value} "

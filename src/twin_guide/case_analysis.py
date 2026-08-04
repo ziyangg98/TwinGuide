@@ -2,18 +2,19 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
-from dataclasses import replace
+from dataclasses import asdict, dataclass, replace
 
 import bpy
 
 from twin_guide.blender.mesh_queries import (
     mesh_bounds,
-    mesh_triangles,
     sample_mesh_surface,
+    sample_mesh_surface_and_triangles,
     separate_connected_components,
 )
-from twin_guide.blender.scene import clear_scene, duplicate_mesh_object
+from twin_guide.blender.scene import clear_scene, duplicate_mesh_object, remove_object
 from twin_guide.blender.sleeve_estimation_adapter import mesh_object_to_triangle_data
 from twin_guide.blender.stl_io import import_stl_mesh
 from twin_guide.config import CaseConfig, case_occlusal_axis
@@ -36,6 +37,82 @@ from twin_guide.sleeve_generation import (
     SleeveGenerationInputs,
     recognize_and_build_sleeves,
 )
+
+
+@dataclass(slots=True)
+class _CaseCache:
+    """常驻 worker 内复用的只读病例网格与识别结果。"""
+
+    fingerprint: str
+    case: CaseAnalysis
+    assembly_components: tuple[tuple[bpy.types.Object, ...], ...]
+
+
+_CASE_CACHE: _CaseCache | None = None
+
+
+def _case_fingerprint(config: CaseConfig) -> str:
+    """计算不包含图形微调值的病例分析指纹。"""
+
+    digest = hashlib.sha256(
+        json.dumps(
+            {
+                "jaw": config.jaw.value,
+                "sleeve": asdict(config.sleeve),
+                "occlusal_axis": case_occlusal_axis(config),
+            },
+            sort_keys=True,
+        ).encode()
+    )
+    for path in (
+        config.inputs.template,
+        *config.inputs.guide_sleeve_assemblies,
+        config.inputs.patient_dentition,
+    ):
+        stat = path.stat()
+        digest.update(str(path.resolve()).encode())
+        digest.update(f"{stat.st_size}:{stat.st_mtime_ns}".encode())
+    return digest.hexdigest()
+
+
+def _case_with_overrides(
+    cached: _CaseCache,
+    config: CaseConfig,
+) -> CaseAnalysis:
+    """复用静态病例分析，并应用当前导柱高度覆盖值。"""
+
+    base = cached.case
+    guides = tuple(
+        _apply_sleeve_editor_override(config, guide)
+        for guide in base.guide_sleeves
+    )
+    operation_features = []
+    offset = 0
+    for components in cached.assembly_components:
+        pair = guides[offset : offset + 2]
+        operation_features.append(_measure_operation_feature(components, pair))
+        offset += len(pair)
+    return replace(
+        base,
+        config=config,
+        guide_sleeves=guides,
+        operation_features=tuple(operation_features),
+    )
+
+
+def _clear_generated_scene_objects(cached: _CaseCache) -> None:
+    """保留病例源网格和分量，删除上一次实体任务的临时对象。"""
+
+    case = cached.case
+    preserved = {
+        case.input_meshes.template_mesh,
+        *case.input_meshes.guide_sleeve_assembly_meshes,
+        case.input_meshes.patient_dentition_mesh,
+        *(item for group in cached.assembly_components for item in group),
+    }
+    for mesh_object in tuple(bpy.context.scene.objects):
+        if mesh_object not in preserved:
+            remove_object(mesh_object)
 
 
 def _apply_sleeve_editor_override(
@@ -75,11 +152,13 @@ def _load_generation_meshes(config: CaseConfig) -> GenerationMeshes:
 
 
 def _template_center(
-    template_mesh: bpy.types.Object, template_samples: tuple[SurfaceSample, ...]
+    template_mesh: bpy.types.Object,
+    template_samples: tuple[SurfaceSample, ...],
+    template_triangles: tuple[tuple[Vec3, Vec3, Vec3], ...],
 ) -> Vec3:
     """优先使用体积重心，重心异常时退化为表面样本均值。"""
 
-    center = volume_centroid(mesh_triangles(template_mesh))
+    center = volume_centroid(template_triangles)
     lower, upper = mesh_bounds(template_mesh)
     inside_bounds = all(
         minimum - 1e-5 <= coordinate <= maximum + 1e-5
@@ -133,23 +212,39 @@ def _measure_operation_feature(
     return OperationFeature(center, diameter_mm)
 
 
-def analyze_case(config: CaseConfig) -> CaseAnalysis:
+def analyze_case(config: CaseConfig, *, force_rebuild: bool = False) -> CaseAnalysis:
     """读取病例网格，并计算后续阶段共用的几何数据。"""
 
+    global _CASE_CACHE
+    fingerprint = _case_fingerprint(config)
+    if (
+        not force_rebuild
+        and _CASE_CACHE is not None
+        and _CASE_CACHE.fingerprint == fingerprint
+    ):
+        _clear_generated_scene_objects(_CASE_CACHE)
+        return _case_with_overrides(_CASE_CACHE, config)
     clear_scene()
     input_meshes = _load_generation_meshes(config)
-    template_samples = sample_mesh_surface(input_meshes.template_mesh)
+    template_samples, template_triangles = sample_mesh_surface_and_triangles(
+        input_meshes.template_mesh
+    )
     if not template_samples:
         raise GeometryError("牙科导板网格不存在可采样表面")
     dentition_samples = sample_mesh_surface(input_meshes.patient_dentition_mesh)
     if not dentition_samples:
         raise GeometryError("患者牙列网格不存在可采样表面")
-    center = _template_center(input_meshes.template_mesh, template_samples)
+    center = _template_center(
+        input_meshes.template_mesh,
+        template_samples,
+        template_triangles,
+    )
     raw_occlusal_axis = case_occlusal_axis(config)
     occlusal_axis = (
         None if raw_occlusal_axis is None else Vec3(*raw_occlusal_axis).normalized()
     )
     all_components = []
+    assembly_components = []
     all_guides = []
     operation_features = []
     template_frame = None
@@ -162,6 +257,7 @@ def analyze_case(config: CaseConfig) -> CaseAnalysis:
             f"guide_sleeve_assembly_components_{assembly_index:02d}",
         )
         components = separate_connected_components(assembly_working_mesh)
+        assembly_components.append(components)
         all_components.extend(components)
         source_path = config.inputs.guide_sleeve_assemblies[assembly_index - 1]
         source_stat = source_path.stat()
@@ -185,7 +281,9 @@ def analyze_case(config: CaseConfig) -> CaseAnalysis:
                 jaw=config.jaw,
                 occlusal_axis=occlusal_axis,
                 candidate_cache_path=(
-                    config.output_directory
+                    None
+                    if force_rebuild
+                    else config.output_directory
                     / ".cache"
                     / "stage-01-sleeve-reconstruction"
                     / f"assembly-{assembly_index:02d}-candidates.json"
@@ -194,27 +292,35 @@ def analyze_case(config: CaseConfig) -> CaseAnalysis:
             )
         )
         offset = len(all_guides)
-        pair = tuple(
-            _apply_sleeve_editor_override(
-                config,
-                replace(guide, guide_index=offset + local_index),
-            )
+        base_pair = tuple(
+            replace(guide, guide_index=offset + local_index)
             for local_index, guide in enumerate(sleeve_generation.sleeves, 1)
+        )
+        pair = tuple(
+            _apply_sleeve_editor_override(config, guide) for guide in base_pair
         )
         if template_frame is None:
             template_frame = sleeve_generation.template_frame
-        all_guides.extend(pair)
+        all_guides.extend(base_pair)
         operation_features.append(_measure_operation_feature(components, pair))
     if template_frame is None:
         raise GeometryError("病例没有可识别的导管装配体")
-    selected_guides = tuple(all_guides)
-    return CaseAnalysis(
+    base_case = CaseAnalysis(
         config=config,
         input_meshes=input_meshes,
-        guide_sleeves=selected_guides,
-        retained_accessory_meshes=_select_accessory_meshes(tuple(all_components), selected_guides),
-        operation_features=tuple(operation_features),
+        guide_sleeves=tuple(all_guides),
+        retained_accessory_meshes=_select_accessory_meshes(
+            tuple(all_components),
+            tuple(all_guides),
+        ),
+        operation_features=(),
         template_frame=template_frame,
         template_samples=template_samples,
         dentition_samples=dentition_samples,
     )
+    _CASE_CACHE = _CaseCache(
+        fingerprint,
+        base_case,
+        tuple(assembly_components),
+    )
+    return _case_with_overrides(_CASE_CACHE, config)

@@ -134,6 +134,7 @@ def plan_window_cutouts(
     *,
     require_observation_qa: bool = True,
     include_observation_window_geometry: bool = True,
+    force_rebuild: bool = False,
 ) -> CutoutPlan:
     """生成导孔、操作窗和观察缺口计划。
 
@@ -172,6 +173,8 @@ def plan_window_cutouts(
                 case.config,
                 tooth_identification,
                 require_qa=require_observation_qa,
+                regenerate=force_rebuild,
+                fast_preview=not require_observation_qa,
             ),
         )
     )

@@ -1,9 +1,16 @@
 import unittest
+from dataclasses import replace
 
 from twin_guide.config import ConnectorAvoidanceOverride
+from twin_guide.generation_process import _reuse_numerically_unchanged_links
 from twin_guide.geometry import Vec3
 from twin_guide.models import GuideSleeve, TemplateFrame
-from twin_guide.point_linking import PointLinkingConfig, link_selected_points
+from twin_guide.point_linking import (
+    PointLink,
+    PointLinkingConfig,
+    PointLinkingPlan,
+    link_selected_points,
+)
 from twin_guide.press_beam_points import (
     InnerSleeveScore,
     PressBeamGuideAnchor,
@@ -473,6 +480,35 @@ class PointLinkingTests(unittest.TestCase):
         self.assertEqual(plan.press_beam_junction, junction)
         self.assertEqual(plan.press_beam_radius_mm, 1.2)
         self.assertTrue(all(link.end == junction for link in plan.press_beam_links))
+
+    def test_sub_resolution_link_noise_reuses_the_existing_feature(self):
+        zero = Vec3(0.0, 0.0, 0.0)
+        old_link = PointLink(
+            1,
+            "lower",
+            zero,
+            zero,
+            Vec3(0.0, 0.0, 1.0),
+            Vec3(0.0, 0.0, 1.0),
+            zero,
+            Vec3(1.0, 0.0, 0.0),
+            Vec3(2.0, 0.0, 0.0),
+            (zero, Vec3(1.0, 0.0, 0.0), Vec3(2.0, 0.0, 0.0)),
+            1,
+        )
+        old_plan = PointLinkingPlan((old_link,), 2.3, 32, True)
+        noisy_link = replace(
+            old_link,
+            centerline=tuple(
+                Vec3(point.x + 1e-5, point.y, point.z)
+                for point in old_link.centerline
+            ),
+        )
+        current = replace(old_plan, links=(noisy_link,))
+
+        stabilized = _reuse_numerically_unchanged_links(current, old_plan)
+
+        self.assertIs(stabilized.links[0], old_link)
 
 
 if __name__ == "__main__":

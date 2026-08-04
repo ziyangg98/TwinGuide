@@ -17,11 +17,43 @@ from twin_guide.ui_jobs import (
     BackgroundJob,
     promote_candidate,
     read_manifest,
+    start_background_job,
     write_manifest,
 )
 
 
 class UiJobTests(unittest.TestCase):
+    def test_background_jobs_reuse_case_worker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = SimpleNamespace(output_directory=root / "formal")
+            process = Mock()
+            process.poll.return_value = None
+            with patch(
+                "twin_guide.ui_jobs.CaseConfig.from_yaml",
+                return_value=config,
+            ), patch(
+                "twin_guide.ui_jobs.subprocess.Popen",
+                return_value=process,
+            ) as popen, patch(
+                "twin_guide.ui_jobs._WORKER_PROCESS",
+                None,
+            ), patch(
+                "twin_guide.ui_jobs._WORKER_REQUEST_PATH",
+                None,
+            ):
+                for revision in (1, 2):
+                    start_background_job(
+                        blender_binary=Path("/Applications/Blender"),
+                        mode="preview",
+                        config_path=root / "case.yaml",
+                        output_directory=root / "preview",
+                        manifest_path=root / "preview" / "task.json",
+                        revision=revision,
+                    )
+
+            popen.assert_called_once()
+
     def test_ui_jobs_reuse_missing_stage_caches(self):
         with tempfile.TemporaryDirectory() as directory:
             formal = Path(directory) / "formal"
@@ -262,7 +294,7 @@ class UiJobTests(unittest.TestCase):
                 job_config.output_directory.mkdir(parents=True, exist_ok=True)
                 model = job_config.output_directory / "twin_guide.stl"
                 model.write_text("verified", encoding="utf-8")
-                return SimpleNamespace(model_path=model), SimpleNamespace(
+                return SimpleNamespace(model_path=model, image_paths=()), SimpleNamespace(
                     context=object()
                 )
 
@@ -292,7 +324,9 @@ class UiJobTests(unittest.TestCase):
             ), patch(
                 "twin_guide.blender_ui_worker._validate",
                 return_value=(passed,),
-            ):
+            ), patch(
+                "twin_guide.guide_generation._write_formal_artifacts_cache"
+            ) as write_cache:
                 run_job(
                     "final",
                     root / "case.yaml",
@@ -300,6 +334,9 @@ class UiJobTests(unittest.TestCase):
                     candidate / "task.json",
                     revision=8,
                 )
+
+            cached_artifacts = write_cache.call_args.args[1]
+            self.assertEqual(cached_artifacts.model_path, formal / "twin_guide.stl")
 
             manifest = read_manifest(candidate / "task.json")
             assert manifest is not None
@@ -430,16 +467,13 @@ class UiJobTests(unittest.TestCase):
             write_plan.assert_called_once()
             self.assertEqual(write_plan.call_args.args[0], "context")
             generate.assert_not_called()
-            self.assertEqual(
-                read_manifest(manifest),
-                {
-                    "status": "completed",
-                    "mode": "plan",
-                    "revision": 7,
-                    "plan_path": str(plan_path),
-                    "geometry_fingerprint": "geometry-7",
-                },
-            )
+            result = read_manifest(manifest)
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(result["mode"], "plan")
+            self.assertEqual(result["revision"], 7)
+            self.assertEqual(result["plan_path"], str(plan_path))
+            self.assertEqual(result["geometry_fingerprint"], "geometry-7")
+            self.assertIn("planning_total", result["timings_seconds"])
 
 
 if __name__ == "__main__":

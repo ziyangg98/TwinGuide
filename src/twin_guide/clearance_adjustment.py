@@ -173,6 +173,8 @@ def _cached_plan(
     fingerprint: dict[str, object],
     avoidance_id: str,
     extra_clearance_mm: float,
+    *,
+    validate_mesh: bool,
 ) -> HandpieceAvoidancePlan | None:
     """校验缓存报告与包络并返回可复用计划。"""
 
@@ -183,8 +185,10 @@ def _cached_plan(
         if report.get("fingerprint") != fingerprint:
             return None
         motion = report["motion_model"]
-        envelope = _load_mesh(envelope_path)
-        if not envelope.is_volume:
+        envelope = report["envelope"]
+        if not envelope.get("is_closed_volume"):
+            return None
+        if validate_mesh and not _load_mesh(envelope_path).is_volume:
             return None
         return HandpieceAvoidancePlan(
             avoidance_id=avoidance_id,
@@ -207,6 +211,9 @@ def _adjust_single_handpiece(
     context: GenerationContext,
     parameters: HandpieceAvoidanceParameters,
     output_directory: Path,
+    *,
+    validate_cached_geometry: bool,
+    force_rebuild: bool,
 ) -> HandpieceAvoidancePlan:
     """为一个已配置手机生成或复用当前深度左右摆动包络。"""
 
@@ -217,13 +224,16 @@ def _adjust_single_handpiece(
     envelope_path = output_directory / "handpiece_current_depth_lr_sweep_envelope.ply"
     report_path = output_directory / "handpiece_avoidance.json"
     fingerprint = _fingerprint(parameters)
-    cached = _cached_plan(
-        envelope_path,
-        report_path,
-        fingerprint,
-        parameters.avoidance_id,
-        parameters.extra_clearance_mm,
-    )
+    cached = None
+    if not force_rebuild:
+        cached = _cached_plan(
+            envelope_path,
+            report_path,
+            fingerprint,
+            parameters.avoidance_id,
+            parameters.extra_clearance_mm,
+            validate_mesh=validate_cached_geometry,
+        )
     if cached is not None:
         return cached
 
@@ -357,7 +367,12 @@ def _adjust_single_handpiece(
     )
 
 
-def adjust_clearance(context: GenerationContext) -> tuple[HandpieceAvoidancePlan, ...]:
+def adjust_clearance(
+    context: GenerationContext,
+    *,
+    validate_cached_geometry: bool = True,
+    force_rebuild: bool = False,
+) -> tuple[HandpieceAvoidancePlan, ...]:
     """生成或复用所有手机当前深度 ``-θ`` 至 ``+θ`` 左右摆动包络。
 
     旋转轴和枢轴分别取止挡报告的双导管轴与两片匹配手机止挡面的
@@ -384,6 +399,8 @@ def adjust_clearance(context: GenerationContext) -> tuple[HandpieceAvoidancePlan
             context,
             item,
             root / "handpieces" / item.avoidance_id,
+            validate_cached_geometry=validate_cached_geometry,
+            force_rebuild=force_rebuild,
         )
         for item in parameters
     )

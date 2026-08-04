@@ -56,7 +56,10 @@ class EditorPlanTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             config_path = root / "case.yaml"
-            config_path.write_text("first formatting", encoding="utf-8")
+            config_path.write_text(
+                "case: {id: demo}\nreview: {status: first}\n",
+                encoding="utf-8",
+            )
             paths = [root / name for name in ("template.stl", "sleeve.stl", "teeth.stl")]
             for path in paths:
                 path.write_bytes(b"mesh")
@@ -76,7 +79,10 @@ class EditorPlanTests(unittest.TestCase):
             )
 
             first_value = editor_plan_fingerprint(first, config_path)
-            config_path.write_text("different formatting", encoding="utf-8")
+            config_path.write_text(
+                "case: {id: demo}\nreview: {status: second}\n",
+                encoding="utf-8",
+            )
 
             self.assertEqual(
                 first_value,

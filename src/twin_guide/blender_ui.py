@@ -60,7 +60,7 @@ from twin_guide.editor_plan import (
     editor_plan_fingerprint,
     editor_snapshot_matches,
 )
-from twin_guide.editor_session import EditorSession
+from twin_guide.editor_session import EditorSession, changed_feature_ids
 from twin_guide.ui_jobs import (
     BackgroundJob,
     candidate_directory,
@@ -83,6 +83,7 @@ _SELECTION_SYNC = False
 _LAST_ACTIVE_NAME = ""
 _FEATURE_VALUE_SYNC = False
 _EDITOR_PLAN_STALE = False
+_LAST_PREVIEW_OVERRIDES = EditorOverrides()
 
 
 def _working_overrides() -> EditorOverrides:
@@ -1707,7 +1708,7 @@ def _commit_pending_edit() -> None:
 def _reuse_matching_preview() -> bool:
     """当前参数已有实体预览时直接加载，不重复启动生成进程。"""
 
-    global _EDITOR_PLAN_PATH, _EDITOR_PLAN_VALUE
+    global _EDITOR_PLAN_PATH, _EDITOR_PLAN_VALUE, _LAST_PREVIEW_OVERRIDES
     assert _CONFIG is not None
     assert _SESSION is not None
     working_config = replace(
@@ -1735,6 +1736,7 @@ def _reuse_matching_preview() -> bool:
     state = bpy.context.scene.twin_guide_state
     state.task_status = "已复用现有预览"
     state.preview_status = f"预览已是当前版本（版本 {_SESSION.revision}）"
+    _LAST_PREVIEW_OVERRIDES = _SESSION.working_overrides
     return True
 
 
@@ -1751,6 +1753,11 @@ def _start_job(mode: str) -> None:
     if mode == "preview" and _reuse_matching_preview():
         return
     overrides = _SESSION.working_overrides
+    changed_ids = (
+        changed_feature_ids(_LAST_PREVIEW_OVERRIDES, overrides)
+        if mode == "preview"
+        else ()
+    )
     _JOB_CONFIG_PATH = _temporary_job_config(overrides)
     if mode == "plan":
         output = plan_directory(_CONFIG)
@@ -1766,6 +1773,7 @@ def _start_job(mode: str) -> None:
         output_directory=output,
         manifest_path=manifest,
         revision=0 if _SESSION is None else _SESSION.revision,
+        changed_feature_ids=changed_ids,
     )
     state = bpy.context.scene.twin_guide_state
     state.task_status = "正在刷新编辑数据" if mode == "plan" else "生成中"
@@ -1778,6 +1786,7 @@ def _start_job(mode: str) -> None:
 def _poll_job() -> float:
     """轮询后台状态并自动替换已完成预览。"""
     global _EDITOR_PLAN_PATH, _EDITOR_PLAN_STALE, _EDITOR_PLAN_VALUE
+    global _LAST_PREVIEW_OVERRIDES
     global _JOB, _JOB_CONFIG_PATH
     if _JOB is None:
         return 0.5
@@ -1844,6 +1853,7 @@ def _poll_job() -> float:
                 _create_controls()
                 _show_model_view()
                 state.preview_status = f"预览已更新（版本 {revision}）"
+                _LAST_PREVIEW_OVERRIDES = _SESSION.working_overrides
         elif model_path.is_file():
             state.preview_status = "预览缺少编辑快照，仍显示上一版"
     if _JOB.mode == "final":
@@ -2857,7 +2867,7 @@ def unregister() -> None:
 def launch_from_argv() -> None:
     """从命令行自动加载病例、模型和控制点。"""
     global _CONFIG, _EDITOR_PLAN_PATH, _EDITOR_PLAN_STALE, _EDITOR_PLAN_VALUE
-    global _SESSION
+    global _LAST_PREVIEW_OVERRIDES, _SESSION
     arguments = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else []
     parser = argparse.ArgumentParser(prog="twinguide ui")
     parser.add_argument("--config", required=True, type=Path)
@@ -2866,6 +2876,7 @@ def launch_from_argv() -> None:
         bpy.data.objects.remove(object_, do_unlink=True)
     _CONFIG = CaseConfig.from_yaml(parsed.config.resolve())
     _SESSION = EditorSession.create(_CONFIG.editor_overrides)
+    _LAST_PREVIEW_OVERRIDES = _CONFIG.editor_overrides
     _EDITOR_PLAN_STALE = False
     register()
     configure_workspace()

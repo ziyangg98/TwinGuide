@@ -64,5 +64,19 @@ class CommandLineTests(unittest.TestCase):
         )
         self.assertEqual(set(subparsers_action.choices), {"generate", "process", "validate"})
 
+    def test_generate_and_process_accept_force_rebuild(self) -> None:
+        """正式生成和阶段规划均可显式忽略缓存。"""
+
+        parser = _parser()
+
+        generate = parser.parse_args(
+            ["generate", "--config", "case.yaml", "--force"]
+        )
+        process = parser.parse_args(
+            ["process", "--config", "case.yaml", "--force"]
+        )
+        self.assertTrue(generate.force)
+        self.assertTrue(process.force)
+
 if __name__ == "__main__":
     unittest.main()

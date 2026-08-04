@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from twin_guide.config import CaseConfig
+from twin_guide.config.loading import load_case_yaml
 from twin_guide.ui_jobs import write_manifest
 
 if TYPE_CHECKING:
@@ -47,6 +48,9 @@ def _semantic_config(config: CaseConfig, *, include_overrides: bool) -> bytes:
     if is_dataclass(config):
         value = asdict(config)
         value.pop("output_directory", None)
+        value["tooth_identification"] = {
+            "enabled": getattr(config, "tooth_identification", None) is not None
+        }
         if not include_overrides:
             value.pop("editor_overrides", None)
         return json.dumps(
@@ -69,17 +73,36 @@ def _dependency_paths(config: CaseConfig) -> tuple[Path, ...]:
         *inputs.guide_sleeve_assemblies,
         inputs.patient_dentition,
     ]
-    tooth_inputs = getattr(config, "tooth_identification", None)
-    tooth_case = None if tooth_inputs is None else tooth_inputs.case_yaml
-    if tooth_case is not None:
-        paths.append(tooth_case)
     return tuple(paths)
 
 
-def _fingerprint(config: CaseConfig, *, include_overrides: bool) -> str:
+def _case_semantics(config_path: Path | None) -> bytes:
+    """读取病例 YAML 中不含审核和编辑覆盖值的稳定语义。"""
+
+    if config_path is None:
+        return b""
+    value = load_case_yaml(config_path)
+    if not isinstance(value, dict):
+        raise ValueError("病例 YAML 根值必须为对象")
+    value.pop("editor_overrides", None)
+    value.pop("review", None)
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+    ).encode()
+
+
+def _fingerprint(
+    config: CaseConfig,
+    config_path: Path | None,
+    *,
+    include_overrides: bool,
+) -> str:
     """计算结构或当前工作几何的依赖指纹。"""
 
     digest = hashlib.sha256(_semantic_config(config, include_overrides=include_overrides))
+    digest.update(_case_semantics(config_path))
     for path in _dependency_paths(config):
         stat = path.stat()
         digest.update(str(path.resolve()).encode())
@@ -90,7 +113,7 @@ def _fingerprint(config: CaseConfig, *, include_overrides: bool) -> str:
 def editor_plan_fingerprint(config: CaseConfig, _config_path: Path | None = None) -> str:
     """计算不受图形微调值影响的编辑结构指纹。"""
 
-    return _fingerprint(config, include_overrides=False)
+    return _fingerprint(config, _config_path, include_overrides=False)
 
 
 def editor_geometry_fingerprint(
@@ -99,7 +122,7 @@ def editor_geometry_fingerprint(
 ) -> str:
     """计算包含当前微调值的显示几何指纹。"""
 
-    return _fingerprint(config, include_overrides=True)
+    return _fingerprint(config, _config_path, include_overrides=True)
 
 
 def _operation_features(context: GenerationContext) -> list[dict[str, object]]:

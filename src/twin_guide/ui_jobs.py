@@ -13,6 +13,9 @@ from pathlib import Path
 
 from twin_guide.config import CaseConfig
 
+_WORKER_PROCESS: subprocess.Popen[str] | None = None
+_WORKER_REQUEST_PATH: Path | None = None
+
 
 def write_manifest(path: Path, value: dict[str, object]) -> None:
     """原子写入供前台轮询的任务状态。"""
@@ -106,6 +109,7 @@ class BackgroundJob:
             write_manifest(
                 self.manifest_path,
                 {
+                    **manifest,
                     "status": "cancel_requested",
                     "mode": self.mode,
                     "revision": self.revision,
@@ -122,6 +126,7 @@ class BackgroundJob:
         write_manifest(
             self.manifest_path,
             {
+                **manifest,
                 "status": "cancelled",
                 "mode": self.mode,
                 "revision": self.revision,
@@ -138,43 +143,70 @@ def start_background_job(
     output_directory: Path,
     manifest_path: Path,
     revision: int = 0,
+    changed_feature_ids: tuple[str, ...] = (),
 ) -> BackgroundJob:
-    """在独立 Blender 中启动实体生成，主界面不承担布尔运算。"""
+    """把任务交给病例专用的常驻 Blender worker。"""
 
+    global _WORKER_PROCESS, _WORKER_REQUEST_PATH
     expression = (
-        "from twin_guide.blender_ui_worker import launch_from_argv; "
-        "launch_from_argv()"
+        "from twin_guide.blender_ui_worker import launch_worker_from_argv; "
+        "launch_worker_from_argv()"
     )
-    command = [
-        str(blender_binary),
-        "--background",
-        "--factory-startup",
-        "--python-use-system-env",
-        "--python-expr",
-        expression,
-        "--",
-        "--mode",
-        mode,
-        "--config",
-        str(config_path),
-        "--output",
-        str(output_directory),
-        "--manifest",
-        str(manifest_path),
-        "--revision",
-        str(revision),
-    ]
+    worker_root = (
+        CaseConfig.from_yaml(config_path).output_directory / ".cache" / "ui-worker"
+    )
+    request_path = worker_root / "request.json"
+    if (
+        _WORKER_PROCESS is None
+        or _WORKER_PROCESS.poll() is not None
+        or request_path != _WORKER_REQUEST_PATH
+    ):
+        worker_root.mkdir(parents=True, exist_ok=True)
+        request_path.unlink(missing_ok=True)
+        command = [
+            str(blender_binary),
+            "--background",
+            "--factory-startup",
+            "--python-use-system-env",
+            "--python-expr",
+            expression,
+            "--",
+            "--request",
+            str(request_path),
+            "--parent-pid",
+            str(os.getpid()),
+        ]
+        _WORKER_PROCESS = subprocess.Popen(
+            command,
+            text=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        _WORKER_REQUEST_PATH = request_path
+    job_id = uuid.uuid4().hex
     write_manifest(
         manifest_path,
-        {"status": "starting", "mode": mode, "revision": revision},
+        {
+            "status": "starting",
+            "mode": mode,
+            "revision": revision,
+            "job_id": job_id,
+            "changed_feature_ids": list(changed_feature_ids),
+        },
     )
-    process = subprocess.Popen(
-        command,
-        text=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+    write_manifest(
+        request_path,
+        {
+            "job_id": job_id,
+            "mode": mode,
+            "config_path": str(config_path),
+            "output_directory": str(output_directory),
+            "manifest_path": str(manifest_path),
+            "revision": revision,
+            "changed_feature_ids": list(changed_feature_ids),
+        },
     )
-    return BackgroundJob(mode, process, manifest_path, revision)
+    return BackgroundJob(mode, _WORKER_PROCESS, manifest_path, revision)
 
 
 def preview_directory(config: CaseConfig) -> Path:

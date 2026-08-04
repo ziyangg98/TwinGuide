@@ -29,12 +29,18 @@ def _to_trimesh(
 ) -> trimesh.Trimesh:
     """将 Blender 对象转换为 Trimesh，并可为 cutter 保留索引拓扑。"""
 
+    import numpy as np
     import trimesh
 
     mesh_object.data.calc_loop_triangles()
-    world_matrix = mesh_object.matrix_world
-    vertices = [tuple(world_matrix @ vertex.co) for vertex in mesh_object.data.vertices]
-    faces = [tuple(triangle.vertices) for triangle in mesh_object.data.loop_triangles]
+    vertices = np.empty(len(mesh_object.data.vertices) * 3, dtype=np.float32)
+    mesh_object.data.vertices.foreach_get("co", vertices)
+    vertices = vertices.reshape((-1, 3)).astype(np.float64, copy=False)
+    world_matrix = np.asarray(mesh_object.matrix_world, dtype=np.float64)
+    vertices = vertices @ world_matrix[:3, :3].T + world_matrix[:3, 3]
+    faces = np.empty(len(mesh_object.data.loop_triangles) * 3, dtype=np.int32)
+    mesh_object.data.loop_triangles.foreach_get("vertices", faces)
+    faces = faces.reshape((-1, 3))
     return trimesh.Trimesh(vertices=vertices, faces=faces, process=process)
 
 
@@ -210,6 +216,8 @@ def apply_manifold3d_differences(
     *,
     cutter_clearance_mm: float = MANIFOLD_CUTTER_CLEARANCE_MM,
     simplify_tolerance_mm: float = MANIFOLD_SIMPLIFY_TOLERANCE_MM,
+    validate_inputs: bool = True,
+    validate_result: bool = True,
 ) -> bpy.types.Object:
     """在一次 manifold 会话中连续扣除多个 cutter。
 
@@ -232,10 +240,10 @@ def apply_manifold3d_differences(
         # 原样复用这些索引；process=True 可能把仅在边界接触的闭合壳层
         # 合并成非流形公共边，反而使下一次连续差集误判目标无效。
         target = _to_trimesh(target_mesh, process=False)
-        if not target.is_volume:
+        if validate_inputs and not target.is_volume:
             # 对来自普通 Blender/体素对象且尚未焊接的输入保留旧的整理回退。
             target = _to_trimesh(target_mesh, process=True)
-        if not target.is_volume:
+        if validate_inputs and not target.is_volume:
             raise ValueError("参与差集的目标网格不是封闭有效体")
         result_manifold = Manifold(
             mesh=Mesh(
@@ -247,7 +255,7 @@ def apply_manifold3d_differences(
             # 轴扫掠 cutter 可能由多个仅在边界接触的闭合体组成。PLY 中的
             # 独立索引使其整体有效；合并同坐标顶点反而会制造非流形公共边。
             cutter = _to_trimesh(cutter_mesh, process=False)
-            if not cutter.is_volume:
+            if validate_inputs and not cutter.is_volume:
                 raise ValueError(f"切割体 {cutter_mesh.name} 不是封闭有效体")
             cutter_manifold = Manifold(
                 mesh=Mesh(
@@ -293,7 +301,11 @@ def apply_manifold3d_differences(
         raise BooleanOperationError(
             f"对 {target_mesh.name} 和 [{cutter_names}] 执行 manifold3d 差集失败"
         ) from error
-    if result is None or result.is_empty or not result.is_volume:
+    if (
+        result is None
+        or result.is_empty
+        or (validate_result and not result.is_volume)
+    ):
         raise BooleanOperationError(
             f"对 {target_mesh.name} 执行 manifold3d 多切割体差集未返回封闭体"
         )

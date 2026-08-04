@@ -91,5 +91,7 @@ output/<case_id>/
 | `validate --config CASE_YAML --model MODEL` | 不修改 `MODEL`；为建立验证基准会运行七阶段，因此可能更新病例默认输出目录的阶段 JSON 和第 2 阶段缓存 | 逐项输出“通过/失败、检查名、指标字典”，任一失败时退出码非零 |
 
 `generate --validate` 在生成后立即执行同样的最终 STL 检查，验证结果仍输出到终端。
+`generate --force` 和 `process --force` 忽略匹配缓存；UI 任务清单同时记录
+`timings_seconds`、`cache_hits`、`changed_feature_ids` 和 `revision`。
 具体检查项和阈值见 {doc}`validation`。
 12 个规范病例的既有输出快照见 {doc}`case-results`。

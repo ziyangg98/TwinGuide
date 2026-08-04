@@ -201,6 +201,18 @@ def create_closed_sleeve_object(
     )
     body.name = name
     integrity = inspect_triangle_mesh(mesh_object_to_triangle_data(body))
+    if (
+        integrity.degenerate_face_count
+        and integrity.component_count == 1
+        and integrity.boundary_edge_count == 0
+        and integrity.non_manifold_edge_count == 0
+        and integrity.duplicate_face_count == 0
+        and integrity.signed_volume > 0.0
+    ):
+        from twin_guide.blender.mesh_queries import clean_mesh
+
+        clean_mesh(body)
+        integrity = inspect_triangle_mesh(mesh_object_to_triangle_data(body))
     if not integrity.valid:
         raise GeometryError(f"重建导管 {name!r} 未通过网格完整性检查：{integrity}")
     return body

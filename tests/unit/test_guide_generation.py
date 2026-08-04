@@ -1,8 +1,11 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from twin_guide.guide_generation import _generate_guide_with_process
+from twin_guide.guide_generation import _generate_guide_with_process, generate_guide
 
 
 class GuideGenerationTests(unittest.TestCase):
@@ -42,6 +45,9 @@ class GuideGenerationTests(unittest.TestCase):
             require_observation_qa=False,
             write_stage_documents=False,
             include_clearance_adjustment=True,
+            validate_cached_geometry=False,
+            force_rebuild=False,
+            changed_feature_ids=(),
         )
         build.assert_called_once_with(
             case,
@@ -49,8 +55,66 @@ class GuideGenerationTests(unittest.TestCase):
             links,
             avoidance,
             preview=True,
+            force_rebuild=False,
         )
         compose.assert_not_called()
+
+    def test_formal_generation_reuses_matching_complete_artifacts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            model = output / "twin_guide.stl"
+            image = output / "guide_iso.png"
+            model.write_text("model", encoding="utf-8")
+            image.write_text("image", encoding="utf-8")
+            cache = output / ".cache" / "generation-result.json"
+            cache.parent.mkdir()
+            cache.write_text(
+                json.dumps(
+                    {
+                        "fingerprint": "formal-test",
+                        "model_path": str(model),
+                        "image_paths": [str(image)],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config = SimpleNamespace(output_directory=output)
+
+            with patch(
+                "twin_guide.guide_generation._formal_fingerprint",
+                return_value="formal-test",
+            ), patch(
+                "twin_guide.guide_generation._generate_guide_with_process"
+            ) as generate:
+                artifacts = generate_guide(config)
+
+            generate.assert_not_called()
+            self.assertEqual(artifacts.model_path, model)
+            self.assertEqual(artifacts.image_paths, (image,))
+
+    def test_force_rebuild_bypasses_formal_artifact_cache(self):
+        config = SimpleNamespace(output_directory=Path("/tmp/formal"))
+        artifacts = Mock()
+        process = Mock()
+
+        with patch(
+            "twin_guide.guide_generation._cached_formal_artifacts"
+        ) as cached, patch(
+            "twin_guide.guide_generation._generate_guide_with_process",
+            return_value=(artifacts, process),
+        ) as generate, patch(
+            "twin_guide.guide_generation._write_formal_artifacts_cache"
+        ) as write_cache:
+            result = generate_guide(config, force_rebuild=True)
+
+        self.assertIs(result, artifacts)
+        cached.assert_not_called()
+        generate.assert_called_once_with(
+            config,
+            preview=False,
+            force_rebuild=True,
+        )
+        write_cache.assert_called_once_with(config, artifacts)
 
 
 if __name__ == "__main__":

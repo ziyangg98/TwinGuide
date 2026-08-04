@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import itertools
 import json
 import math
+import os
+import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -44,6 +47,62 @@ class ObservationWindowRequest:
     volume_identity_relative_tolerance: float = 1e-4
     local_failure_drop_targets_mm: tuple[float, ...] = ()
     local_failure_transition_rows: int = 1
+
+
+def _preview_window_fingerprint(
+    source_path: Path,
+    window: dict[str, object],
+    args: ObservationWindowRequest,
+) -> str:
+    """散列单个观察窗 cutter 的全部几何输入。"""
+
+    source_stat = source_path.stat()
+    payload = {
+        "version": "axis-sweep-preview-v1",
+        "source": {
+            "path": str(source_path),
+            "size": source_stat.st_size,
+            "mtime_ns": source_stat.st_mtime_ns,
+        },
+        "window": window,
+        "side_extension_mm": args.side_extension_mm,
+        "wall_overcut_mm": args.wall_overcut_mm,
+        "following_wall_safety_mm": args.following_wall_safety_mm,
+        "axis_core_overcut_mm": args.axis_core_overcut_mm,
+        "union_batch_size": args.union_batch_size,
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _atomic_export(mesh: trimesh.Trimesh, path: Path) -> None:
+    """原子写出内部网格缓存。"""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.stem}.{uuid.uuid4().hex}{path.suffix}")
+    mesh.export(temporary)
+    os.replace(temporary, path)
+
+
+def _write_preview_mesh_cache(mesh: trimesh.Trimesh, path: Path) -> None:
+    """无精度损失地保存单窗索引网格。"""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.stem}.{uuid.uuid4().hex}{path.suffix}")
+    with temporary.open("wb") as stream:
+        np.savez_compressed(stream, vertices=mesh.vertices, faces=mesh.faces)
+    os.replace(temporary, path)
+
+
+def _load_preview_mesh_cache(path: Path) -> trimesh.Trimesh:
+    """读取单窗索引网格缓存。"""
+
+    with np.load(path) as values:
+        return trimesh.Trimesh(
+            vertices=values["vertices"],
+            faces=values["faces"],
+            process=False,
+        )
 
 
 def boolean(operation: str, meshes: list[trimesh.Trimesh]) -> trimesh.Trimesh:
@@ -421,6 +480,101 @@ def build_axis_sweep_cutter(
             local_drop_additions > 1e-9
         )),
     }
+
+
+def build_preview(
+    args: ObservationWindowRequest,
+    *,
+    force_rebuild: bool = False,
+) -> dict[str, object]:
+    """仅构建变化的观察窗 cutter，不执行导板差集和临床 QA。"""
+
+    mapping_path = args.mapping_report.resolve()
+    mapping = stage_2_mapping_payload(
+        json.loads(mapping_path.read_text(encoding="utf-8"))
+    )
+    if mapping.get("status") != "tooth_guide_mapping_complete" or not all(
+        mapping.get("QA", {}).values()
+    ):
+        raise RuntimeError("tooth-guide mapping has not passed all QA gates")
+    windows = mapping["observation_windows"]
+    if not windows:
+        raise RuntimeError("no observation windows were selected")
+
+    output_dir = args.output_dir.resolve()
+    source_path = args.source.resolve()
+    window_cache = output_dir / "preview-window-cache"
+    cutters: list[trimesh.Trimesh] = []
+    window_reports = []
+    digests = []
+    source = None
+    for window in windows:
+        definition = window.get("axis_sweep")
+        if window.get("opening_geometry") != "axis_sweep" or not isinstance(
+            definition, dict
+        ):
+            raise RuntimeError(f"window {window['id']} has no axis-sweep definition")
+        digest = _preview_window_fingerprint(source_path, window, args)
+        cache_path = window_cache / f"{digest}.npz"
+        cutter = None
+        if cache_path.is_file() and not force_rebuild:
+            try:
+                cutter = _load_preview_mesh_cache(cache_path)
+            except (KeyError, OSError, ValueError):
+                cutter = None
+        if cutter is None:
+            if source is None:
+                source = load_mesh(source_path)
+            cutter, _, _ = build_axis_sweep_cutter(
+                source,
+                definition,
+                args.side_extension_mm,
+                args.wall_overcut_mm,
+                args.following_wall_safety_mm,
+                args.axis_core_overcut_mm,
+                args.union_batch_size,
+            )
+            _write_preview_mesh_cache(cutter, cache_path)
+        cutters.append(cutter)
+        digests.append(digest)
+        window_reports.append({
+            "id": window["id"],
+            "opening_geometry": "axis_sweep",
+            "start_fdi": window["start_fdi"],
+            "end_fdi": window["end_fdi"],
+            "height_mm": window["height_mm"],
+            "axis_sweep": definition,
+        })
+
+    combined_digest = hashlib.sha256("|".join(digests).encode()).hexdigest()
+    combined_dir = output_dir / "preview-combined-cache" / combined_digest
+    cutter_path = combined_dir / "observation-window-cutter.ply"
+    report_path = combined_dir / "observation-window-report.json"
+    if not cutter_path.is_file() or force_rebuild:
+        combined = (
+            cutters[0]
+            if len(cutters) == 1
+            else retain_positive_volume_components(
+                regularize_manifold(union_batched(cutters, args.union_batch_size))
+            )
+        )
+        _atomic_export(combined, cutter_path)
+    report = {
+        "status": "preview_cutter_complete",
+        "case_yaml": str(args.case.resolve()),
+        "sources": {"mapping_report": str(mapping_path), "guide": str(source_path)},
+        "windows": window_reports,
+        "QA": {},
+        "outputs": {
+            "combined_cutter_ply": str(cutter_path),
+            "report_json": str(report_path),
+        },
+    }
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return report
 
 
 def _nearest_ray_hit_distances(

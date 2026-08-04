@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from twin_guide.config import CaseConfig, Jaw
+from twin_guide.config.loading import load_case_yaml
 from twin_guide.errors import GeometryError
 from twin_guide.geometry import Vec3
 
@@ -227,6 +228,7 @@ STAGE_RESULT_SCHEMA = "twin-guide.stage-result/1.0"
 WORKFLOW_RESULT_NAME = "stage-02-tooth-mapping.json"
 WORKFLOW_OVERVIEW_NAME = "stage-02-tooth-mapping.png"
 WORKFLOW_CACHE_NAME = "stage-02-tooth-mapping"
+WORKFLOW_CACHE_RESULT_NAME = "result.json"
 
 
 def _sha256(path: Path) -> str:
@@ -245,12 +247,23 @@ def _input_fingerprint(config: CaseConfig) -> dict[str, object]:
     inputs = config.tooth_identification
     if inputs is None:
         raise GeometryError("病例未配置牙位识别 case.yaml")
+    case_value = load_case_yaml(inputs.case_yaml)
+    if not isinstance(case_value, dict):
+        raise GeometryError("牙位识别病例 YAML 根值必须为对象")
+    case_value.pop("editor_overrides", None)
+    case_value.pop("review", None)
+    case_semantic_sha256 = hashlib.sha256(
+        json.dumps(
+            case_value,
+            ensure_ascii=False,
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
     return {
         "workflow_schema": WORKFLOW_SCHEMA_VERSION,
         "case_id": config.case_id,
         "jaw": config.jaw.value,
-        "case_yaml": str(inputs.case_yaml.resolve()),
-        "case_yaml_sha256": _sha256(inputs.case_yaml),
+        "case_semantic_sha256": case_semantic_sha256,
         "dental": str(config.inputs.patient_dentition.resolve()),
         "dental_sha256": _sha256(config.inputs.patient_dentition),
         "guide": str(config.inputs.template.resolve()),
@@ -374,23 +387,51 @@ def _validated_result(
     )
 
 
-def _load_current_result(config: CaseConfig) -> ToothIdentificationResult | None:
+def _ensure_overview(config: CaseConfig, cache_root: Path) -> None:
+    """使用已缓存的牙位识别结果补充正式阶段总览图。"""
+
+    raw_overview_path = cache_root / "raw-overview.png"
+    overview_path = config.output_directory / WORKFLOW_OVERVIEW_NAME
+    if not raw_overview_path.is_file():
+        from twin_guide.tooth_mapping.guide_mapping import (
+            GuideMappingRequest,
+            map_recognized_teeth_to_guide,
+        )
+        from twin_guide.tooth_mapping.tooth_recognition import (
+            load_tooth_recognition_result,
+        )
+
+        recognition = load_tooth_recognition_result(
+            cache_root / "tooth-recognition"
+        )
+        mapping = map_recognized_teeth_to_guide(
+            GuideMappingRequest(
+                recognition=recognition,
+                output_dir=cache_root / "guide-mapping",
+                case_yaml=config.tooth_identification.case_yaml,
+                overview_path=raw_overview_path,
+            )
+        )
+        if not mapping.complete:
+            raise GeometryError("缓存牙位结果无法生成正式阶段总览图")
+    shutil.copy2(raw_overview_path, overview_path)
+
+
+def _load_current_result(
+    config: CaseConfig,
+    *,
+    write_overview: bool,
+) -> ToothIdentificationResult | None:
     """仅在输入指纹完全一致时复用 TwinGuide 自己生成的当前结果。"""
 
-    result_path = config.output_directory / WORKFLOW_RESULT_NAME
-    raw_overview_path = (
-        config.output_directory
-        / ".cache"
-        / WORKFLOW_CACHE_NAME
-        / "raw-overview.png"
-    )
-    recognition_root = raw_overview_path.parent / "tooth-recognition"
+    cache_root = config.output_directory / ".cache" / WORKFLOW_CACHE_NAME
+    result_path = cache_root / WORKFLOW_CACHE_RESULT_NAME
+    recognition_root = cache_root / "tooth-recognition"
     required_cache_paths = (
-        raw_overview_path,
         recognition_root / "guide-surface-mapping",
         recognition_root / "crown-projection",
         recognition_root / "contact-contours",
-        raw_overview_path.parent / "guide-mapping",
+        cache_root / "guide-mapping",
     )
     if not result_path.is_file() or not all(
         path.exists() for path in required_cache_paths
@@ -403,12 +444,19 @@ def _load_current_result(config: CaseConfig) -> ToothIdentificationResult | None
         inputs = _mapping(report.get("inputs"), "inputs")
         if inputs.get("fingerprint") != _input_fingerprint(config):
             return None
-        return _validated_result(config, result_path, report)
+        result = _validated_result(config, result_path, report)
+        if write_overview:
+            _ensure_overview(config, cache_root)
+        return result
     except (KeyError, OSError, GeometryError, ValueError):
         return None
 
 
-def _run_unified_workflow(config: CaseConfig) -> ToothIdentificationResult:
+def _run_unified_workflow(
+    config: CaseConfig,
+    *,
+    write_overview: bool,
+) -> ToothIdentificationResult:
     """调用统一识别与导板映射库，生成本次 TwinGuide 运行结果。"""
 
     inputs = config.tooth_identification
@@ -442,7 +490,7 @@ def _run_unified_workflow(config: CaseConfig) -> ToothIdentificationResult:
             recognition=recognition,
             output_dir=mapping_directory,
             case_yaml=inputs.case_yaml,
-            overview_path=raw_overview_path,
+            overview_path=raw_overview_path if write_overview else None,
         ))
         if not guide_mapping.complete:
             raise GeometryError("本次牙位到导板映射未通过全部 QA")
@@ -451,10 +499,11 @@ def _run_unified_workflow(config: CaseConfig) -> ToothIdentificationResult:
     except Exception as error:
         raise GeometryError(f"统一牙位映射执行失败：{error}") from error
 
-    result_path = workflow_root / WORKFLOW_RESULT_NAME
+    result_path = cache_root / WORKFLOW_CACHE_RESULT_NAME
     mapping = guide_mapping.mapping_report
     overview_path = workflow_root / WORKFLOW_OVERVIEW_NAME
-    shutil.copy2(raw_overview_path, overview_path)
+    if write_overview:
+        shutil.copy2(raw_overview_path, overview_path)
     report = {
         "schema_version": STAGE_RESULT_SCHEMA,
         "stage": {
@@ -504,6 +553,7 @@ def identify_tooth_positions(
     config: CaseConfig,
     *,
     regenerate: bool = False,
+    write_overview: bool = True,
 ) -> ToothIdentificationResult:
     """执行或安全复用 TwinGuide 自己生成的统一牙位映射。
 
@@ -520,10 +570,10 @@ def identify_tooth_positions(
     """
 
     if not regenerate:
-        current = _load_current_result(config)
+        current = _load_current_result(config, write_overview=write_overview)
         if current is not None:
             return current
-    return _run_unified_workflow(config)
+    return _run_unified_workflow(config, write_overview=write_overview)
 
 
 __all__ = [

@@ -2,9 +2,67 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from twin_guide.config import EditorOverrides
+
+
+def changed_feature_ids(
+    previous: EditorOverrides,
+    current: EditorOverrides,
+) -> tuple[str, ...]:
+    """返回两份覆盖值之间发生变化的稳定结构编号。"""
+
+    changed = []
+
+    def compare(
+        before: tuple[object, ...],
+        after: tuple[object, ...],
+        key: Callable[[object], object],
+        feature_id: Callable[[object], str],
+    ) -> None:
+        """比较一类带稳定业务键的覆盖值。"""
+
+        previous_values = {key(item): item for item in before}
+        current_values = {key(item): item for item in after}
+        for item_key in previous_values.keys() | current_values.keys():
+            if previous_values.get(item_key) != current_values.get(item_key):
+                changed.append(feature_id(item_key))
+
+    compare(
+        previous.sleeve_guides,
+        current.sleeve_guides,
+        lambda item: item.guide_index,
+        lambda index: f"sleeve:guide_{index}",
+    )
+    compare(
+        previous.operation_windows,
+        current.operation_windows,
+        lambda item: item.site_index,
+        lambda index: f"operation_window:{index}",
+    )
+    compare(
+        previous.observation_windows,
+        current.observation_windows,
+        lambda item: item.window_id,
+        lambda window_id: f"observation_window:{window_id}",
+    )
+    compare(
+        previous.connector_avoidance,
+        current.connector_avoidance,
+        lambda item: item.guide_index,
+        lambda index: f"connector:guide_{index}",
+    )
+    compare(
+        previous.surface_anchors,
+        current.surface_anchors,
+        lambda item: item.anchor_id,
+        lambda anchor_id: f"press_anchor:{str(anchor_id).rsplit('_', 1)[-1]}",
+    )
+    if previous.press_junction_mm != current.press_junction_mm:
+        changed.append("press_junction")
+    return tuple(sorted(changed))
 
 
 @dataclass(slots=True)
@@ -123,4 +181,4 @@ class EditorSession:
         return job_revision == self.revision
 
 
-__all__ = ["EditorSession"]
+__all__ = ["EditorSession", "changed_feature_ids"]

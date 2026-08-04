@@ -20,7 +20,7 @@ __all__ = [
 __version__ = "0.3.0"
 
 
-def generate_guide(config: CaseConfig) -> BuildArtifacts:
+def generate_guide(config: CaseConfig, *, force_rebuild: bool = False) -> BuildArtifacts:
     """构建并导出一体化牙科导板。
 
     参数:
@@ -32,10 +32,14 @@ def generate_guide(config: CaseConfig) -> BuildArtifacts:
 
     from twin_guide.guide_generation import generate_guide as execute
 
-    return execute(config)
+    return execute(config, force_rebuild=force_rebuild)
 
 
-def run_generation_process(config: CaseConfig) -> GenerationProcessResult:
+def run_generation_process(
+    config: CaseConfig,
+    *,
+    force_rebuild: bool = False,
+) -> GenerationProcessResult:
     """执行七阶段几何规划并返回类型化阶段结果。
 
     参数:
@@ -47,7 +51,7 @@ def run_generation_process(config: CaseConfig) -> GenerationProcessResult:
 
     from twin_guide.generation_process import run_generation_process as execute
 
-    return execute(config)
+    return execute(config, force_rebuild=force_rebuild)
 
 
 def validate_guide(

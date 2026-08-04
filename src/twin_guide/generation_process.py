@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+from time import perf_counter
+
 from twin_guide.case_analysis import analyze_case
 from twin_guide.clearance_adjustment import adjust_clearance
 from twin_guide.config import CaseConfig, PressBeamMode
 from twin_guide.guide_component_bridge import select_guide_component_bridge
 from twin_guide.guide_terminal_u_extension import select_guide_terminal_u_extension
-from twin_guide.point_linking import PointLinkingConfig, link_selected_points
+from twin_guide.point_linking import (
+    PointLinkingConfig,
+    PointLinkingPlan,
+    link_selected_points,
+)
 from twin_guide.press_beam_points import select_press_beam_points
 from twin_guide.template_anchors import TemplatePointSelectionConfig
 from twin_guide.template_link_points import (
@@ -92,6 +99,43 @@ STAGES = (
     ),
 )
 
+_LAST_PROCESS: GenerationProcessResult | None = None
+_LAST_PROCESS_KEY: tuple[str, bool, bool, bool] | None = None
+
+
+def _reuse_numerically_unchanged_links(
+    current: PointLinkingPlan,
+    previous: PointLinkingPlan | None,
+) -> PointLinkingPlan:
+    """稳定复用仅受浮点选点噪声影响的单根连接梁。"""
+
+    if previous is None:
+        return current
+    old_links = {
+        (link.guide_index, link.sleeve_label, link.link_label): link
+        for link in previous.links
+    }
+    links = []
+    for link in current.links:
+        old = old_links.get((link.guide_index, link.sleeve_label, link.link_label))
+        if (
+            old is not None
+            and len(old.centerline) == len(link.centerline)
+            and max(
+                (first.distance_to(second) for first, second in zip(
+                    old.centerline,
+                    link.centerline,
+                    strict=True,
+                )),
+                default=0.0,
+            )
+            <= 5e-5
+        ):
+            links.append(old)
+        else:
+            links.append(link)
+    return replace(current, links=tuple(links))
+
 
 def _skipped(definition: StageDefinition, reason: str | None = None) -> StageResult:
     """构造阶段跳过记录。
@@ -117,6 +161,9 @@ def run_generation_process(
     write_stage_documents: bool = True,
     include_clearance_adjustment: bool = True,
     include_observation_window_geometry: bool = True,
+    validate_cached_geometry: bool = True,
+    force_rebuild: bool = False,
+    changed_feature_ids: tuple[str, ...] = (),
 ) -> GenerationProcessResult:
     """按顺序执行稳定和实验阶段。
 
@@ -137,70 +184,165 @@ def run_generation_process(
         跳过阶段只写入 ``StageResult.reason``，对应上下文字段保持 ``None``。
     """
 
+    global _LAST_PROCESS, _LAST_PROCESS_KEY
+    from twin_guide.editor_plan import editor_plan_fingerprint
+
+    structure_fingerprint = editor_plan_fingerprint(config)
+    process_key = (
+        structure_fingerprint,
+        require_observation_qa,
+        include_clearance_adjustment,
+        include_observation_window_geometry,
+    )
+    previous = (
+        _LAST_PROCESS
+        if changed_feature_ids
+        and not force_rebuild
+        and process_key == _LAST_PROCESS_KEY
+        else None
+    )
+    previous_context = None if previous is None else previous.context
+    changed = set(changed_feature_ids)
+    cache_hits: list[str] = []
     context = GenerationContext(config=config)
     results: list[StageResult] = []
+    timings: dict[str, float] = {}
 
-    case = analyze_case(config)
+    started = perf_counter()
+    case = analyze_case(config, force_rebuild=force_rebuild)
     context.case = case
     context.sleeve_generation = SleeveGenerationResult(
         case.guide_sleeves,
         case.template_frame,
     )
     results.append(StageResult(STAGES[0], StageRunStatus.COMPLETED, context.sleeve_generation))
+    timings[STAGES[0].key] = perf_counter() - started
+    started = perf_counter()
     if config.tooth_identification is None:
         results.append(
             _skipped(STAGES[1], "病例未配置牙位工作流 case.yaml；不生成 FDI 观察窗")
         )
     else:
-        context.tooth_identification = identify_tooth_positions(
-            config,
-        )
+        if previous_context is not None and previous_context.tooth_identification is not None:
+            context.tooth_identification = previous_context.tooth_identification
+            cache_hits.append(STAGES[1].key)
+        else:
+            context.tooth_identification = identify_tooth_positions(
+                config,
+                regenerate=force_rebuild,
+                write_overview=write_stage_documents,
+            )
         results.append(
             StageResult(STAGES[1], StageRunStatus.COMPLETED, context.tooth_identification)
         )
+    timings[STAGES[1].key] = perf_counter() - started
 
-    context.window_cutouts = plan_window_cutouts(
-        case,
-        context.sleeve_generation,
-        context.tooth_identification,
-        require_observation_qa=require_observation_qa,
-        include_observation_window_geometry=include_observation_window_geometry,
+    started = perf_counter()
+    windows_changed = any(
+        feature_id.startswith(("sleeve:", "operation_window:", "observation_window:"))
+        for feature_id in changed
     )
-    results.append(StageResult(STAGES[2], StageRunStatus.COMPLETED, context.window_cutouts))
-
-    if config.guide_component_bridge.enabled:
-        context.guide_component_bridge = select_guide_component_bridge(context)
-
-    if config.guide_terminal_u_extension.enabled:
-        context.guide_terminal_u_extension = select_guide_terminal_u_extension(context)
-
-    context.template_link_points = select_template_link_points(
-        TemplateLinkPointContext(
+    if (
+        previous_context is not None
+        and not windows_changed
+        and previous_context.window_cutouts is not None
+    ):
+        context.window_cutouts = previous_context.window_cutouts
+        cache_hits.append(STAGES[2].key)
+    else:
+        context.window_cutouts = plan_window_cutouts(
             case,
             context.sleeve_generation,
-            context.window_cutouts,
             context.tooth_identification,
-        ),
-        TemplatePointSelectionConfig(
-            template_clearance_mm=(
-                config.geometry.connector_radius_mm
-                + config.geometry.fusion_voxel_size_mm
-            ),
-            connector_radius_mm=config.geometry.connector_radius_mm,
-        ),
+            require_observation_qa=require_observation_qa,
+            include_observation_window_geometry=include_observation_window_geometry,
+            force_rebuild=force_rebuild,
+        )
+    results.append(StageResult(STAGES[2], StageRunStatus.COMPLETED, context.window_cutouts))
+    timings[STAGES[2].key] = perf_counter() - started
+
+    started = perf_counter()
+    template_points_reusable = (
+        previous_context is not None
+        and not windows_changed
+        and previous_context.template_link_points is not None
     )
+    if template_points_reusable:
+        context.guide_component_bridge = previous_context.guide_component_bridge
+        context.guide_terminal_u_extension = (
+            previous_context.guide_terminal_u_extension
+        )
+        context.template_link_points = previous_context.template_link_points
+        cache_hits.append(STAGES[3].key)
+    else:
+        if config.guide_component_bridge.enabled:
+            context.guide_component_bridge = select_guide_component_bridge(context)
+
+        if config.guide_terminal_u_extension.enabled:
+            context.guide_terminal_u_extension = select_guide_terminal_u_extension(context)
+
+        context.template_link_points = select_template_link_points(
+            TemplateLinkPointContext(
+                case,
+                context.sleeve_generation,
+                context.window_cutouts,
+                context.tooth_identification,
+            ),
+            TemplatePointSelectionConfig(
+                template_clearance_mm=(
+                    config.geometry.connector_radius_mm
+                    + config.geometry.fusion_voxel_size_mm
+                ),
+                connector_radius_mm=config.geometry.connector_radius_mm,
+            ),
+        )
     context.terminal_distal_common_node = (
         context.template_link_points.template_points.terminal_distal_common_node
     )
     results.append(StageResult(STAGES[3], StageRunStatus.COMPLETED, context.template_link_points))
+    timings[STAGES[3].key] = perf_counter() - started
 
+    started = perf_counter()
+    press_changed = any(
+        feature_id.startswith("press_anchor:") or feature_id == "press_junction"
+        for feature_id in changed
+    )
+    changed_sleeves = {
+        int(feature_id.rsplit("_", 1)[1])
+        for feature_id in changed
+        if feature_id.startswith("sleeve:guide_")
+    }
+    previous_press = (
+        None if previous_context is None else previous_context.press_beam_points
+    )
+    sleeve_edit_keeps_press_plan = bool(
+        changed_sleeves
+        and all(feature_id.startswith("sleeve:guide_") for feature_id in changed)
+        and previous_press is not None
+        and (
+            previous_press.sleeve_anchor is None
+            or previous_press.sleeve_anchor.guide_index not in changed_sleeves
+        )
+    )
     if config.press_beam.mode is PressBeamMode.DISABLED:
         results.append(_skipped(STAGES[4], "病例未启用 Y 型按压梁"))
+    elif (
+        (template_points_reusable or sleeve_edit_keeps_press_plan)
+        and not press_changed
+        and previous_press is not None
+    ):
+        context.press_beam_points = previous_press
+        cache_hits.append(STAGES[4].key)
+        results.append(
+            StageResult(STAGES[4], StageRunStatus.COMPLETED, context.press_beam_points)
+        )
     else:
         context.press_beam_points = select_press_beam_points(context)
         results.append(
             StageResult(STAGES[4], StageRunStatus.COMPLETED, context.press_beam_points)
         )
+    timings[STAGES[4].key] = perf_counter() - started
+    started = perf_counter()
     context.point_linking = link_selected_points(
         context.template_link_points,
         PointLinkingConfig(
@@ -219,19 +361,37 @@ def run_generation_process(
         context.guide_terminal_u_extension,
         context.sleeve_generation.template_frame.normal * -1.0,
     )
+    context.point_linking = _reuse_numerically_unchanged_links(
+        context.point_linking,
+        None if previous_context is None else previous_context.point_linking,
+    )
     results.append(StageResult(STAGES[5], StageRunStatus.COMPLETED, context.point_linking))
+    timings[STAGES[5].key] = perf_counter() - started
+    started = perf_counter()
     if not include_clearance_adjustment:
         results.append(_skipped(STAGES[6], "当前任务不需要牙科手机避障"))
     elif not config.handpiece_avoidance:
         results.append(_skipped(STAGES[6], "病例未配置牙科手机避障"))
     else:
-        context.clearance_adjustment = adjust_clearance(context)
+        context.clearance_adjustment = adjust_clearance(
+            context,
+            validate_cached_geometry=validate_cached_geometry,
+            force_rebuild=force_rebuild,
+        )
         results.append(
             StageResult(STAGES[6], StageRunStatus.COMPLETED, context.clearance_adjustment)
         )
-    process = GenerationProcessResult(context, tuple(results))
+    timings[STAGES[6].key] = perf_counter() - started
+    process = GenerationProcessResult(
+        context,
+        tuple(results),
+        timings,
+        tuple(cache_hits),
+    )
     if write_stage_documents:
         from twin_guide.stage_artifacts import write_stage_result_documents
 
         write_stage_result_documents(process)
+    _LAST_PROCESS = process
+    _LAST_PROCESS_KEY = process_key
     return process

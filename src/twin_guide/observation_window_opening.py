@@ -246,6 +246,8 @@ def build_observation_window_opening(
     tooth_identification: ToothIdentificationResult,
     *,
     require_qa: bool = True,
+    regenerate: bool = False,
+    fast_preview: bool = False,
 ) -> ProfileWindowCutout:
     """使用现有牙位映射生成、分级修正并返回轴扫掠 cutter。
 
@@ -272,7 +274,7 @@ def build_observation_window_opening(
     _validate_axis_sweep_contract(mapping, config)
     integration_path = output_root / INTEGRATION_REPORT_NAME
     fingerprint = _fingerprint(config, mapping)
-    if integration_path.is_file():
+    if not regenerate and integration_path.is_file():
         try:
             cached = json.loads(integration_path.read_text(encoding="utf-8"))
             cached_report = Path(str(cached["final_report"])).resolve()
@@ -283,20 +285,8 @@ def build_observation_window_opening(
                     and cached_qa
                     and all(cached_qa.values())
                 )
-                if require_qa and not qa_passed:
-                    failed_checks = (
-                        [
-                            name
-                            for name, passed in cached_qa.items()
-                            if not passed
-                        ]
-                        if isinstance(cached_qa, dict)
-                        else ["cached_report_has_no_qa"]
-                    )
-                    raise GeometryError(
-                        "轴扫观察窗未通过最终 QA：" + "、".join(failed_checks)
-                    )
-                return _profile_from_report(cached_report)
+                if not require_qa or qa_passed:
+                    return _profile_from_report(cached_report)
         except (KeyError, OSError, json.JSONDecodeError):
             pass
 
@@ -304,6 +294,7 @@ def build_observation_window_opening(
     try:
         from twin_guide.observation_window_engine import (
             ObservationWindowRequest,
+            build_preview,
             run,
         )
     except ImportError as error:
@@ -338,10 +329,14 @@ def build_observation_window_opening(
         ),
     )
     try:
-        report = run(request)
+        report = (
+            build_preview(request, force_rebuild=regenerate)
+            if fast_preview
+            else run(request)
+        )
     except Exception as error:
         raise GeometryError(f"轴扫掠观察窗生成失败：{error}") from error
-    qa_passed = all(report["QA"].values())
+    qa_passed = bool(report["QA"]) and all(report["QA"].values())
     if require_qa and not qa_passed:
         failed_checks = [name for name, passed in report["QA"].items() if not passed]
         raise GeometryError(
