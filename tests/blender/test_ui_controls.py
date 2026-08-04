@@ -1,5 +1,7 @@
 import json
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -10,6 +12,7 @@ from twin_guide import blender_ui
 from twin_guide.blender.scene import clear_scene, set_active_object
 from twin_guide.blender_ui_gizmos import TwinGuideFeatureGizmoGroup
 from twin_guide.blender_ui_proxies import create_control
+from twin_guide.config import EditorOverrides
 
 
 class BlenderUiControlTests(unittest.TestCase):
@@ -166,6 +169,54 @@ class BlenderUiControlTests(unittest.TestCase):
                         initial + 0.5,
                         places=5,
                     )
+
+    def test_matching_preview_does_not_start_or_reload_geometry(self):
+        mesh = bpy.data.meshes.new("preview_mesh")
+        model = bpy.data.objects.new(blender_ui.PREVIEW_OBJECT_NAME, mesh)
+        bpy.context.collection.objects.link(model)
+        snapshot = {"geometry_fingerprint": "geometry-current"}
+        session = SimpleNamespace(
+            working_overrides=EditorOverrides(),
+            revision=5,
+        )
+        state = bpy.context.scene.twin_guide_state
+
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            blender_ui,
+            "_CONFIG",
+            SimpleNamespace(output_directory=Path(directory)),
+        ), patch.object(blender_ui, "_SESSION", session), patch.object(
+            blender_ui,
+            "_EDITOR_PLAN_VALUE",
+            snapshot,
+        ), patch.object(
+            blender_ui,
+            "replace",
+            side_effect=lambda source, **values: SimpleNamespace(
+                **(vars(source) | values)
+            ),
+        ), patch.object(
+            blender_ui,
+            "editor_geometry_fingerprint",
+            return_value="geometry-current",
+        ), patch.object(
+            blender_ui,
+            "preview_directory",
+            return_value=Path(directory),
+        ), patch.object(
+            blender_ui,
+            "_matching_model_snapshot",
+            return_value=(Path("model.stl"), Path("snapshot.json"), snapshot),
+        ), patch.object(blender_ui, "_load_model") as load_model, patch.object(
+            blender_ui,
+            "_create_controls",
+        ) as create_controls:
+            reused = blender_ui._reuse_matching_preview()
+
+        self.assertTrue(reused)
+        load_model.assert_not_called()
+        create_controls.assert_not_called()
+        self.assertEqual(state.task_status, "已复用现有预览")
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import bisect
 import math
+from dataclasses import dataclass
 
 import bmesh
 import bpy
@@ -20,6 +21,16 @@ INSIDE_TEST_DIRECTIONS = (
     Vec3(0.241, 1.0, 0.419),
     Vec3(0.311, 0.257, 1.0),
 )
+
+
+@dataclass(frozen=True, slots=True)
+class LocalAlignedSurfaceData:
+    """多个贴合脚共享的世界坐标导板表面数据。"""
+
+    vertices: tuple[Vector, ...]
+    polygons: tuple[tuple[int, ...], ...]
+    centers: tuple[Vec3, ...]
+    normals: tuple[Vec3, ...]
 
 
 def to_vec3(vector: Vector) -> Vec3:
@@ -155,27 +166,20 @@ def build_bvh(mesh_object: bpy.types.Object) -> BVHTree:
     return tree
 
 
-def build_local_aligned_bvh(
+def prepare_local_aligned_surface(
     mesh_object: bpy.types.Object,
-    anchor: Vec3,
-    normal: Vec3,
-    tangent: Vec3,
-    bitangent: Vec3,
-    major_radius_mm: float,
-    minor_radius_mm: float,
-) -> BVHTree:
-    """构建锚点附近与目标外法向同向的椭圆局部表面 BVH。"""
+) -> LocalAlignedSurfaceData:
+    """一次性准备多个局部贴合脚共用的导板网格数据。"""
 
     dependency_graph = bpy.context.evaluated_depsgraph_get()
     evaluated = mesh_object.evaluated_get(dependency_graph)
     mesh = evaluated.to_mesh()
     world_matrix = evaluated.matrix_world
     normal_matrix = world_matrix.to_3x3().inverted_safe().transposed()
-    vertices = [world_matrix @ vertex.co for vertex in mesh.vertices]
+    vertices = tuple(world_matrix @ vertex.co for vertex in mesh.vertices)
     polygons = []
-    unit_normal = normal.normalized()
-    unit_tangent = tangent.normalized()
-    unit_bitangent = bitangent.normalized()
+    centers = []
+    normals = []
     for polygon in mesh.polygons:
         indices = tuple(polygon.vertices)
         if len(indices) < 3:
@@ -184,7 +188,42 @@ def build_local_aligned_bvh(
             (vertices[index] for index in indices),
             Vector((0.0, 0.0, 0.0)),
         ) / len(indices)
-        relative = to_vec3(center) - anchor
+        polygons.append(indices)
+        centers.append(to_vec3(center))
+        normals.append(to_vec3(normal_matrix @ polygon.normal).normalized())
+    evaluated.to_mesh_clear()
+    return LocalAlignedSurfaceData(
+        vertices,
+        tuple(polygons),
+        tuple(centers),
+        tuple(normals),
+    )
+
+
+def build_local_aligned_bvh(
+    mesh_object: bpy.types.Object,
+    anchor: Vec3,
+    normal: Vec3,
+    tangent: Vec3,
+    bitangent: Vec3,
+    major_radius_mm: float,
+    minor_radius_mm: float,
+    surface_data: LocalAlignedSurfaceData | None = None,
+) -> BVHTree:
+    """构建锚点附近与目标外法向同向的椭圆局部表面 BVH。"""
+
+    data = surface_data or prepare_local_aligned_surface(mesh_object)
+    polygons = []
+    unit_normal = normal.normalized()
+    unit_tangent = tangent.normalized()
+    unit_bitangent = bitangent.normalized()
+    for indices, center, polygon_normal in zip(
+        data.polygons,
+        data.centers,
+        data.normals,
+        strict=True,
+    ):
+        relative = center - anchor
         u = relative.dot(unit_tangent)
         v = relative.dot(unit_bitangent)
         w = abs(relative.dot(unit_normal))
@@ -192,13 +231,11 @@ def build_local_aligned_bvh(
             (u / (major_radius_mm + 1.5)) ** 2
             + (v / (minor_radius_mm + 1.5)) ** 2
         )
-        polygon_normal = to_vec3(normal_matrix @ polygon.normal).normalized()
         if ellipse <= 1.0 and w <= 3.0 and polygon_normal.dot(unit_normal) >= 0.15:
             polygons.append(indices)
-    evaluated.to_mesh_clear()
     if len(polygons) < 20:
         raise GeometryError("按压梁贴合脚附近同向导板面数量不足 20")
-    return BVHTree.FromPolygons(vertices, polygons, all_triangles=False)
+    return BVHTree.FromPolygons(data.vertices, polygons, all_triangles=False)
 
 
 def ray_cast_mesh(mesh_tree: BVHTree, ray_origin: Vec3, ray_direction: Vec3) -> Vec3 | None:

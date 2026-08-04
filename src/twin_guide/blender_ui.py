@@ -8,6 +8,7 @@ import math
 import shutil
 import sys
 import uuid
+from dataclasses import replace
 from itertools import pairwise
 from pathlib import Path
 from typing import ClassVar
@@ -1712,16 +1713,52 @@ def _commit_pending_edit() -> None:
         bpy.context.scene.twin_guide_state.dirty = _SESSION.dirty
 
 
+def _reuse_matching_preview() -> bool:
+    """当前参数已有实体预览时直接加载，不重复启动生成进程。"""
+
+    global _EDITOR_PLAN_PATH, _EDITOR_PLAN_VALUE
+    assert _CONFIG is not None
+    assert _SESSION is not None
+    working_config = replace(
+        _CONFIG,
+        editor_overrides=_SESSION.working_overrides,
+    )
+    fingerprint = editor_geometry_fingerprint(
+        working_config,
+        Path(bpy.context.scene.twin_guide_state.config_path),
+    )
+    matched = _matching_model_snapshot(preview_directory(_CONFIG), fingerprint)
+    if matched is None:
+        return False
+    model_path, snapshot_path, snapshot = matched
+    if (
+        bpy.data.objects.get(PREVIEW_OBJECT_NAME) is None
+        or _EDITOR_PLAN_VALUE is None
+        or _EDITOR_PLAN_VALUE.get("geometry_fingerprint") != fingerprint
+    ):
+        _load_model(model_path)
+        _EDITOR_PLAN_VALUE = snapshot
+        _EDITOR_PLAN_PATH = snapshot_path
+        _create_controls()
+        _show_model_view()
+    state = bpy.context.scene.twin_guide_state
+    state.task_status = "已复用现有预览"
+    state.preview_status = f"预览已是当前版本（版本 {_SESSION.revision}）"
+    return True
+
+
 def _start_job(mode: str) -> None:
     """启动预览或最终检验后台任务。"""
     global _JOB, _JOB_CONFIG_PATH
     assert _CONFIG is not None
     if _JOB is not None and _JOB.process.poll() is None:
         raise RuntimeError("已有后台任务正在运行")
-    if mode != "plan":
-        _commit_pending_edit()
     if _SESSION is None:
         raise RuntimeError("编辑会话尚未初始化")
+    if mode != "plan":
+        _commit_pending_edit()
+    if mode == "preview" and _reuse_matching_preview():
+        return
     overrides = _SESSION.working_overrides
     _JOB_CONFIG_PATH = _temporary_job_config(overrides)
     if mode == "plan":

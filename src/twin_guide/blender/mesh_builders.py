@@ -10,6 +10,7 @@ import bpy
 from mathutils import Matrix
 
 from twin_guide.blender.mesh_queries import (
+    LocalAlignedSurfaceData,
     build_local_aligned_bvh,
     clean_mesh,
     to_blender_vector,
@@ -312,6 +313,7 @@ def create_conformal_fusion_foot(
     material: bpy.types.Material | None = None,
     radial_rings: int = 10,
     angular_segments: int = 72,
+    surface_data: LocalAlignedSurfaceData | None = None,
 ) -> bpy.types.Object:
     """在导板外表面生成带亚表面预埋量的封闭椭圆贴合脚。"""
 
@@ -329,6 +331,7 @@ def create_conformal_fusion_foot(
         bitangent,
         major_radius_mm,
         minor_radius_mm,
+        surface_data,
     )
     uv = [(0.0, 0.0)]
     ring_indices: list[list[int]] = []

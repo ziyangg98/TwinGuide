@@ -24,6 +24,7 @@ from twin_guide.blender.mesh_builders import (
 )
 from twin_guide.blender.mesh_queries import (
     clean_mesh,
+    prepare_local_aligned_surface,
     remove_excess_components,
 )
 from twin_guide.blender.rendering import create_materials, render_objects
@@ -213,6 +214,30 @@ def create_point_link_meshes(
 
     meshes = []
     connector_endpoint = plan.connector_guide_endpoint
+    bridge_endpoint = (
+        None
+        if plan.guide_component_bridge is None
+        else plan.guide_component_bridge.endpoint_reinforcement
+    )
+    terminal_endpoint = (
+        None
+        if plan.guide_terminal_u_extension is None
+        else plan.guide_terminal_u_extension.endpoint_reinforcement
+    )
+    needs_surface_data = any(
+        endpoint is not None
+        for endpoint in (
+            connector_endpoint,
+            bridge_endpoint,
+            terminal_endpoint,
+            plan.press_beam_guide_endpoint,
+        )
+    )
+    surface_data = (
+        None
+        if template_mesh is None or not needs_surface_data
+        else prepare_local_aligned_surface(template_mesh)
+    )
     connector_groups: dict[
         tuple[float, float, float],
         tuple[str, Vec3, Vec3, Vec3, list[Vec3]],
@@ -330,6 +355,7 @@ def create_point_link_meshes(
                     connector_endpoint.foot_peak_height_mm,
                     connector_endpoint.foot_embed_depth_mm,
                     material,
+                    surface_data=surface_data,
                 )
             )
     if plan.terminal_distal_common_node is not None:
@@ -410,6 +436,7 @@ def create_point_link_meshes(
                             endpoint.foot_peak_height_mm,
                             endpoint.foot_embed_depth_mm,
                             material,
+                            surface_data=surface_data,
                         )
                     )
     terminal_u = plan.guide_terminal_u_extension
@@ -479,6 +506,7 @@ def create_point_link_meshes(
                         endpoint.foot_peak_height_mm,
                         endpoint.foot_embed_depth_mm,
                         material,
+                        surface_data=surface_data,
                     )
                 )
     if plan.press_beam_links:
@@ -536,6 +564,7 @@ def create_point_link_meshes(
                     endpoint.foot_peak_height_mm,
                     endpoint.foot_embed_depth_mm,
                     material,
+                    surface_data=surface_data,
                 )
             )
         bpy.ops.mesh.primitive_ico_sphere_add(

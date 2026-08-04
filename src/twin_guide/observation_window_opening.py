@@ -130,15 +130,29 @@ def _mapping_with_editor_overrides(
     return mapping, derived_path
 
 
-def _fingerprint(config: CaseConfig, mapping_path: Path) -> dict[str, object]:
+def _mapping_digest(mapping: dict[str, object]) -> str:
+    """散列观察窗语义，忽略每次运行都会变化的报告元数据。"""
+
+    semantic = deepcopy(mapping)
+    for key in ("created_at", "sources", "outputs"):
+        semantic.pop(key, None)
+    encoded = json.dumps(
+        semantic,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _fingerprint(config: CaseConfig, mapping: dict[str, object]) -> dict[str, object]:
     """生成用于安全复用既有开口产物的输入指纹。"""
 
-    mapping_digest = hashlib.sha256(mapping_path.read_bytes()).hexdigest()
     template_stat = config.inputs.template.stat()
     dental_stat = config.inputs.patient_dentition.stat()
     return {
         "algorithm_version": OBSERVATION_OPENING_ALGORITHM_VERSION,
-        "mapping_sha256": mapping_digest,
+        "mapping_sha256": _mapping_digest(mapping),
         "template": str(config.inputs.template),
         "template_size": template_stat.st_size,
         "template_mtime_ns": template_stat.st_mtime_ns,
@@ -257,7 +271,7 @@ def build_observation_window_opening(
     )
     _validate_axis_sweep_contract(mapping, config)
     integration_path = output_root / INTEGRATION_REPORT_NAME
-    fingerprint = _fingerprint(config, mapping_path)
+    fingerprint = _fingerprint(config, mapping)
     if integration_path.is_file():
         try:
             cached = json.loads(integration_path.read_text(encoding="utf-8"))

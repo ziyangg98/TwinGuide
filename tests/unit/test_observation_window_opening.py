@@ -109,6 +109,61 @@ class ObservationWindowOpeningTests(unittest.TestCase):
             self.assertEqual(request.volume_identity_tolerance_mm3, 0.05)
             self.assertEqual(request.volume_identity_relative_tolerance, 1e-4)
 
+    def test_preview_cache_ignores_regenerated_report_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, identification = self._inputs(root)
+            identification.mapping_report.update(
+                created_at="first",
+                sources={"report": "/tmp/first"},
+                outputs={"report": "/tmp/first-output"},
+            )
+            identification.mapping_report_path.write_text(
+                json.dumps(identification.mapping_report),
+                encoding="utf-8",
+            )
+            final_report = root / "failed-report.json"
+            final_report.write_text("{}", encoding="utf-8")
+            failed_report = {
+                "QA": {"axis_sweep_exposes_dental_surface": False},
+                "outputs": {
+                    "report_json": str(final_report),
+                    "combined_cutter_ply": str(root / "failed-cutter.ply"),
+                },
+            }
+            sentinel = object()
+
+            with patch(
+                "twin_guide.observation_window_engine.run",
+                return_value=failed_report,
+            ) as mocked_run, patch(
+                "twin_guide.observation_window_opening._profile_from_report",
+                return_value=sentinel,
+            ):
+                first = build_observation_window_opening(
+                    config,
+                    identification,
+                    require_qa=False,
+                )
+                identification.mapping_report.update(
+                    created_at="second",
+                    sources={"report": "/tmp/second"},
+                    outputs={"report": "/tmp/second-output"},
+                )
+                identification.mapping_report_path.write_text(
+                    json.dumps(identification.mapping_report),
+                    encoding="utf-8",
+                )
+                second = build_observation_window_opening(
+                    config,
+                    identification,
+                    require_qa=False,
+                )
+
+            self.assertIs(first, sentinel)
+            self.assertIs(second, sentinel)
+            mocked_run.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
