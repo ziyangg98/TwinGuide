@@ -418,7 +418,7 @@ def _create_operation_controls() -> None:
         )
         _control(
             f"Window_{site_index}_width",
-            _surface_point("template", visible_center + tangent * width / 2.0),
+            visible_center + tangent * width / 2.0,
             "window_size",
             role="width",
             axis=list(tangent),
@@ -428,7 +428,7 @@ def _create_operation_controls() -> None:
         )
         _control(
             f"Window_{site_index}_width_opposite",
-            _surface_point("template", visible_center - tangent * width / 2.0),
+            visible_center - tangent * width / 2.0,
             "window_size",
             role="width_opposite",
             axis=list(-tangent),
@@ -438,7 +438,7 @@ def _create_operation_controls() -> None:
         )
         _control(
             f"Window_{site_index}_height",
-            _surface_point("template", visible_center + bitangent * height / 2.0),
+            visible_center + bitangent * height / 2.0,
             "window_size",
             role="height",
             axis=list(bitangent),
@@ -448,7 +448,7 @@ def _create_operation_controls() -> None:
         )
         _control(
             f"Window_{site_index}_height_opposite",
-            _surface_point("template", visible_center - bitangent * height / 2.0),
+            visible_center - bitangent * height / 2.0,
             "window_size",
             role="height_opposite",
             axis=list(-bitangent),
@@ -960,10 +960,7 @@ def _translate_operation_handles(
         if candidate.get("tg_kind") == "window_size":
             origin = Vector(candidate["tg_origin"])
             axis = Vector(candidate["tg_axis"])
-            candidate.location = _surface_point(
-                "template",
-                origin + axis * float(candidate["tg_value"]),
-            )
+            candidate.location = origin + axis * float(candidate["tg_value"])
 
 
 def _mirror_operation_size_handle(object_: bpy.types.Object) -> None:
@@ -990,10 +987,7 @@ def _mirror_operation_size_handle(object_: bpy.types.Object) -> None:
         return
     distance = _axis_distance(object_)
     partner["tg_value"] = distance
-    partner.location = _surface_point(
-        "template",
-        center.location + Vector(partner["tg_axis"]) * distance,
-    )
+    partner.location = center.location + Vector(partner["tg_axis"]) * distance
 
 
 def _sync_feature_values(feature_id: str) -> None:
@@ -1375,10 +1369,7 @@ def _constrain_control(object_: bpy.types.Object) -> None:
         distance = max(0.05, (object_.location - origin).dot(axis))
         if kind == "window_size":
             object_["tg_value"] = distance
-            object_.location = _surface_point(
-                "template",
-                origin + axis * distance,
-            )
+            object_.location = origin + axis * distance
             return
         if kind == "sleeve_height":
             guide_index = int(object_["tg_guide_index"])

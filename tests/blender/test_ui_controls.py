@@ -218,6 +218,23 @@ class BlenderUiControlTests(unittest.TestCase):
         create_controls.assert_not_called()
         self.assertEqual(state.task_status, "已复用现有预览")
 
+    def test_operation_size_handle_stays_on_its_local_plane(self):
+        control = self._control(
+            "window_size",
+            site_index=1,
+            role="width",
+            origin=[0.0, 0.0, 2.0],
+            axis=[1.0, 0.0, 0.0],
+            value=1.0,
+        )
+        control.location = Vector((2.0, 3.0, 8.0))
+
+        with patch.object(blender_ui, "_surface_point") as surface_point:
+            blender_ui._constrain_control(control)
+
+        surface_point.assert_not_called()
+        self.assertEqual(tuple(control.location), (2.0, 0.0, 2.0))
+
 
 if __name__ == "__main__":
     unittest.main()
