@@ -7,7 +7,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from twin_guide.blender_ui_worker import _remove_stage_documents, run_job
+from twin_guide.blender_ui_worker import (
+    _remove_stage_documents,
+    _seed_ui_cache,
+    run_job,
+)
 from twin_guide.config import EditorOverrides
 from twin_guide.ui_jobs import (
     BackgroundJob,
@@ -18,6 +22,26 @@ from twin_guide.ui_jobs import (
 
 
 class UiJobTests(unittest.TestCase):
+    def test_ui_jobs_reuse_missing_stage_caches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            formal = Path(directory) / "formal"
+            cached_stage = formal / "ui-plan" / ".cache" / "stage-01"
+            cached_stage.mkdir(parents=True)
+            (cached_stage / "candidates.json").write_text(
+                "cached",
+                encoding="utf-8",
+            )
+            preview = formal / "ui-preview"
+
+            _seed_ui_cache(formal, preview)
+
+            self.assertEqual(
+                (preview / ".cache" / "stage-01" / "candidates.json").read_text(
+                    encoding="utf-8"
+                ),
+                "cached",
+            )
+
     def test_ui_job_cleanup_removes_only_stage_documents(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)

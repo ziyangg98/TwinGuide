@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 
 import bpy
@@ -162,6 +163,19 @@ def analyze_case(config: CaseConfig) -> CaseAnalysis:
         )
         components = separate_connected_components(assembly_working_mesh)
         all_components.extend(components)
+        source_path = config.inputs.guide_sleeve_assemblies[assembly_index - 1]
+        source_stat = source_path.stat()
+        candidate_cache_key = json.dumps(
+            {
+                "path": str(source_path.resolve()),
+                "size": source_stat.st_size,
+                "mtime_ns": source_stat.st_mtime_ns,
+                "occlusal_axis": (
+                    None if occlusal_axis is None else occlusal_axis.as_tuple()
+                ),
+            },
+            sort_keys=True,
+        )
         sleeve_generation = recognize_and_build_sleeves(
             SleeveGenerationInputs(
                 components=components,
@@ -170,6 +184,13 @@ def analyze_case(config: CaseConfig) -> CaseAnalysis:
                 sleeve_parameters=config.sleeve,
                 jaw=config.jaw,
                 occlusal_axis=occlusal_axis,
+                candidate_cache_path=(
+                    config.output_directory
+                    / ".cache"
+                    / "stage-01-sleeve-reconstruction"
+                    / f"assembly-{assembly_index:02d}-candidates.json"
+                ),
+                candidate_cache_key=candidate_cache_key,
             )
         )
         offset = len(all_guides)

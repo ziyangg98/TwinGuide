@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 import traceback
 from dataclasses import replace
@@ -11,6 +12,25 @@ from pathlib import Path
 from twin_guide.config import CaseConfig, EditorOverrides
 from twin_guide.models import BuildArtifacts, ValidationResult
 from twin_guide.ui_jobs import promote_candidate, read_manifest, write_manifest
+
+
+def _seed_ui_cache(formal_directory: Path, output_directory: Path) -> None:
+    """把正式输出或另一 UI 任务已有的阶段缓存补入当前任务。"""
+
+    destination = output_directory / ".cache"
+    sources = (
+        formal_directory / ".cache",
+        formal_directory / "ui-plan" / ".cache",
+        formal_directory / "ui-preview" / ".cache",
+    )
+    for source in sources:
+        if source == destination or not source.is_dir():
+            continue
+        for stage in source.iterdir():
+            target = destination / stage.name
+            if stage.is_dir() and not target.exists():
+                destination.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(stage, target)
 
 
 def _remove_stage_documents(output_directory: Path) -> None:
@@ -55,6 +75,8 @@ def run_job(
 
     config = CaseConfig.from_yaml(config_path)
     formal_directory = config.output_directory
+    if mode in {"plan", "preview"}:
+        _seed_ui_cache(formal_directory, output_directory)
     job_config = replace(config, output_directory=output_directory.resolve())
     from twin_guide.editor_plan import editor_geometry_fingerprint
 

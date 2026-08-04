@@ -15,13 +15,13 @@ def _generate_guide_with_process(
     *,
     preview: bool = False,
 ) -> tuple[BuildArtifacts, GenerationProcessResult]:
-    """运行一次规划与实体化，并把同一次规划上下文交给 UI 快照。"""
+    """运行一次规划与实体化；预览仅省略 QA、文档和渲染产物。"""
 
     process = run_generation_process(
         config,
         require_observation_qa=not preview,
         write_stage_documents=not preview,
-        include_clearance_adjustment=not preview,
+        include_clearance_adjustment=True,
     )
     context = process.context
     if context.case is None or context.window_cutouts is None or context.point_linking is None:

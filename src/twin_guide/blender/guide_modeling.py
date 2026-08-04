@@ -46,7 +46,6 @@ from twin_guide.point_linking import PointLinkingPlan
 from twin_guide.types import ConnectorEndpointSource
 
 GENERATED_SUFFIXES = {".png", ".stl"}
-PREVIEW_FUSION_VOXEL_SIZE_MM = 0.6
 MAIN_CONNECTOR_PREFIXES = (
     "point_link_",
     "connector_root_bulb_",
@@ -820,13 +819,14 @@ def build_guide_from_links(
     *,
     preview: bool = False,
 ) -> BuildArtifacts:
-    """使用第 6 步光滑连接计划构造并导出正式牙科导板。
+    """使用第 6 步光滑连接计划构造并导出牙科导板。
 
     参数:
         case: 包含输入网格、导管参数和输出配置的病例分析。
         cutout_plan: 第 3 步通道与窗口计划。
         point_links: 第 6 步光滑连接计划。
         handpiece_avoidance: 可选的第 7 步一个或多个手机左右摆动包络计划。
+        preview: 是否省略过程图和最终视图；不改变实体几何。
 
     返回:
         最终 STL 路径和全部渲染图路径。
@@ -837,11 +837,7 @@ def build_guide_from_links(
     """
 
     output_directory = case.config.output_directory
-    fusion_voxel_size_mm = (
-        max(PREVIEW_FUSION_VOXEL_SIZE_MM, case.config.geometry.fusion_voxel_size_mm)
-        if preview
-        else case.config.geometry.fusion_voxel_size_mm
-    )
+    fusion_voxel_size_mm = case.config.geometry.fusion_voxel_size_mm
     output_directory.mkdir(parents=True, exist_ok=True)
     _clear_generated_artifacts(output_directory)
     materials = create_materials()
@@ -867,7 +863,7 @@ def build_guide_from_links(
         materials["connector"],
         template_mesh,
     )
-    if point_links.trim_against_dentition and not preview:
+    if point_links.trim_against_dentition:
         link_meshes = _trim_main_connectors_against_dentition(
             link_meshes,
             case.input_meshes.patient_dentition_mesh,
@@ -924,7 +920,7 @@ def build_guide_from_links(
         fusion_voxel_size_mm,
         materials["final"],
     )
-    if recut_cutters and not preview:
+    if recut_cutters:
         final_mesh = voxel_union(
             (final_mesh,),
             "twin_guide_pre_recut_mesh",
@@ -937,10 +933,9 @@ def build_guide_from_links(
         )
         remove_excess_components(final_mesh, 1)
     else:
-        if preview:
-            remove_excess_components(final_mesh, 1)
+        remove_excess_components(final_mesh, 1)
         clean_mesh(final_mesh)
-    for avoidance in () if preview else handpiece_avoidance or ():
+    for avoidance in handpiece_avoidance or ():
         handpiece_cutter = import_polygon_mesh(
             avoidance.envelope_mesh_path,
             f"handpiece_{avoidance.avoidance_id}_current_depth_lr_sweep_cutter",
@@ -957,7 +952,7 @@ def build_guide_from_links(
     assign_material(final_mesh, materials["final"])
     model_path = output_directory / "twin_guide.stl"
     export_stl_mesh(model_path, final_mesh)
-    if requires_serialized_repair and not preview:
+    if requires_serialized_repair:
         # 最终网格来自体素尺寸控制的规则化；STL 序列化偶发坏边只允许
         # 在一个体素以内局部折叠，修复尺度不超过上游离散精度。
         repair_manifold3d_stl(

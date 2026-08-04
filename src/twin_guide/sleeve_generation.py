@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from twin_guide.config import Jaw, SleeveParameters
@@ -27,6 +29,7 @@ if TYPE_CHECKING:
 
 BORE_PROBE_FRACTIONS = (0.15, 0.25, 0.35, 0.50, 0.65, 0.75, 0.85)
 MINIMUM_CLEAR_BORE_PROBES = 5
+CANDIDATE_CACHE_VERSION = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +42,8 @@ class SleeveGenerationInputs:
     sleeve_parameters: SleeveParameters
     jaw: Jaw
     occlusal_axis: Vec3 | None = None
+    candidate_cache_path: Path | None = None
+    candidate_cache_key: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +73,90 @@ class _GuideCandidate:
         """返回候选分量是否具有连续轴向导孔。"""
 
         return self.clear_bore_probe_count >= MINIMUM_CLEAR_BORE_PROBES
+
+
+def _candidate_values(candidate: _GuideCandidate) -> dict[str, object]:
+    """把耗时的导柱候选分析转换为可复用数值。"""
+
+    return {
+        "component_index": candidate.component_index,
+        "center": candidate.center.as_tuple(),
+        "axis": candidate.axis.as_tuple(),
+        "axial_min_mm": candidate.axial_min_mm,
+        "axial_max_mm": candidate.axial_max_mm,
+        "outer_radius_mm": candidate.outer_radius_mm,
+        "fitted_axis_origin": candidate.fitted_pose.axis_origin.as_tuple(),
+        "fitted_axis": candidate.fitted_pose.axis.as_tuple(),
+        "fitted_axial_min_mm": candidate.fitted_axial_min_mm,
+        "fitted_axial_max_mm": candidate.fitted_axial_max_mm,
+        "clear_bore_probe_count": candidate.clear_bore_probe_count,
+    }
+
+
+def _cached_candidates(
+    inputs: SleeveGenerationInputs,
+) -> tuple[_GuideCandidate, ...] | None:
+    """读取与当前导柱装配体匹配的候选分析。"""
+
+    path = inputs.candidate_cache_path
+    key = inputs.candidate_cache_key
+    if path is None or key is None or not path.is_file():
+        return None
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+        if document.get("version") != CANDIDATE_CACHE_VERSION:
+            return None
+        if document.get("key") != key:
+            return None
+        candidates = []
+        for value in document["candidates"]:
+            index = int(value["component_index"])
+            candidates.append(
+                _GuideCandidate(
+                    component_index=index,
+                    guide_mesh=inputs.components[index],
+                    center=Vec3(*map(float, value["center"])),
+                    axis=Vec3(*map(float, value["axis"])),
+                    axial_min_mm=float(value["axial_min_mm"]),
+                    axial_max_mm=float(value["axial_max_mm"]),
+                    outer_radius_mm=float(value["outer_radius_mm"]),
+                    fitted_pose=SleeveAxis(
+                        Vec3(*map(float, value["fitted_axis_origin"])),
+                        Vec3(*map(float, value["fitted_axis"])),
+                    ),
+                    fitted_axial_min_mm=float(value["fitted_axial_min_mm"]),
+                    fitted_axial_max_mm=float(value["fitted_axial_max_mm"]),
+                    clear_bore_probe_count=int(value["clear_bore_probe_count"]),
+                )
+            )
+        return tuple(candidates)
+    except (IndexError, KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _write_candidate_cache(
+    inputs: SleeveGenerationInputs,
+    candidates: tuple[_GuideCandidate, ...],
+) -> None:
+    """保存只依赖输入装配体的导柱候选分析。"""
+
+    path = inputs.candidate_cache_path
+    key = inputs.candidate_cache_key
+    if path is None or key is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "version": CANDIDATE_CACHE_VERSION,
+                "key": key,
+                "candidates": [_candidate_values(item) for item in candidates],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
 
 
 def _orient_axis_against_occlusal(
@@ -327,18 +416,21 @@ def recognize_and_build_sleeves(inputs: SleeveGenerationInputs) -> SleeveGenerat
         本函数不依赖牙位、切窗或连建结果。
     """
 
-    candidates = []
+    cached = _cached_candidates(inputs)
+    candidates = [] if cached is None else list(cached)
     rejected_components = []
     occlusal_outward = inputs.occlusal_axis or Vec3(
         0.0,
         0.0,
         inputs.jaw.occlusal_axis_sign,
     )
-    for index, mesh in enumerate(inputs.components):
-        try:
-            candidates.append(_analyze_component(mesh, index, occlusal_outward))
-        except GeometryError as error:
-            rejected_components.append(f"{index}:{error}")
+    if cached is None:
+        for index, mesh in enumerate(inputs.components):
+            try:
+                candidates.append(_analyze_component(mesh, index, occlusal_outward))
+            except GeometryError as error:
+                rejected_components.append(f"{index}:{error}")
+        _write_candidate_cache(inputs, tuple(candidates))
     first_raw, second_raw = _select_pair(
         tuple(candidates),
         inputs.sleeve_parameters,

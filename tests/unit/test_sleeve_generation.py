@@ -1,14 +1,19 @@
+import tempfile
 import unittest
+from pathlib import Path
 
-from twin_guide.config import SleeveParameters
+from twin_guide.config import Jaw, SleeveParameters
 from twin_guide.errors import GeometryError
 from twin_guide.geometry import Vec3
 from twin_guide.sleeve_estimation.types import SleeveAxis
 from twin_guide.sleeve_generation import (
+    SleeveGenerationInputs,
+    _cached_candidates,
     _filter_bore_candidates,
     _GuideCandidate,
     _orient_axis_against_occlusal,
     _select_pair,
+    _write_candidate_cache,
 )
 
 
@@ -157,6 +162,46 @@ class SleeveCandidateSelectionTests(unittest.TestCase):
                 candidates,
                 self.parameters,
                 ("9:分量表面积过小",),
+            )
+
+    def test_candidate_analysis_cache_restores_current_component_objects(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            components = (object(), object())
+            cache_path = Path(directory) / "candidates.json"
+            inputs = SleeveGenerationInputs(
+                components=components,
+                template_samples=(),
+                template_center=Vec3(0.0, 0.0, 0.0),
+                sleeve_parameters=self.parameters,
+                jaw=Jaw.LOWER,
+                candidate_cache_path=cache_path,
+                candidate_cache_key="assembly-v1",
+            )
+            candidates = (
+                _candidate(0, length_mm=13.0, radius_mm=2.95, clear_probe_count=7),
+                _candidate(1, length_mm=12.6, radius_mm=2.87, clear_probe_count=7),
+            )
+
+            _write_candidate_cache(inputs, candidates)
+            restored = _cached_candidates(inputs)
+
+            self.assertIsNotNone(restored)
+            assert restored is not None
+            self.assertIs(restored[0].guide_mesh, components[0])
+            self.assertIs(restored[1].guide_mesh, components[1])
+            self.assertEqual(restored[0].fitted_pose, candidates[0].fitted_pose)
+            self.assertIsNone(
+                _cached_candidates(
+                    SleeveGenerationInputs(
+                        components=components,
+                        template_samples=(),
+                        template_center=Vec3(0.0, 0.0, 0.0),
+                        sleeve_parameters=self.parameters,
+                        jaw=Jaw.LOWER,
+                        candidate_cache_path=cache_path,
+                        candidate_cache_key="changed-assembly",
+                    )
+                )
             )
 
 
