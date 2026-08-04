@@ -168,7 +168,6 @@ def _connector_base(object_: bpy.types.Object) -> tuple[Vector, Vector, float]:
     distance = min(length, max(0.0, float(object_.get("tg_path_distance", 0.0))))
     tangent = segment.normalized()
     base = start + tangent * distance
-    object_["tg_path_distance"] = distance
     return base, tangent, length
 
 

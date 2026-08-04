@@ -7,6 +7,18 @@ from typing import ClassVar
 import bpy
 from mathutils import Matrix
 
+DRAGGABLE_KINDS = {
+    "connector_node",
+    "junction",
+    "observation_endpoint",
+    "observation_scalar",
+    "sleeve_height",
+    "surface_anchor",
+    "window_center",
+    "window_margin",
+    "window_size",
+}
+
 
 class TwinGuideFeatureGizmoGroup(bpy.types.GizmoGroup):
     """为当前结构显示一至两个直接拖动的局部轴 Gizmo。"""
@@ -25,16 +37,14 @@ class TwinGuideFeatureGizmoGroup(bpy.types.GizmoGroup):
 
         object_ = context.active_object
         state = getattr(context.scene, "twin_guide_state", None)
+        kind = None if object_ is None else object_.get("tg_kind")
         return bool(
             object_ is not None
             and object_.name.startswith(blender_ui.CONTROL_PREFIX)
             and not object_.hide_get()
             and state is not None
             and not state.editing_locked
-            and (
-                object_.get("tg_kind") == "surface_anchor"
-                or blender_ui._gizmo_axes(object_)
-            )
+            and kind in DRAGGABLE_KINDS
         )
 
     def setup(self, _context: bpy.types.Context) -> None:
