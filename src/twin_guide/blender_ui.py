@@ -1950,7 +1950,7 @@ def _gizmo_axes(object_: bpy.types.Object) -> tuple[tuple[Vector, Vector], ...]:
             (item for item in candidates if int(item["fdi"]) == current_fdi),
             candidates[0],
         )
-        tangent = Vector(current.get("tangent", (1.0, 0.0, 0.0))).normalized()
+        tangent = _vec(current["tangent"]).normalized()
         return ((Vector(object_["tg_axis_origin"]), tangent),)
     if kind == "surface_anchor":
         return ()

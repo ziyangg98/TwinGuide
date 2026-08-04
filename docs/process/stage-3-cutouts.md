@@ -162,9 +162,16 @@ $$
 都有真实命中。只有满足其中一种时，缺失单元才反复使用上下左右有限邻居的
 中位数补齐；无邻居可填时直接失败。
 
-## 4. 质量检查与局部修正
+## 4. 约束求解与质量检查
 
-首次生成后同时检查：
+观察窗不会根据质量检查结果反复调整。算法先沿每个轴行和观察角计算导板外壁
+与首次牙面交点，再求满足牙面可见行比例的最小统一内切深度。切除体由外壁、
+反向内弧、两侧边界和两端封口直接组成一个封闭网格。
+
+内切深度不得超过观察窗高度。可见牙面行数不足或所需深度超限时，阶段直接报告
+需要值和允许值，不生成切除体。
+
+生成后同时检查：
 
 - 每个窗的轴截面完整，射线支撑连续；
 - 语义轴已被完整打开；牙面可见行比例不低于 `0.50`，连续通道比例不低于 `0.95`；
@@ -176,24 +183,6 @@ $$
   $\max(0.05\ \mathrm{mm}^3,\ 10^{-4}V_{\cap})$。
 - 结果与切除体没有超过容差的残留重叠。
 
-如果只有某些轴行的净距、牙面可见性或连续通道失败，依次尝试
-`case.yaml` 配置的有效下移目标（常用 0.5/1.0/2.0 mm）。已通过的行
-保持原值，失败行和相邻过渡行才下移。所有目标用尽仍未通过时明确
-报错，失败的切除体不会进入 Blender。
-
-对目标有效下移 $d^*$，基线下移为 $d_0$，失败行集为 $\mathcal F$，
-过渡行数为 $k$。该行及相邻行的附加下移为
-
-$$
-\Delta_r=
-\max_{f\in\mathcal F}
-\left[(d^*-d_0)\max\left(0,1-\frac{|r-f|}{k+1}\right)\right].
-$$
-
-这里 $\Delta_r$ 是相对基线的**附加**下移，不是总下移。代码把它与此前已接受的
-`local_axis_drop_additions_mm[r]` 逐行取最大值；失败行增加到本轮目标，过渡行线性衰减，
-远离失败区的已通过行保持不变。
-
 ## 缓存边界
 
 第 3 阶段的可再生成文件统一位于：
@@ -203,8 +192,7 @@ output/<case_id>/.cache/stage-03-cutout-planning/
 ├── manifest.json
 ├── observation-window-cutter.ply
 ├── observation-window-report.json
-├── raw-overview.png
-└── local-corrected-mapping.json   # 仅发生局部修正时
+└── raw-overview.png
 ```
 
 后续阶段通过内存中的 `CutoutPlan` 读取本阶段结果。
@@ -222,7 +210,7 @@ output/<case_id>/.cache/stage-03-cutout-planning/
 | 最小已移除轴净距 | `right` 0.203 mm；`left` 0.201 mm |
 | 牙面可见行比例 | 1.0 |
 | 连续通道比例 | 1.0 |
-| 局部修正 | 首次质量检查通过，未使用 |
+| 约束求解 | 牙面引导内切边界，一次生成 |
 
 ## 代码对应
 
@@ -232,7 +220,7 @@ output/<case_id>/.cache/stage-03-cutout-planning/
 | 轴扫契约与固定参数 | `observation_window_opening.build_observation_window_opening` |
 | 射线网格、补值和切除体 | `observation_window_engine._core.build_axis_sweep_cutter` |
 | 差集质量门 | `observation_window_engine._core._run_once` |
-| 逐行局部修正 | `_local_axis_failure_rows`、`_smoothed_local_drop_additions`、`_run_with_local_failure_target_sequence` |
+| 最小可行内切深度 | `observation_window_engine._core.build_axis_sweep_cutter` |
 
 ![导孔、操作窗与观察窗规划](../images/stage-3-cutout-planning.png)
 

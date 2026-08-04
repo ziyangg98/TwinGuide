@@ -1,4 +1,4 @@
-"""不改变输入对象的 Blender 布尔运算，并支持求解器回退。"""
+"""不改变输入对象的确定性 Blender 布尔运算。"""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from twin_guide.blender.scene import duplicate_mesh_object, remove_object, set_a
 from twin_guide.errors import BooleanOperationError
 
 BooleanOperation = Literal["UNION", "DIFFERENCE"]
-BOOLEAN_SOLVERS = ("EXACT", "MANIFOLD", "FLOAT")
+BOOLEAN_SOLVER = "MANIFOLD"
 MANIFOLD_OUTPUT_WELD_TOLERANCE_MM = 1e-6
 MANIFOLD_OUTPUT_COLLAPSE_LIMIT_MM = 0.02
 MANIFOLD_SIMPLIFY_TOLERANCE_MM = 0.005
@@ -371,38 +371,35 @@ def apply_boolean(
     target_mesh: bpy.types.Object,
     cutter_mesh: bpy.types.Object,
     operation: BooleanOperation,
-    solvers: tuple[str, ...] = BOOLEAN_SOLVERS,
+    solver: str = BOOLEAN_SOLVER,
 ) -> bpy.types.Object:
-    """在副本上尝试布尔运算，并保留最后一个求解器异常。"""
+    """在副本上用指定求解器执行一次布尔运算。"""
 
-    last_error: Exception | None = None
-    for solver in solvers:
-        candidate = duplicate_mesh_object(
-            target_mesh, f"{target_mesh.name}_{operation.lower()}_{solver.lower()}"
-        )
-        try:
-            _apply_modifier(candidate, cutter_mesh, operation, solver)
-            if candidate.data.vertices and candidate.data.polygons:
-                remove_object(target_mesh)
-                return candidate
-            last_error = BooleanOperationError(f"求解器 {solver} 返回了空网格")
-        except Exception as error:
-            last_error = error
+    candidate = duplicate_mesh_object(
+        target_mesh, f"{target_mesh.name}_{operation.lower()}_{solver.lower()}"
+    )
+    try:
+        _apply_modifier(candidate, cutter_mesh, operation, solver)
+        if not candidate.data.vertices or not candidate.data.polygons:
+            raise BooleanOperationError(f"求解器 {solver} 返回了空网格")
+    except Exception as error:
         remove_object(candidate)
-    message = f"对 {target_mesh.name} 和 {cutter_mesh.name} 执行 {operation} 布尔运算失败"
-    if last_error is None:
-        raise BooleanOperationError(message)
-    raise BooleanOperationError(message) from last_error
+        raise BooleanOperationError(
+            f"对 {target_mesh.name} 和 {cutter_mesh.name} 执行 "
+            f"{operation} 布尔运算失败（求解器：{solver}）"
+        ) from error
+    remove_object(target_mesh)
+    return candidate
 
 
 def subtract_cutters(
     target_mesh: bpy.types.Object,
     cutter_meshes: tuple[bpy.types.Object, ...],
-    solvers: tuple[str, ...] = BOOLEAN_SOLVERS,
+    solver: str = BOOLEAN_SOLVER,
 ) -> bpy.types.Object:
     """按给定顺序从目标网格中逐个扣除切割体。"""
 
     result = target_mesh
     for cutter_mesh in cutter_meshes:
-        result = apply_boolean(result, cutter_mesh, "DIFFERENCE", solvers)
+        result = apply_boolean(result, cutter_mesh, "DIFFERENCE", solver)
     return result

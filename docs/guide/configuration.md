@@ -126,8 +126,6 @@ $$
 | `operation_corner_radius_mm` | $\min(1,\max(0.2,m_b))$ | 操作窗圆角半径，$\geq0$ |
 | `observation_axis_drop_mm` | `0.2` | FDI 轴扫观察窗公共轴相对高端牙冠顶的下沉量，$>0$ |
 | `observation_sweep_angle_degrees` | `90.0` | 默认扫角，$0<\theta\leq180$ |
-| `observation_local_failure_drop_targets_mm` | `[0.5, 1.0, 2.0]` | 局部穿透修正依次尝试的轴高下沉量；非空、严格递增，且每项大于全局下沉量 |
-| `observation_local_failure_transition_rows` | `1` | 局部修正与未修正区域之间的过渡行数，非负整数 |
 
 `planning.operation_windows` 可以用病例语义名称覆盖四个操作窗数值：
 

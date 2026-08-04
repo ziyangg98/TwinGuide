@@ -52,8 +52,6 @@ runtime:
     operation_corner_radius_mm: 1.0
     observation_axis_drop_mm: 0.2
     observation_sweep_angle_degrees: 90.0
-    observation_local_failure_drop_targets_mm: [0.5, 1.0, 2.0]
-    observation_local_failure_transition_rows: 1
   press_beam:
     diameter_mm: 4.6
     guide_overlap_mm: 0.3

@@ -8,7 +8,7 @@ import json
 import math
 import os
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -45,24 +45,29 @@ class ObservationWindowRequest:
     residual_volume_tolerance_mm3: float = 1e-4
     volume_identity_tolerance_mm3: float = 5e-2
     volume_identity_relative_tolerance: float = 1e-4
-    local_failure_drop_targets_mm: tuple[float, ...] = ()
-    local_failure_transition_rows: int = 1
 
 
 def _preview_window_fingerprint(
     source_path: Path,
+    dental_path: Path,
     window: dict[str, object],
     args: ObservationWindowRequest,
 ) -> str:
     """散列单个观察窗 cutter 的全部几何输入。"""
 
     source_stat = source_path.stat()
+    dental_stat = dental_path.stat()
     payload = {
-        "version": "axis-sweep-preview-v1",
+        "version": "axis-sweep-preview-v2-dental-constraint",
         "source": {
             "path": str(source_path),
             "size": source_stat.st_size,
             "mtime_ns": source_stat.st_mtime_ns,
+        },
+        "dental": {
+            "path": str(dental_path),
+            "size": dental_stat.st_size,
+            "mtime_ns": dental_stat.st_mtime_ns,
         },
         "window": window,
         "side_extension_mm": args.side_extension_mm,
@@ -231,42 +236,106 @@ def _fill_axis_sweep_grid(values: np.ndarray) -> np.ndarray:
 
 def axis_sweep_axis_points(
     definition: dict[str, object],
-) -> tuple[np.ndarray, np.ndarray]:
-    """内部算法说明。\n\nReturn semantic axis rows after optional local downward corrections."""
+) -> np.ndarray:
+    """返回由两端点唯一确定的语义轴采样行。"""
 
     axis_start = np.asarray(definition["axis_start_global_mm"], dtype=float)
     axis_end = np.asarray(definition["axis_end_global_mm"], dtype=float)
     row_count = int(definition["axis_section_count"])
     fractions = np.linspace(0.0, 1.0, row_count)
-    points = np.asarray([
+    return np.asarray([
         (1.0 - fraction) * axis_start + fraction * axis_end
         for fraction in fractions
     ])
-    additions = np.asarray(
-        definition.get("local_axis_drop_additions_mm", [0.0] * row_count),
-        dtype=float,
-    )
-    if additions.shape != (row_count,):
-        raise RuntimeError(
-            "local_axis_drop_additions_mm must contain one value per axis row"
+
+
+def _structured_sweep_volume(
+    outer: np.ndarray,
+    inner: np.ndarray,
+) -> trimesh.Trimesh:
+    """由配对的内外规则网格直接建立单一封闭扫掠体。"""
+
+    if outer.shape != inner.shape or outer.ndim != 3 or outer.shape[2] != 3:
+        raise RuntimeError("观察窗内外边界网格尺寸不一致")
+    row_count, column_count, _ = outer.shape
+    if row_count < 2 or column_count < 2:
+        raise RuntimeError("观察窗扫掠网格至少需要两行两列")
+    vertices = np.vstack((outer.reshape((-1, 3)), inner.reshape((-1, 3))))
+    inner_offset = row_count * column_count
+
+    def outer_index(row: int, column: int) -> int:
+        """返回外表面规则网格顶点编号。"""
+        return row * column_count + column
+
+    def inner_index(row: int, column: int) -> int:
+        """返回内表面规则网格顶点编号。"""
+        return inner_offset + row * column_count + column
+
+    faces: list[tuple[int, int, int]] = []
+
+    def quad(a: int, b: int, c: int, d: int) -> None:
+        """按统一对角线把四边面写为两个三角形。"""
+        faces.extend(((a, b, c), (a, c, d)))
+
+    for row in range(row_count - 1):
+        for column in range(column_count - 1):
+            quad(
+                outer_index(row, column),
+                outer_index(row + 1, column),
+                outer_index(row + 1, column + 1),
+                outer_index(row, column + 1),
+            )
+            quad(
+                inner_index(row, column + 1),
+                inner_index(row + 1, column + 1),
+                inner_index(row + 1, column),
+                inner_index(row, column),
+            )
+    for row in range(row_count - 1):
+        quad(
+            outer_index(row, 0),
+            inner_index(row, 0),
+            inner_index(row + 1, 0),
+            outer_index(row + 1, 0),
         )
-    if np.any(additions < 0.0):
-        raise RuntimeError("local axis-drop additions must be non-negative")
-    zero_direction = unit(np.asarray(
-        definition["zero_degree_occlusal_direction_global"], dtype=float
-    ))
-    points = points - additions[:, None] * zero_direction[None, :]
-    return points, additions
+        last = column_count - 1
+        quad(
+            outer_index(row + 1, last),
+            inner_index(row + 1, last),
+            inner_index(row, last),
+            outer_index(row, last),
+        )
+    for column in range(column_count - 1):
+        quad(
+            outer_index(0, column + 1),
+            inner_index(0, column + 1),
+            inner_index(0, column),
+            outer_index(0, column),
+        )
+        last = row_count - 1
+        quad(
+            outer_index(last, column),
+            inner_index(last, column),
+            inner_index(last, column + 1),
+            outer_index(last, column + 1),
+        )
+    result = trimesh.Trimesh(vertices=vertices, faces=faces, process=True)
+    result.fix_normals(multibody=True)
+    if not result.is_volume:
+        raise RuntimeError("观察窗规则扫掠边界未形成封闭体")
+    return result
 
 
 def build_axis_sweep_cutter(
     source: trimesh.Trimesh,
+    dental: trimesh.Trimesh,
     definition: dict[str, object],
     side_extension_mm: float,
     radial_overcut_mm: float,
     following_wall_safety_mm: float,
     axis_core_overcut_mm: float,
-    union_batch_size: int,
+    minimum_axis_visibility_row_fraction: float,
+    maximum_inner_depth_mm: float,
     minimum_valid_fraction: float = 0.75,
 ) -> tuple[trimesh.Trimesh, np.ndarray, dict[str, float | int]]:
     """内部算法说明。\n\nBuild a ruled sector cutter around one mapped common-height axis.
@@ -298,7 +367,7 @@ def build_axis_sweep_cutter(
         unit(math.cos(angle) * zero_direction + math.sin(angle) * exterior_direction)
         for angle in angles
     ])
-    axis_points, local_drop_additions = axis_sweep_axis_points(definition)
+    axis_points = axis_sweep_axis_points(definition)
     inside_axis = np.asarray(source.contains(axis_points), dtype=bool)
     radial_directions = np.tile(directions, (row_count, 1))
     repeated_axis = np.repeat(axis_points, angle_count, axis=0)
@@ -397,15 +466,46 @@ def build_axis_sweep_cutter(
         )
     filled_radii = _fill_axis_sweep_grid(radii)
     outer = axis_points[:, None, :] + filled_radii[:, :, None] * directions[None, :, :]
-    middle_angle = 0.5 * (angles[0] + angles[-1])
-    inward_bisector = unit(
-        math.cos(middle_angle) * zero_direction
-        + math.sin(middle_angle) * exterior_direction
+    dental_distances = _nearest_ray_hit_distances(
+        dental,
+        origins,
+        ray_directions,
+    ).reshape((row_count, angle_count))
+    dental_radii = ray_span_mm - dental_distances
+    dental_hits = np.isfinite(dental_radii) & (dental_radii < filled_radii - 1e-4)
+    # 每个观察角都使用同一径向内边界。深度取满足牙面可见行数约束的
+    # 最小值，因此 cutter 是规则双弧扇形，不会形成朝牙弓内部延伸的尖脊。
+    dental_penetration_mm = 0.10
+    required_depths = np.where(
+        dental_hits,
+        np.maximum(0.0, dental_penetration_mm - dental_radii),
+        np.inf,
     )
-    # G1/G2 lie at the tooth positions, normally inside the guide cavity.  A
-    # small extension behind the semantic axis prevents a zero-thickness apex;
-    # guide penetration itself is determined only by the outward sector rays.
-    core = axis_points - axis_core_overcut_mm * inward_bisector[None, :]
+    row_minimum_depths = np.min(required_depths, axis=1)
+    finite_row_depths = np.sort(row_minimum_depths[np.isfinite(row_minimum_depths)])
+    required_visible_rows = math.ceil(
+        minimum_axis_visibility_row_fraction * row_count - EPS
+    )
+    if len(finite_row_depths) < required_visible_rows:
+        raise RuntimeError(
+            "观察窗有效牙面不足："
+            f"需要 {required_visible_rows}/{row_count} 行，"
+            f"实际只有 {len(finite_row_depths)} 行"
+        )
+    calculated_core_depth_mm = max(
+        axis_core_overcut_mm,
+        float(finite_row_depths[required_visible_rows - 1]),
+    )
+    if calculated_core_depth_mm > maximum_inner_depth_mm + EPS:
+        raise RuntimeError(
+            "观察窗内切深度超出约束："
+            f"需要 {calculated_core_depth_mm:.2f} mm，"
+            f"允许不超过 {maximum_inner_depth_mm:.2f} mm"
+        )
+    inner = (
+        axis_points[:, None, :]
+        - calculated_core_depth_mm * directions[None, ::-1, :]
+    )
 
     start_shift = -side_extension_mm * axis_direction
     end_shift = side_extension_mm * axis_direction
@@ -414,28 +514,12 @@ def build_axis_sweep_cutter(
         outer,
         outer[-1:] + end_shift,
     ], axis=0)
-    core = np.concatenate([
-        core[:1] + start_shift,
-        core,
-        core[-1:] + end_shift,
+    inner = np.concatenate([
+        inner[:1] + start_shift,
+        inner,
+        inner[-1:] + end_shift,
     ], axis=0)
-    cells = []
-    for row in range(len(core) - 1):
-        for column in range(angle_count - 1):
-            corners = np.vstack([
-                core[row], core[row + 1],
-                outer[row, column], outer[row, column + 1],
-                outer[row + 1, column], outer[row + 1, column + 1],
-            ])
-            cell = trimesh.convex.convex_hull(corners)
-            if not cell.is_volume:
-                raise RuntimeError(
-                    f"axis-sweep cutter cell ({row}, {column}) is not a closed volume"
-                )
-            cells.append(cell)
-    cutter = retain_positive_volume_components(
-        regularize_manifold(union_batched(cells, union_batch_size))
-    )
+    cutter = _structured_sweep_volume(outer, inner)
     valid_thickness = first_wall_thickness[np.isfinite(first_wall_thickness)]
     valid_overcut = applied_overcut[np.isfinite(applied_overcut)]
     return cutter, outer, {
@@ -475,10 +559,18 @@ def build_axis_sweep_cutter(
         "curtailed_overcut_ray_count": 0,
         "minimum_clearance_after_overcut_mm": -1.0,
         "axis_core_overcut_mm": float(axis_core_overcut_mm),
-        "local_axis_drop_addition_max_mm": float(np.max(local_drop_additions)),
-        "locally_corrected_axis_row_count": int(np.count_nonzero(
-            local_drop_additions > 1e-9
-        )),
+        "dental_guided_inner_boundary": True,
+        "dental_guided_ray_count": int(np.count_nonzero(dental_hits)),
+        "dental_guided_ray_fraction": float(np.mean(dental_hits)),
+        "dental_surface_penetration_mm": dental_penetration_mm,
+        "calculated_axis_core_depth_mm": calculated_core_depth_mm,
+        "maximum_inner_boundary_depth_mm": maximum_inner_depth_mm,
+        "required_visible_axis_row_count": required_visible_rows,
+        "available_dental_axis_row_count": len(finite_row_depths),
+        "minimum_required_core_depth_by_axis_row_mm": [
+            None if not math.isfinite(value) else float(value)
+            for value in row_minimum_depths
+        ],
     }
 
 
@@ -503,18 +595,22 @@ def build_preview(
 
     output_dir = args.output_dir.resolve()
     source_path = args.source.resolve()
+    dental_path = Path(mapping["sources"]["dental"]).resolve()
     window_cache = output_dir / "preview-window-cache"
     cutters: list[trimesh.Trimesh] = []
     window_reports = []
     digests = []
     source = None
+    dental = None
     for window in windows:
         definition = window.get("axis_sweep")
         if window.get("opening_geometry") != "axis_sweep" or not isinstance(
             definition, dict
         ):
             raise RuntimeError(f"window {window['id']} has no axis-sweep definition")
-        digest = _preview_window_fingerprint(source_path, window, args)
+        digest = _preview_window_fingerprint(
+            source_path, dental_path, window, args
+        )
         cache_path = window_cache / f"{digest}.npz"
         cutter = None
         if cache_path.is_file() and not force_rebuild:
@@ -525,14 +621,17 @@ def build_preview(
         if cutter is None:
             if source is None:
                 source = load_mesh(source_path)
+                dental = load_mesh(dental_path)
             cutter, _, _ = build_axis_sweep_cutter(
                 source,
+                dental,
                 definition,
                 args.side_extension_mm,
                 args.wall_overcut_mm,
                 args.following_wall_safety_mm,
                 args.axis_core_overcut_mm,
-                args.union_batch_size,
+                args.minimum_axis_visibility_row_fraction,
+                float(window["height_mm"]),
             )
             _write_preview_mesh_cache(cutter, cache_path)
         cutters.append(cutter)
@@ -628,7 +727,7 @@ def axis_sweep_tooth_visibility(
     ).reshape((-1, 3))
     guide_distance = _nearest_ray_hit_distances(result_guide, origins, directions)
     dental_distance = _nearest_ray_hit_distances(dental, origins, directions)
-    axis_points, _ = axis_sweep_axis_points(definition)
+    axis_points = axis_sweep_axis_points(definition)
     if len(axis_points) != len(surface):
         raise RuntimeError("axis-sweep visibility rows do not match semantic axis rows")
     repeated_axis = np.repeat(axis_points, angle_count, axis=0)
@@ -728,6 +827,8 @@ def _run_once(args: ObservationWindowRequest) -> dict[str, object]:
     if not selected_windows:
         raise RuntimeError("no observation windows were selected")
 
+    dental_path = Path(mapping["sources"]["dental"])
+    dental = load_mesh(dental_path)
     cutters = {}
     surfaces = {}
     window_reports = []
@@ -748,12 +849,14 @@ def _run_once(args: ObservationWindowRequest) -> dict[str, object]:
             )
         cutter, surface, wall_report = build_axis_sweep_cutter(
             source,
+            dental,
             definition,
             args.side_extension_mm,
             args.wall_overcut_mm,
             args.following_wall_safety_mm,
             args.axis_core_overcut_mm,
-            args.union_batch_size,
+            args.minimum_axis_visibility_row_fraction,
+            float(window["height_mm"]),
         )
         profile_count = int(definition["axis_section_count"])
         profile_point_count = int(definition["angle_section_count"])
@@ -779,23 +882,6 @@ def _run_once(args: ObservationWindowRequest) -> dict[str, object]:
         regularize_manifold(union_batched(list(cutters.values()), args.union_batch_size))
     )
     result_all = regularize_manifold(boolean("difference", [source, combined]))
-    has_local_axis_correction = any(
-        np.any(np.asarray(
-            window.get("axis_sweep", {}).get(
-                "local_axis_drop_additions_mm", []
-            ),
-            dtype=float,
-        ) > 1e-9)
-        for window in selected_windows
-        if window.get("opening_geometry") == "axis_sweep"
-    )
-    if has_local_axis_correction:
-        # A locally curved ruled cutter has many nearly coplanar cell seams.
-        # Repeating the same difference removes numerical overlap slivers; it
-        # does not enlarge the requested cutter or alter unaffected rows.
-        result_all = regularize_manifold(
-            boolean("difference", [result_all, combined])
-        )
     if result_all.is_empty:
         raise RuntimeError("observation-window difference removed the entire guide")
     source_components = len(source.split(only_watertight=False))
@@ -812,8 +898,6 @@ def _run_once(args: ObservationWindowRequest) -> dict[str, object]:
     result = remove_submicron_degenerate_faces(result)
 
     visibility_reports = {}
-    dental_path = Path(mapping["sources"]["dental"])
-    dental = load_mesh(dental_path)
     for mapped_window, window_report in zip(
         selected_windows, window_reports, strict=True
     ):
@@ -831,7 +915,7 @@ def _run_once(args: ObservationWindowRequest) -> dict[str, object]:
         selected_windows, window_reports, strict=True
     ):
         definition = mapped_window["axis_sweep"]
-        axis_points, local_drop_additions = axis_sweep_axis_points(definition)
+        axis_points = axis_sweep_axis_points(definition)
         dense_axis = []
         dense_row_coordinates = []
         samples_per_interval = 10
@@ -864,9 +948,6 @@ def _run_once(args: ObservationWindowRequest) -> dict[str, object]:
             float(value) for value in row_clearances
         ]
         window_report["axis_rows_below_clearance_threshold"] = failed_rows
-        window_report["local_axis_drop_additions_mm"] = [
-            float(value) for value in local_drop_additions
-        ]
 
     residual = boolean("intersection", [result, combined])
     residual_volume = 0.0 if residual.is_empty else float(abs(residual.volume))
@@ -986,231 +1067,16 @@ def _run_once(args: ObservationWindowRequest) -> dict[str, object]:
     return report
 
 
-def _local_axis_failure_rows(
-    window_report: dict[str, object],
-    args: ObservationWindowRequest,
-) -> tuple[list[int], list[str]]:
-    """内部算法说明。\n\nLocate only rows responsible for a failed axis-window QA category."""
-
-    failed_rows: set[int] = set()
-    reasons = []
-    minimum_clearance = float(
-        window_report.get("minimum_removed_axis_clearance_mm", math.inf)
-    )
-    clearance_threshold = float(
-        window_report.get("axis_clearance_threshold_mm", 0.15)
-    )
-    if minimum_clearance < clearance_threshold:
-        failed_rows.update(
-            int(value)
-            for value in window_report.get(
-                "axis_rows_below_clearance_threshold", []
-            )
-        )
-        reasons.append("axis_clearance")
-
-    visibility = window_report.get("tooth_visibility", {})
-    if isinstance(visibility, dict):
-        visible_fraction = float(
-            visibility.get("axis_rows_with_visible_dental_fraction", 1.0)
-        )
-        if visible_fraction < args.minimum_axis_visibility_row_fraction:
-            failed_rows.update(
-                int(value)
-                for value in visibility.get(
-                    "axis_rows_without_visible_dental", []
-                )
-            )
-            reasons.append("dental_visibility")
-        corridor_by_row = np.asarray(
-            visibility.get("clear_axis_corridor_fraction_by_row", []),
-            dtype=float,
-        )
-        if (
-            len(corridor_by_row)
-            and float(np.min(corridor_by_row))
-            < args.minimum_axis_clear_corridor_fraction
-        ):
-            failed_rows.update(
-                int(value) for value in np.flatnonzero(
-                    corridor_by_row < args.minimum_axis_clear_corridor_fraction
-                )
-            )
-            reasons.append("axis_corridor")
-    return sorted(failed_rows), reasons
-
-
-def _smoothed_local_drop_additions(
-    row_count: int,
-    failed_rows: list[int],
-    increment_mm: float,
-    transition_rows: int,
-) -> np.ndarray:
-    """内部算法说明。"""
-    additions = np.zeros(row_count, dtype=float)
-    for failed_row in failed_rows:
-        if not 0 <= failed_row < row_count:
-            raise RuntimeError("local correction row index is outside the axis")
-        additions[failed_row] = max(additions[failed_row], increment_mm)
-        for distance in range(1, transition_rows + 1):
-            transition = increment_mm * (
-                1.0 - distance / float(transition_rows + 1)
-            )
-            for row in (failed_row - distance, failed_row + distance):
-                if 0 <= row < row_count:
-                    additions[row] = max(additions[row], transition)
-    return additions
-
-
-def _run_with_local_failure_target_sequence(
-    args: ObservationWindowRequest,
-) -> dict[str, object]:
-    """内部算法说明。\n\nRetry only failed axis rows at increasing effective drop targets.
-
-    The mapping's ``axis_drop_mm`` remains the global baseline.  A target of
-    0.5 mm with a 0.2 mm baseline therefore writes a 0.3 mm local addition,
-    never a second global drop.  Rows that pass an earlier attempt keep their
-    earlier correction; only rows reported as failed advance to the next
-    target.
-    """
-
-    targets = tuple(float(value) for value in args.local_failure_drop_targets_mm)
-    if any(not math.isfinite(value) or value <= 0.0 for value in targets):
-        raise RuntimeError("local failure drop targets must be positive finite values")
-    if any(later <= earlier for earlier, later in itertools.pairwise(targets)):
-        raise RuntimeError("local failure drop targets must be strictly increasing")
-    if int(args.local_failure_transition_rows) < 0:
-        raise RuntimeError("local failure transition rows must be non-negative")
-
-    output_root = args.output_dir.resolve()
-    output_root.mkdir(parents=True, exist_ok=True)
-    original_mapping_path = args.mapping_report.resolve()
-    working_mapping = stage_2_mapping_payload(
-        json.loads(original_mapping_path.read_text(encoding="utf-8"))
-    )
-
-    current_report = _run_once(args)
-    attempts: list[dict[str, object]] = [{
-        "attempt": 0,
-        "effective_drop_target_mm": None,
-        "QA_passed": bool(all(current_report["QA"].values())),
-        "windows": {},
-    }]
-    if all(current_report["QA"].values()):
-        current_report["local_failure_adaptation"] = {
-            "mode": "effective_drop_target_sequence",
-            "requested_targets_mm": list(targets),
-            "applied": False,
-            "reason": "initial global mapping pass already satisfied all QA gates",
-            "attempts": attempts,
-            "global_axis_drop_unchanged": True,
-        }
-        current_path = Path(current_report["outputs"]["report_json"])
-        current_path.write_text(
-            json.dumps(current_report, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        return current_report
-
-    mapping_windows = {
-        str(window["id"]): window
-        for window in working_mapping["observation_windows"]
+def run(args: ObservationWindowRequest) -> dict[str, object]:
+    """由导板、牙面和观察方向直接构造并验收一次轴扫观察窗。"""
+    report = _run_once(args)
+    report["constraint_solution"] = {
+        "mode": "direct_dental_guided_boundary",
+        "attempt_count": 1,
+        "QA_passed": bool(all(report["QA"].values())),
     }
-    last_target: float | None = None
-    exhausted = True
-    for attempt_index, target_mm in enumerate(targets, 1):
-        adaptations: dict[str, object] = {}
-        has_local_failures = False
-        for window_report in current_report["windows"]:
-            if window_report["opening_geometry"] != "axis_sweep":
-                continue
-            failed_rows, reasons = _local_axis_failure_rows(window_report, args)
-            if not failed_rows:
-                continue
-            has_local_failures = True
-            window_id = str(window_report["id"])
-            definition = mapping_windows[window_id]["axis_sweep"]
-            baseline_drop_mm = float(definition["axis_drop_mm"])
-            if target_mm <= baseline_drop_mm:
-                # 编辑器允许每个观察窗拥有独立的全局下沉量。某个重试档位
-                # 低于当前窗的基线时，它对该窗没有修正意义；继续寻找下一
-                # 个更深档位，同时仍允许同一档位修正其他较浅的观察窗。
-                continue
-            row_count = int(definition["axis_section_count"])
-            target_addition_mm = target_mm - baseline_drop_mm
-            proposed = _smoothed_local_drop_additions(
-                row_count,
-                failed_rows,
-                target_addition_mm,
-                int(args.local_failure_transition_rows),
-            )
-            existing = np.asarray(
-                definition.get("local_axis_drop_additions_mm", [0.0] * row_count),
-                dtype=float,
-            )
-            additions = np.maximum(existing, proposed)
-            definition["local_axis_drop_additions_mm"] = [
-                float(value) for value in additions
-            ]
-            definition["maximum_effective_axis_drop_mm"] = (
-                baseline_drop_mm + float(np.max(additions))
-            )
-            adaptation = {
-                "failed_axis_rows": failed_rows,
-                "failure_reasons": reasons,
-                "effective_drop_target_mm": target_mm,
-                "local_addition_at_failed_rows_mm": target_addition_mm,
-                "transition_rows": int(args.local_failure_transition_rows),
-                "corrected_axis_rows": [
-                    int(index) for index in np.flatnonzero(proposed > 1e-9)
-                ],
-            }
-            definition["local_failure_adaptation"] = adaptation
-            adaptations[window_id] = adaptation
-
-        if not adaptations and has_local_failures:
-            continue
-        if not adaptations:
-            exhausted = False
-            break
-
-        mapping_path = output_root / "local-corrected-mapping.json"
-        mapping_path.write_text(
-            json.dumps(working_mapping, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        retry_args = replace(args, mapping_report=mapping_path)
-        current_report = _run_once(retry_args)
-        last_target = target_mm
-        attempts.append({
-            "attempt": attempt_index,
-            "effective_drop_target_mm": target_mm,
-            "QA_passed": bool(all(current_report["QA"].values())),
-            "windows": adaptations,
-        })
-        if all(current_report["QA"].values()):
-            exhausted = False
-            break
-
-    current_report["local_failure_adaptation"] = {
-        "mode": "effective_drop_target_sequence",
-        "requested_targets_mm": list(targets),
-        "applied": len(attempts) > 1,
-        "selected_effective_drop_target_mm": last_target,
-        "QA_passed": bool(all(current_report["QA"].values())),
-        "target_sequence_exhausted": exhausted,
-        "attempts": attempts,
-        "global_axis_drop_unchanged": True,
-        "final_attempt_is_retained": True,
-    }
-    current_path = Path(current_report["outputs"]["report_json"])
-    current_path.write_text(
-        json.dumps(current_report, ensure_ascii=False, indent=2),
+    Path(report["outputs"]["report_json"]).write_text(
+        json.dumps(report, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    return current_report
-
-
-def run(args: ObservationWindowRequest) -> dict[str, object]:
-    """构造唯一轴扫观察窗，只对失败行执行分级局部修正。"""
-    return _run_with_local_failure_target_sequence(args)
+    return report

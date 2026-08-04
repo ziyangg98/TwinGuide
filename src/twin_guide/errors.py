@@ -18,4 +18,4 @@ class GeometryError(TwinGuideError):
 
 
 class BooleanOperationError(TwinGuideError):
-    """表示所有已支持求解器均无法完成布尔运算。"""
+    """表示指定求解器无法完成布尔运算。"""

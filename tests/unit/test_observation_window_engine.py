@@ -4,14 +4,37 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import numpy as np
+
 from twin_guide.observation_window_engine._core import (
     ObservationWindowRequest,
-    _run_with_local_failure_target_sequence,
+    _structured_sweep_volume,
+    run,
 )
 
 
-class ObservationWindowRetryTests(unittest.TestCase):
-    def test_retry_skips_targets_not_deeper_than_editor_baseline(self) -> None:
+class ObservationWindowConstraintSolverTests(unittest.TestCase):
+    def test_structured_sweep_contains_axis_without_cell_booleans(self) -> None:
+        angles = np.deg2rad((0.0, 45.0, 90.0))
+        directions = np.column_stack(
+            (np.cos(angles), np.sin(angles), np.zeros(len(angles)))
+        )
+        outer = np.stack(
+            (2.0 * directions, 2.0 * directions + (0.0, 0.0, 1.0))
+        )
+        inner_directions = directions[::-1]
+        inner = np.stack(
+            (-inner_directions, -inner_directions + (0.0, 0.0, 1.0))
+        )
+
+        cutter = _structured_sweep_volume(outer, inner)
+
+        self.assertTrue(cutter.is_volume)
+        self.assertTrue(cutter.contains([[0.0, 0.0, 0.5]])[0])
+        _, distance, _ = cutter.nearest.on_surface([[0.0, 0.0, 0.5]])
+        self.assertGreater(float(distance[0]), 0.2)
+
+    def test_run_builds_and_validates_exactly_once(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             mapping_path = root / "mapping.json"
@@ -32,22 +55,9 @@ class ObservationWindowRetryTests(unittest.TestCase):
                 encoding="utf-8",
             )
             report_path = root / "report.json"
-            failed = {
-                "QA": {"axis_clearance": False},
-                "windows": [
-                    {
-                        "id": "anterior_axis_sweep",
-                        "opening_geometry": "axis_sweep",
-                        "minimum_removed_axis_clearance_mm": 0.0,
-                        "axis_clearance_threshold_mm": 0.15,
-                        "axis_rows_below_clearance_threshold": [1],
-                    }
-                ],
-                "outputs": {"report_json": str(report_path)},
-            }
             passed = {
                 "QA": {"axis_clearance": True},
-                "windows": failed["windows"],
+                "windows": [],
                 "outputs": {"report_json": str(report_path)},
             }
             request = ObservationWindowRequest(
@@ -55,26 +65,17 @@ class ObservationWindowRetryTests(unittest.TestCase):
                 mapping_report=mapping_path,
                 source=root / "template.stl",
                 output_dir=root,
-                local_failure_drop_targets_mm=(1.0, 2.0, 3.0),
             )
 
             with patch(
                 "twin_guide.observation_window_engine._core._run_once",
-                side_effect=(failed, passed),
+                return_value=passed,
             ) as run_once:
-                result = _run_with_local_failure_target_sequence(request)
+                result = run(request)
 
             self.assertTrue(result["QA"]["axis_clearance"])
-            adaptation = result["local_failure_adaptation"]
-            self.assertEqual(adaptation["selected_effective_drop_target_mm"], 2.0)
-            self.assertEqual(run_once.call_count, 2)
-            corrected_mapping = json.loads(
-                run_once.call_args.args[0].mapping_report.read_text(encoding="utf-8")
-            )
-            additions = corrected_mapping["observation_windows"][0]["axis_sweep"][
-                "local_axis_drop_additions_mm"
-            ]
-            self.assertAlmostEqual(additions[1], 0.042)
+            self.assertEqual(result["constraint_solution"]["attempt_count"], 1)
+            run_once.assert_called_once_with(request)
 
 
 if __name__ == "__main__":

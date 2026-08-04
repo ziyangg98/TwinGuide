@@ -15,7 +15,7 @@ from twin_guide.tooth_identification import ToothIdentificationResult
 
 INTEGRATION_REPORT_NAME = "manifest.json"
 OBSERVATION_OPENING_ALGORITHM_VERSION = (
-    "axis_sweep_single_path_fail_closed_v3"
+    "axis_sweep_dental_constrained_direct_v4"
 )
 
 
@@ -161,12 +161,6 @@ def _fingerprint(config: CaseConfig, mapping: dict[str, object]) -> dict[str, ob
         "dental_mtime_ns": dental_stat.st_mtime_ns,
         "axis_drop_mm": config.windows.observation_axis_drop_mm,
         "sweep_angle_degrees": config.windows.observation_sweep_angle_degrees,
-        "local_failure_drop_targets_mm": list(
-            config.windows.observation_local_failure_drop_targets_mm
-        ),
-        "local_failure_transition_rows": (
-            config.windows.observation_local_failure_transition_rows
-        ),
     }
 
 
@@ -176,30 +170,22 @@ def _axis_points(definition: dict[str, object]) -> tuple[Vec3, ...]:
     try:
         start_values = definition["axis_start_global_mm"]
         end_values = definition["axis_end_global_mm"]
-        zero_values = definition["zero_degree_occlusal_direction_global"]
         count = int(definition["axis_section_count"])
     except (KeyError, TypeError, ValueError) as error:
         raise GeometryError("开口报告的 axis_sweep 定义不完整") from error
     if (
         not isinstance(start_values, list)
         or not isinstance(end_values, list)
-        or not isinstance(zero_values, list)
         or len(start_values) != 3
         or len(end_values) != 3
-        or len(zero_values) != 3
         or count < 2
     ):
         raise GeometryError("开口报告的 axis_sweep 坐标或截面数无效")
     start = Vec3(*(float(value) for value in start_values))
     end = Vec3(*(float(value) for value in end_values))
-    zero = Vec3(*(float(value) for value in zero_values)).normalized()
-    raw_additions = definition.get("local_axis_drop_additions_mm", [0.0] * count)
-    if not isinstance(raw_additions, list) or len(raw_additions) != count:
-        raise GeometryError("开口报告的局部高度修正数组长度无效")
     return tuple(
         start
         + (end - start) * (index / (count - 1))
-        - zero * float(raw_additions[index])
         for index in range(count)
     )
 
@@ -249,17 +235,16 @@ def build_observation_window_opening(
     regenerate: bool = False,
     fast_preview: bool = False,
 ) -> ProfileWindowCutout:
-    """使用现有牙位映射生成、分级修正并返回轴扫掠 cutter。
+    """使用现有牙位映射直接求解并返回轴扫掠 cutter。
 
     参数:
         config: 包含统一开口参数、导板和口扫路径的病例配置。
         tooth_identification: 第 2 阶段现场生成的内存牙位映射结果。
 
     返回:
-        指向最终一次 cutter、报告和修正后轴采样点的切割计划。
+        指向 cutter、约束报告和轴采样点的切割计划。
 
-    本函数不调用牙位识别或牙位编号逻辑。映射报告是只读输入；局部
-    0.5/1.0/2.0 mm 修正写入输出目录中的派生映射副本。
+    本函数不调用牙位识别或牙位编号逻辑，映射报告是只读输入。
     """
 
     output_root = (
@@ -321,12 +306,6 @@ def build_observation_window_opening(
         # 0.05 mm³ 是 12 病例回归覆盖的绝对数值底线；大切割仍受 0.01% 限制。
         volume_identity_tolerance_mm3=5e-2,
         volume_identity_relative_tolerance=1e-4,
-        local_failure_drop_targets_mm=tuple(
-            config.windows.observation_local_failure_drop_targets_mm
-        ),
-        local_failure_transition_rows=(
-            config.windows.observation_local_failure_transition_rows
-        ),
     )
     try:
         report = (
@@ -350,7 +329,7 @@ def build_observation_window_opening(
         "final_report": str(final_report),
         "final_cutter": str(report["outputs"]["combined_cutter_ply"]),
         "QA": report["QA"],
-        "local_failure_adaptation": report.get("local_failure_adaptation"),
+        "constraint_solution": report.get("constraint_solution"),
     }
     integration_path.write_text(
         json.dumps(integration, ensure_ascii=False, indent=2), encoding="utf-8"

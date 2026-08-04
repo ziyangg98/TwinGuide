@@ -130,7 +130,13 @@ def _stage_metrics(stage: StageResult) -> dict[str, object]:
                 output.profile_windows[0].report_path.read_text(encoding="utf-8")
             )
             geometry = report["geometry"]
-            adaptation = report.get("local_failure_adaptation", {})
+            solution = report.get("constraint_solution", {})
+            depths = [
+                float(window["exterior_wall_sampling"][
+                    "calculated_axis_core_depth_mm"
+                ])
+                for window in report.get("windows", [])
+            ]
             metrics.update({
                 "removed_guide_volume_mm3": round(
                     float(geometry["removed_volume_mm3"]), 3
@@ -138,7 +144,8 @@ def _stage_metrics(stage: StageResult) -> dict[str, object]:
                 "minimum_axis_clearance_mm": round(
                     float(geometry["minimum_removed_axis_clearance_mm"]), 3
                 ),
-                "local_correction_applied": bool(adaptation.get("applied", False)),
+                "constraint_solution_mode": solution.get("mode"),
+                "maximum_inner_depth_mm": round(max(depths), 3) if depths else None,
             })
         return metrics
     if number == 4:

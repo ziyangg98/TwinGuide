@@ -53,8 +53,16 @@ class BlenderUiControlTests(unittest.TestCase):
     def _controls(self):
         candidates = json.dumps(
             [
-                {"fdi": 31, "point": [0.0, 0.0, 0.0], "tangent": [1.0, 0.0, 0.0]},
-                {"fdi": 32, "point": [1.0, 0.0, 0.0], "tangent": [1.0, 0.0, 0.0]},
+                {
+                    "fdi": 31,
+                    "point": [0.0, 0.0, 0.0],
+                    "tangent": {"x": 1.0, "y": 0.0, "z": 0.0},
+                },
+                {
+                    "fdi": 32,
+                    "point": [1.0, 0.0, 0.0],
+                    "tangent": {"x": 1.0, "y": 0.0, "z": 0.0},
+                },
             ]
         )
         return (

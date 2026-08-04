@@ -13,61 +13,6 @@ from twin_guide.sleeve_estimation.mesh_integrity import inspect_triangle_mesh
 from twin_guide.sleeve_estimation.types import SleeveEstimate
 
 
-def _activate(mesh_object: bpy.types.Object) -> None:
-    """将网格设为 Blender 当前唯一选中的活动对象。"""
-
-    bpy.ops.object.select_all(action="DESELECT")
-    mesh_object.select_set(True)
-    bpy.context.view_layer.objects.active = mesh_object
-
-
-def _cube(
-    name: str,
-    center: tuple[float, float, float],
-    size: tuple[float, float, float],
-) -> bpy.types.Object:
-    """创建指定中心和尺寸的立方体布尔辅助体。"""
-
-    bpy.ops.mesh.primitive_cube_add(location=center)
-    result = bpy.context.object
-    result.name = name
-    result.dimensions = size
-    _activate(result)
-    bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
-    return result
-
-
-def _cylinder(
-    name: str,
-    radius: float,
-    depth: float,
-    axial_center: float,
-) -> bpy.types.Object:
-    """创建沿导管局部 Z 轴排列的圆柱布尔辅助体。"""
-
-    bpy.ops.mesh.primitive_cylinder_add(
-        vertices=128,
-        radius=radius,
-        depth=depth,
-        location=(0.0, 0.0, axial_center),
-    )
-    result = bpy.context.object
-    result.name = name
-    return result
-
-
-def _boolean(target: bpy.types.Object, operand: bpy.types.Object, operation: str) -> None:
-    """对导管重建中间体执行布尔运算，并移除操作体。"""
-
-    _activate(target)
-    modifier = target.modifiers.new(f"{operation.lower()}_{operand.name}", "BOOLEAN")
-    modifier.operation = operation
-    modifier.solver = "EXACT"
-    modifier.object = operand
-    bpy.ops.object.modifier_apply(modifier=modifier.name)
-    bpy.data.objects.remove(operand, do_unlink=True)
-
-
 def validate_sleeve_boolean_parameters(estimate: SleeveEstimate) -> None:
     """拒绝会使布尔切割体为空或方向翻转的导管尺寸。"""
 
@@ -141,45 +86,56 @@ def create_closed_sleeve_object(
     z_transition = estimate.height - estimate.closed_bore_height
     epsilon = max(1e-3, 0.002 * estimate.outer_radius)
 
-    body = _cylinder(name, estimate.outer_radius, estimate.height, 0.5 * estimate.height)
-    platform = _cube(
-        f"{name}_platform",
-        (0.5 * platform_edge, 0.0, 0.5 * (z_platform + estimate.height)),
-        (platform_edge, 2.0 * estimate.outer_radius, estimate.height - z_platform),
-    )
-    _boolean(body, platform, "UNION")
+    from manifold3d import Manifold
 
-    bore = _cylinder(
-        f"{name}_bore",
-        estimate.inner_radius,
-        estimate.height + 4.0 * epsilon,
-        0.5 * estimate.height,
+    body = Manifold.cylinder(
+        estimate.height,
+        estimate.outer_radius,
+        circular_segments=128,
     )
-    _boolean(body, bore, "DIFFERENCE")
+    platform = Manifold.cube(
+        (
+            platform_edge,
+            2.0 * estimate.outer_radius,
+            estimate.height - z_platform,
+        )
+    ).translate((0.0, -estimate.outer_radius, z_platform))
+    body += platform
+
+    bore = Manifold.cylinder(
+        estimate.height + 4.0 * epsilon,
+        estimate.inner_radius,
+        circular_segments=128,
+    ).translate((0.0, 0.0, -2.0 * epsilon))
+    body -= bore
 
     cutter_end = platform_edge + 2.0 * estimate.outer_radius
-    upper_opening = _cube(
-        f"{name}_upper_opening",
-        (0.5 * (common_cut + cutter_end), 0.0, 0.5 * z_platform),
-        (cutter_end - common_cut, 4.0 * estimate.outer_radius, z_platform + 2.0 * epsilon),
-    )
-    _boolean(body, upper_opening, "DIFFERENCE")
+    upper_opening = Manifold.cube(
+        (
+            cutter_end - common_cut,
+            4.0 * estimate.outer_radius,
+            z_platform + 2.0 * epsilon,
+        )
+    ).translate((common_cut, -2.0 * estimate.outer_radius, -epsilon))
+    body -= upper_opening
 
     slot_half_width = math.sqrt(max(0.0, estimate.inner_radius**2 - common_cut**2))
-    middle_slot = _cube(
-        f"{name}_middle_slot",
-        (
-            0.5 * (common_cut + cutter_end),
-            0.0,
-            0.5 * (z_platform + z_transition),
-        ),
+    middle_slot = Manifold.cube(
         (
             cutter_end - common_cut,
             2.0 * slot_half_width,
             z_transition - z_platform + 2.0 * epsilon,
-        ),
-    )
-    _boolean(body, middle_slot, "DIFFERENCE")
+        )
+    ).translate((common_cut, -slot_half_width, z_platform - epsilon))
+    body -= middle_slot
+    if str(body.status()) != "Error.NoError":
+        raise GeometryError(f"重建导管 {name!r} 的封闭体运算失败：{body.status()}")
+    output = body.to_mesh()
+    mesh = bpy.data.meshes.new(f"{name}_Mesh")
+    mesh.from_pydata(output.vert_properties.tolist(), [], output.tri_verts.tolist())
+    mesh.update()
+    body_object = bpy.data.objects.new(name, mesh)
+    bpy.context.collection.objects.link(body_object)
 
     axis = estimate.axis.normalized()
     c_opening_direction = (
@@ -187,11 +143,7 @@ def create_closed_sleeve_object(
     ).normalized()
     across = axis.cross(c_opening_direction).normalized()
     origin = estimate.axis_origin
-    # 布尔基本体的轴向中心位于 H/2。替换 matrix_world 前先应用局部平移，
-    # 否则导管将以 axis_origin 为中心跨越 [-H/2, H/2]。
-    _activate(body)
-    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
-    body.matrix_world = Matrix(
+    body_object.matrix_world = Matrix(
         (
             (c_opening_direction.x, across.x, axis.x, origin.x),
             (c_opening_direction.y, across.y, axis.y, origin.y),
@@ -199,20 +151,7 @@ def create_closed_sleeve_object(
             (0.0, 0.0, 0.0, 1.0),
         )
     )
-    body.name = name
-    integrity = inspect_triangle_mesh(mesh_object_to_triangle_data(body))
-    if (
-        integrity.degenerate_face_count
-        and integrity.component_count == 1
-        and integrity.boundary_edge_count == 0
-        and integrity.non_manifold_edge_count == 0
-        and integrity.duplicate_face_count == 0
-        and integrity.signed_volume > 0.0
-    ):
-        from twin_guide.blender.mesh_queries import clean_mesh
-
-        clean_mesh(body)
-        integrity = inspect_triangle_mesh(mesh_object_to_triangle_data(body))
+    integrity = inspect_triangle_mesh(mesh_object_to_triangle_data(body_object))
     if not integrity.valid:
         raise GeometryError(f"重建导管 {name!r} 未通过网格完整性检查：{integrity}")
-    return body
+    return body_object
