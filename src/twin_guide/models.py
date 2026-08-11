@@ -50,7 +50,7 @@ class GuideSleeve:
     def outer_radius_mm(self) -> float:
         """返回导管径向包络半径。"""
 
-        return self.parameters.outer_radius + self.parameters.platform_width
+        return self.parameters.outer_radius
 
     @property
     def bore_radius_mm(self) -> float:

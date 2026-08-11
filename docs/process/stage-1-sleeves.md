@@ -4,7 +4,7 @@
 
 ```text
 连通分量分析 → 七点导孔资格 → 候选对排序 → 精确轴向符号
-→ C 口相向 → 八参数标准重建
+→ C 口相向 → 主体与顶部凹陷的标准重建
 ```
 
 输入网格只决定位姿和操作结构；最终导管始终由标准参数重建。
@@ -158,26 +158,16 @@ $$
 \mathbf e_l=\operatorname{unit}(\mathbf e_d\times\mathbf n).
 $$
 
-`TemplateFrame` 为 $(\mathbf c_T,\mathbf e_l,\mathbf e_d,\mathbf n)$。投影向量退化时直接
-报错，不使用世界 X/Y 轴替代。
+`TemplateFrame` 为 $(\mathbf c_T,\mathbf e_l,\mathbf e_d,\mathbf n)$。
 
-## 6. 八参数标准重建
+## 6. 标准重建
 
-每根导管复用 $(\mathbf p_k,\mathbf a_k,\mathbf d_k^C)$，几何由下列参数唯一定义：
+每根导柱复用识别得到的轴原点、轴向和 C 口方向，尺寸读取 `runtime.sleeve`，
+由 `create_closed_sleeve_object()` 构造。
 
-$$
-\Theta_k=(H,h_p,h_c,w_p,r_i,r_o,\alpha_i,\alpha_o).
-$$
-
-它们依次是总高、平台高度、闭合导孔高度、平台宽度、内外半径以及
-内外 C 口圆弧角。角度从 YAML 度数转为弧度：
-
-$$
-\alpha^{\mathrm{rad}}=\alpha^{\circ}\pi/180.
-$$
-
-最终 `GuideSleeve` 轴向范围固定为 $[0,H]$。输入导管外壁不复制到最终模型；
-第 4 阶段锚点和最终导孔复切都使用同一份 $\Theta_k$。
+主体包含 C 形上段、带中央槽的中段和封闭平底段。顶部凹陷启用时，从凹陷外径
+连续收敛至贯穿孔；未启用时保持平顶。完整字段、单位和约束见
+[配置说明](../guide/configuration.md#导管标准尺寸)。
 
 ## 质量检查与失败条件
 
@@ -185,10 +175,8 @@ $$
 - 内孔拟合轴向范围 $z_k^+-z_k^->10^{-6}$ mm；
 - 合格导孔候选至少有两个；
 - 导板局部深度方向非零；
-- 八参数必须构成封闭、壁厚为正的导管；
+- 主体参数与可选顶部凹陷必须构成封闭、壁厚为正的导管；
 - 多种植位的每个装配体必须独立产生恰好两根导管。
-
-组件索引和 $C_k/7$ 只进入内部拒绝原因，不进入对外 `GuideSleeve`。
 
 ## 代码对应
 
@@ -198,7 +186,7 @@ $$
 | 精确内孔轴拟合 | `sleeve_estimation.sleeve.estimate_sleeve_axis` |
 | 候选对排序与轴向定号 | `sleeve_generation._select_pair`、`_orient_axis_against_occlusal` |
 | C 口方向与导板标架 | `sleeve_estimation.sleeve.c_opening_toward`、`sleeve_generation._template_frame` |
-| 八参数校验和标准重建 | `blender.sleeve_reconstruction.validate_sleeve_boolean_parameters`、`create_closed_sleeve_object` |
+| 主体/凹陷参数校验和标准重建 | `blender.sleeve_reconstruction.validate_sleeve_boolean_parameters`、`create_closed_sleeve_object` |
 
 ## 输出文件与结果图
 
@@ -207,4 +195,4 @@ $$
 
 ![导管识别与参数化重建](../images/stage-1-sleeve-reconstruction.png)
 
-*tooth-11 完整运行的第 1 阶段结果。蓝色是实际输入装配体，灰色是复用识别位姿的八参数标准重建导管。*
+*tooth-11 完整运行的第 1 阶段结果。蓝色是实际输入装配体，灰色是复用识别位姿的标准重建导管。*

@@ -1,4 +1,4 @@
-"""纯 Python 导管位姿估计与重建检查。"""
+"""纯 Python 导管位姿估计与网格检查。"""
 
 from .fitting import CircleFit, LineFit, fit_axis, fit_circle
 from .mesh_integrity import MeshIntegrityReport, inspect_triangle_mesh
@@ -10,7 +10,7 @@ from .types import (
     SleeveEstimate,
     TriangleMeshData,
 )
-from .validation import reconstruct_sleeve, validate_reconstruction
+from .validation import validate_reconstruction
 
 __all__ = [
     "CircleFit",
@@ -28,7 +28,6 @@ __all__ = [
     "fit_axis",
     "fit_circle",
     "inspect_triangle_mesh",
-    "reconstruct_sleeve",
     "section_offsets",
     "slice_mesh",
     "validate_reconstruction",

@@ -169,15 +169,6 @@ def _template_center(
     return center if inside_bounds else mean_point([sample.position for sample in template_samples])
 
 
-def _select_accessory_meshes(
-    components: tuple[bpy.types.Object, ...],
-    guide_sleeves: tuple[GuideSleeve, ...],
-) -> tuple[bpy.types.Object, ...]:
-    """只保留后续构建需要的装配体分量。"""
-    del components, guide_sleeves
-    return ()
-
-
 def _measure_operation_feature(
     components: tuple[bpy.types.Object, ...],
     guide_sleeves: tuple[GuideSleeve, GuideSleeve],
@@ -243,10 +234,8 @@ def analyze_case(config: CaseConfig, *, force_rebuild: bool = False) -> CaseAnal
     occlusal_axis = (
         None if raw_occlusal_axis is None else Vec3(*raw_occlusal_axis).normalized()
     )
-    all_components = []
     assembly_components = []
     all_guides = []
-    operation_features = []
     template_frame = None
     for assembly_index, source_mesh in enumerate(
         input_meshes.guide_sleeve_assembly_meshes,
@@ -258,7 +247,6 @@ def analyze_case(config: CaseConfig, *, force_rebuild: bool = False) -> CaseAnal
         )
         components = separate_connected_components(assembly_working_mesh)
         assembly_components.append(components)
-        all_components.extend(components)
         source_path = config.inputs.guide_sleeve_assemblies[assembly_index - 1]
         source_stat = source_path.stat()
         candidate_cache_key = json.dumps(
@@ -296,23 +284,16 @@ def analyze_case(config: CaseConfig, *, force_rebuild: bool = False) -> CaseAnal
             replace(guide, guide_index=offset + local_index)
             for local_index, guide in enumerate(sleeve_generation.sleeves, 1)
         )
-        pair = tuple(
-            _apply_sleeve_editor_override(config, guide) for guide in base_pair
-        )
         if template_frame is None:
             template_frame = sleeve_generation.template_frame
         all_guides.extend(base_pair)
-        operation_features.append(_measure_operation_feature(components, pair))
     if template_frame is None:
         raise GeometryError("病例没有可识别的导管装配体")
     base_case = CaseAnalysis(
         config=config,
         input_meshes=input_meshes,
         guide_sleeves=tuple(all_guides),
-        retained_accessory_meshes=_select_accessory_meshes(
-            tuple(all_components),
-            tuple(all_guides),
-        ),
+        retained_accessory_meshes=(),
         operation_features=(),
         template_frame=template_frame,
         template_samples=template_samples,

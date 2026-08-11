@@ -15,14 +15,16 @@ objects:
 
 runtime:
   sleeve:
-    inner_diameter_mm: 2.10
-    outer_diameter_mm: 4.30
-    height_mm: 16.373
-    platform_width_mm: 2.036
-    platform_height_mm: 9.875
-    closed_bore_height_mm: 4.777
-    inner_arc_angle_degrees: 264.934
-    outer_arc_angle_degrees: 211.684
+    inner_diameter_mm: 2.05
+    outer_diameter_mm: 5.10
+    top_recess_diameter_mm: 2.61
+    top_recess_depth_mm: 0.30
+    height_mm: 15.50
+    platform_slot_width_mm: 1.65
+    platform_height_mm: 10.00
+    closed_bore_height_mm: 5.00
+    inner_arc_angle_degrees: 252.90
+    outer_arc_angle_degrees: 246.59
   geometry:
     channel_axial_margin_mm: 5.0
     connector_diameter_mm: 4.6

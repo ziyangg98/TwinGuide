@@ -18,6 +18,16 @@
 
 ## 常见问题
 
+### Blender 后台启动时在 Metal 初始化阶段崩溃
+
+macOS 版 Blender 5.2 使用 Metal，不要传 `--gpu-backend opengl`。受限沙箱中应授权
+Blender 在沙箱外运行：
+
+```bash
+./scripts/blender.sh --background --factory-startup \
+  --python scripts/run_tests.py
+```
+
 ### 导管识别失败
 
 查看第 1 阶段错误中每个连通分量的七点导孔通过数、高度/外径误差、平行度和索引。

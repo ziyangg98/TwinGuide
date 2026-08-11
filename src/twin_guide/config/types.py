@@ -48,16 +48,18 @@ class InputMeshPaths:
 
 @dataclass(frozen=True, slots=True)
 class SleeveParameters:
-    """控制导管形状的八个几何参数。"""
+    """控制导管主体和顶部环形凹陷的几何参数。"""
 
     inner_diameter_mm: float
     outer_diameter_mm: float
     height_mm: float
-    platform_width_mm: float
+    platform_slot_width_mm: float
     platform_height_mm: float
     closed_bore_height_mm: float
     inner_arc_angle_degrees: float
     outer_arc_angle_degrees: float
+    top_recess_diameter_mm: float | None = None
+    top_recess_depth_mm: float = 0.0
 
     @property
     def inner_radius_mm(self) -> float:
@@ -70,6 +72,14 @@ class SleeveParameters:
         """返回导管主体外半径。"""
 
         return self.outer_diameter_mm / 2.0
+
+    @property
+    def top_recess_radius_mm(self) -> float | None:
+        """返回顶部环形凹陷半径；未启用时返回 ``None``。"""
+
+        if self.top_recess_diameter_mm is None:
+            return None
+        return self.top_recess_diameter_mm / 2.0
 
 
 @dataclass(frozen=True, slots=True)

@@ -45,7 +45,7 @@ class SleeveCandidateSelectionTests(unittest.TestCase):
             inner_diameter_mm=2.1,
             outer_diameter_mm=4.3,
             height_mm=16.373,
-            platform_width_mm=2.036,
+            platform_slot_width_mm=1.65,
             platform_height_mm=9.875,
             closed_bore_height_mm=4.777,
             inner_arc_angle_degrees=264.934,

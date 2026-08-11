@@ -84,7 +84,7 @@ class BlenderBackendTests(unittest.TestCase):
             height=8.0,
             platform_height=2.8,
             closed_bore_height=1.4,
-            platform_width=0.0,
+            platform_slot_width=0.0,
             inner_radius=1.2,
             outer_radius=2.0,
             inner_arc_angle=1.5 * math.pi,
@@ -101,7 +101,7 @@ class BlenderBackendTests(unittest.TestCase):
             height=8.0,
             platform_height=2.8,
             closed_bore_height=1.4,
-            platform_width=0.8,
+            platform_slot_width=2.4,
             inner_radius=1.2,
             outer_radius=2.0,
             inner_arc_angle=1.5 * math.pi,
@@ -126,7 +126,7 @@ class BlenderBackendTests(unittest.TestCase):
             height=16.5430000408,
             platform_height=9.8750001702,
             closed_bore_height=4.7770001507,
-            platform_width=2.036,
+            platform_slot_width=0.85,
             inner_radius=1.05,
             outer_radius=2.15,
             inner_arc_angle=4.6239706005,
@@ -138,6 +138,40 @@ class BlenderBackendTests(unittest.TestCase):
 
         self.assertTrue(integrity.valid, integrity)
 
+    def test_reconstructed_sleeve_has_configured_top_annular_recess(self):
+        estimate = SleeveEstimate(
+            axis_origin=Vec3(0.0, 0.0, 0.0),
+            axis=Vec3(0.0, 0.0, 1.0),
+            c_opening_direction=Vec3(1.0, 0.0, 0.0),
+            height=15.5,
+            platform_height=10.0,
+            closed_bore_height=5.0,
+            inner_radius=1.025,
+            outer_radius=2.55,
+            inner_arc_angle=math.radians(252.90),
+            outer_arc_angle=math.radians(246.59),
+            top_recess_radius=1.305,
+            top_recess_depth=0.30,
+            platform_slot_width=1.65,
+        )
+
+        sleeve = create_closed_sleeve_object(estimate, "top_recess_sleeve")
+        tree = build_bvh(sleeve)
+
+        self.assertFalse(point_inside_mesh(tree, Vec3(-1.13, 0.0, 0.15)))
+        self.assertTrue(point_inside_mesh(tree, Vec3(-1.20, 0.0, 0.15)))
+        self.assertTrue(point_inside_mesh(tree, Vec3(-1.16, 0.0, 0.45)))
+        self.assertFalse(point_inside_mesh(tree, Vec3(-0.80, 0.0, 0.45)))
+        self.assertFalse(point_inside_mesh(tree, Vec3(1.10, 0.0, 0.45)))
+        self.assertFalse(point_inside_mesh(tree, Vec3(0.90, 0.70, 0.45)))
+        self.assertFalse(point_inside_mesh(tree, Vec3(1.45, 1.50, 0.45)))
+        self.assertTrue(point_inside_mesh(tree, Vec3(1.35, 1.50, 0.45)))
+        self.assertTrue(point_inside_mesh(tree, Vec3(2.50, 2.40, 15.30)))
+        self.assertFalse(point_inside_mesh(tree, Vec3(2.60, 2.40, 15.30)))
+        self.assertTrue(point_inside_mesh(tree, Vec3(-2.45, 0.0, 15.30)))
+        self.assertEqual(topology_edge_counts(sleeve), (0, 0))
+        self.assertEqual(len(mesh_component_vertex_counts(sleeve)), 1)
+
     def test_generated_sleeve_parameters_drive_q_and_wall_thickness(self):
         estimates = tuple(
             SleeveEstimate(
@@ -147,7 +181,7 @@ class BlenderBackendTests(unittest.TestCase):
                 height=16.0,
                 platform_height=6.0,
                 closed_bore_height=4.0,
-                platform_width=2.0,
+                platform_slot_width=1.0,
                 inner_radius=1.0,
                 outer_radius=2.5,
                 inner_arc_angle=math.radians(264.934),
@@ -214,7 +248,7 @@ class BlenderBackendTests(unittest.TestCase):
             height=8.0,
             platform_height=2.8,
             closed_bore_height=1.4,
-            platform_width=0.8,
+            platform_slot_width=2.4,
             inner_radius=1.2,
             outer_radius=2.0,
             inner_arc_angle=1.5 * math.pi,
@@ -231,7 +265,7 @@ class BlenderBackendTests(unittest.TestCase):
                     height=parameters.height,
                     platform_height=parameters.platform_height,
                     closed_bore_height=parameters.closed_bore_height,
-                    platform_width=parameters.platform_width,
+                    platform_slot_width=parameters.platform_slot_width,
                     inner_radius=parameters.inner_radius,
                     outer_radius=parameters.outer_radius,
                     inner_arc_angle=parameters.inner_arc_angle,

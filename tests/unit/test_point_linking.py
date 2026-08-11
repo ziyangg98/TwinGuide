@@ -42,7 +42,7 @@ def _sleeve(index: int, x: float) -> GuideSleeve:
             height=16.0,
             platform_height=6.0,
             closed_bore_height=4.0,
-            platform_width=2.0,
+            platform_slot_width=1.0,
             inner_radius=1.0,
             outer_radius=2.5,
             inner_arc_angle=1.5 * 3.141592653589793,

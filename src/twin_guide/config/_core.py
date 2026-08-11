@@ -291,36 +291,50 @@ def _parse_case_objects(
 
 
 def _parse_sleeve(raw: dict[str, object]) -> SleeveParameters:
-    """解析并校验导管的八个几何参数。"""
+    """解析并校验导管主体及可选顶部环形凹陷参数。"""
 
     fields = {
         "inner_diameter_mm",
         "outer_diameter_mm",
         "height_mm",
-        "platform_width_mm",
+        "platform_slot_width_mm",
         "platform_height_mm",
         "closed_bore_height_mm",
         "inner_arc_angle_degrees",
         "outer_arc_angle_degrees",
+        "top_recess_diameter_mm",
+        "top_recess_depth_mm",
     }
     _reject_unknown(raw, fields, "sleeve")
+    recess_diameter_raw = raw.get("top_recess_diameter_mm")
+    recess_depth_raw = raw.get("top_recess_depth_mm")
+    outer_diameter = _number(
+        _required(raw, "outer_diameter_mm"),
+        "sleeve.outer_diameter_mm",
+        positive=True,
+    )
+    slot_width = _number(
+        _required(raw, "platform_slot_width_mm"),
+        "sleeve.platform_slot_width_mm",
+        positive=True,
+    )
+    if slot_width >= outer_diameter:
+        raise ConfigurationError(
+            "sleeve.platform_slot_width_mm 必须小于 outer_diameter_mm"
+        )
+    if (recess_diameter_raw is None) != (recess_depth_raw is None):
+        raise ConfigurationError(
+            "sleeve.top_recess_diameter_mm 与 sleeve.top_recess_depth_mm 必须同时提供"
+        )
     parameters = SleeveParameters(
         inner_diameter_mm=_number(
             _required(raw, "inner_diameter_mm"),
             "sleeve.inner_diameter_mm",
             positive=True,
         ),
-        outer_diameter_mm=_number(
-            _required(raw, "outer_diameter_mm"),
-            "sleeve.outer_diameter_mm",
-            positive=True,
-        ),
+        outer_diameter_mm=outer_diameter,
         height_mm=_number(_required(raw, "height_mm"), "sleeve.height_mm", positive=True),
-        platform_width_mm=_number(
-            _required(raw, "platform_width_mm"),
-            "sleeve.platform_width_mm",
-            positive=True,
-        ),
+        platform_slot_width_mm=slot_width,
         platform_height_mm=_number(
             _required(raw, "platform_height_mm"),
             "sleeve.platform_height_mm",
@@ -341,6 +355,24 @@ def _parse_sleeve(raw: dict[str, object]) -> SleeveParameters:
             "sleeve.outer_arc_angle_degrees",
             positive=True,
         ),
+        top_recess_diameter_mm=(
+            None
+            if recess_diameter_raw is None
+            else _number(
+                recess_diameter_raw,
+                "sleeve.top_recess_diameter_mm",
+                positive=True,
+            )
+        ),
+        top_recess_depth_mm=(
+            0.0
+            if recess_depth_raw is None
+            else _number(
+                recess_depth_raw,
+                "sleeve.top_recess_depth_mm",
+                positive=True,
+            )
+        ),
     )
     if parameters.outer_diameter_mm <= parameters.inner_diameter_mm:
         raise ConfigurationError("sleeve.outer_diameter_mm 必须大于 sleeve.inner_diameter_mm")
@@ -359,6 +391,22 @@ def _parse_sleeve(raw: dict[str, object]) -> SleeveParameters:
         raise ConfigurationError(
             "sleeve 高度必须满足 0 < closed_bore_height_mm < platform_height_mm < height_mm"
         )
+    if parameters.top_recess_diameter_mm is not None:
+        if not (
+            parameters.inner_diameter_mm
+            < parameters.top_recess_diameter_mm
+            < parameters.outer_diameter_mm
+        ):
+            raise ConfigurationError(
+                "sleeve 顶部凹陷直径必须满足 inner_diameter_mm < "
+                "top_recess_diameter_mm < outer_diameter_mm"
+            )
+        if parameters.top_recess_depth_mm >= (
+            parameters.height_mm - parameters.platform_height_mm
+        ):
+            raise ConfigurationError(
+                "sleeve.top_recess_depth_mm 必须小于顶部 C 口段高度"
+            )
     return parameters
 
 

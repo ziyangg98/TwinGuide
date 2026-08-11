@@ -39,7 +39,7 @@ class SleeveAxis:
 
 @dataclass(frozen=True, slots=True)
 class SleeveEstimate:
-    """描述单个导管的轴线、C 口方向和八个标量尺寸参数。"""
+    """描述单个导管的轴线、C 口方向、主体尺寸和顶部凹陷。"""
 
     axis_origin: Vec3
     axis: Vec3
@@ -47,11 +47,15 @@ class SleeveEstimate:
     height: float
     platform_height: float
     closed_bore_height: float
-    platform_width: float
     inner_radius: float
     outer_radius: float
     inner_arc_angle: float
     outer_arc_angle: float
+    platform_slot_width: float
+    top_recess_radius: float | None = None
+    top_recess_depth: float = 0.0
+
+
 @dataclass(frozen=True, slots=True)
 class ReconstructionValidation:
     """输入网格与重建网格之间的双向表面误差。"""

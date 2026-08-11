@@ -42,8 +42,10 @@ class CaseConfigTests(unittest.TestCase):
             "sleeve": {
                 "inner_diameter_mm": 2.10,
                 "outer_diameter_mm": 4.3,
+                "top_recess_diameter_mm": 2.61,
+                "top_recess_depth_mm": 0.30,
                 "height_mm": 16.373,
-                "platform_width_mm": 2.036,
+                "platform_slot_width_mm": 1.65,
                 "platform_height_mm": 9.875,
                 "closed_bore_height_mm": 4.777,
                 "inner_arc_angle_degrees": 264.934,
@@ -148,8 +150,11 @@ class CaseConfigTests(unittest.TestCase):
         self.assertEqual(config.sleeve.inner_radius_mm, 1.05)
         self.assertEqual(config.sleeve.outer_diameter_mm, 4.3)
         self.assertEqual(config.sleeve.outer_radius_mm, 2.15)
+        self.assertEqual(config.sleeve.top_recess_diameter_mm, 2.61)
+        self.assertEqual(config.sleeve.top_recess_radius_mm, 1.305)
+        self.assertEqual(config.sleeve.top_recess_depth_mm, 0.30)
         self.assertEqual(config.sleeve.height_mm, 16.373)
-        self.assertEqual(config.sleeve.platform_width_mm, 2.036)
+        self.assertEqual(config.sleeve.platform_slot_width_mm, 1.65)
         self.assertEqual(config.sleeve.platform_height_mm, 9.875)
         self.assertEqual(config.sleeve.closed_bore_height_mm, 4.777)
         self.assertEqual(config.sleeve.inner_arc_angle_degrees, 264.934)
@@ -1175,6 +1180,56 @@ design:
 
         with self.assertRaisesRegex(ConfigurationError, "必须大于"):
             CaseConfig.from_yaml(self._write_config(config_data))
+
+    def test_requires_valid_platform_slot_width(self):
+        config_data = self._valid_config_data()
+        sleeve_data = config_data["sleeve"]
+        self.assertIsInstance(sleeve_data, dict)
+        del sleeve_data["platform_slot_width_mm"]
+        with self.assertRaisesRegex(ConfigurationError, "platform_slot_width_mm"):
+            CaseConfig.from_yaml(self._write_config(config_data))
+
+        config_data = self._valid_config_data()
+        sleeve_data = config_data["sleeve"]
+        self.assertIsInstance(sleeve_data, dict)
+        sleeve_data["platform_slot_width_mm"] = 4.3
+        with self.assertRaisesRegex(ConfigurationError, "必须小于"):
+            CaseConfig.from_yaml(self._write_config(config_data))
+
+    def test_rejects_incomplete_or_invalid_top_recess(self):
+        config_data = self._valid_config_data()
+        sleeve_data = config_data["sleeve"]
+        self.assertIsInstance(sleeve_data, dict)
+        del sleeve_data["top_recess_depth_mm"]
+        with self.assertRaisesRegex(ConfigurationError, "必须同时提供"):
+            CaseConfig.from_yaml(self._write_config(config_data))
+
+        config_data = self._valid_config_data()
+        sleeve_data = config_data["sleeve"]
+        self.assertIsInstance(sleeve_data, dict)
+        sleeve_data["top_recess_diameter_mm"] = 4.3
+        with self.assertRaisesRegex(ConfigurationError, "顶部凹陷直径"):
+            CaseConfig.from_yaml(self._write_config(config_data))
+
+        config_data = self._valid_config_data()
+        sleeve_data = config_data["sleeve"]
+        self.assertIsInstance(sleeve_data, dict)
+        sleeve_data["top_recess_depth_mm"] = 7.0
+        with self.assertRaisesRegex(ConfigurationError, "顶部 C 口段高度"):
+            CaseConfig.from_yaml(self._write_config(config_data))
+
+    def test_top_recess_is_optional_for_existing_cases(self):
+        config_data = self._valid_config_data()
+        sleeve_data = config_data["sleeve"]
+        self.assertIsInstance(sleeve_data, dict)
+        del sleeve_data["top_recess_diameter_mm"]
+        del sleeve_data["top_recess_depth_mm"]
+
+        config = CaseConfig.from_yaml(self._write_config(config_data))
+
+        self.assertIsNone(config.sleeve.top_recess_diameter_mm)
+        self.assertIsNone(config.sleeve.top_recess_radius_mm)
+        self.assertEqual(config.sleeve.top_recess_depth_mm, 0.0)
 
     def test_rejects_missing_sleeve_parameter(self):
         config_data = self._valid_config_data()

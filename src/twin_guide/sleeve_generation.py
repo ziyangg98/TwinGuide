@@ -367,10 +367,6 @@ def _build_sleeve(
         包含 STL 位姿和配置尺寸的导管。
     """
 
-    from twin_guide.blender.sleeve_reconstruction import (
-        validate_sleeve_boolean_parameters,
-    )
-
     pose = candidate.fitted_pose
     c_opening_direction = c_opening_toward(pose.axis, candidate.center, other.center)
     parameters = SleeveEstimate(
@@ -380,13 +376,14 @@ def _build_sleeve(
         height=configured.height_mm,
         platform_height=configured.platform_height_mm,
         closed_bore_height=configured.closed_bore_height_mm,
-        platform_width=configured.platform_width_mm,
         inner_radius=configured.inner_radius_mm,
         outer_radius=configured.outer_radius_mm,
         inner_arc_angle=math.radians(configured.inner_arc_angle_degrees),
         outer_arc_angle=math.radians(configured.outer_arc_angle_degrees),
+        top_recess_radius=configured.top_recess_radius_mm,
+        top_recess_depth=configured.top_recess_depth_mm,
+        platform_slot_width=configured.platform_slot_width_mm,
     )
-    validate_sleeve_boolean_parameters(parameters)
     return GuideSleeve(
         guide_index=index,
         guide_mesh=candidate.guide_mesh,

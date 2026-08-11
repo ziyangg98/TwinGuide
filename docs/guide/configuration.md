@@ -64,19 +64,28 @@ objects:
 
 ## 导管标准尺寸
 
-`runtime.sleeve` 的八个字段全部必填。输入装配体只提供识别位姿和操作结构，
-最终导管始终由这八个参数重建。
+`runtime.sleeve` 的八个主体字段必填；顶部凹陷的直径和深度可选，但必须同时提供。
+输入装配体只提供位姿和操作结构，最终导柱按以下参数重建。
 
 | 字段 | 单位 | 含义 | 约束 |
 | --- | --- | --- | --- |
 | `inner_diameter_mm` | mm | 标准导孔直径 | $>0$ |
 | `outer_diameter_mm` | mm | 导管主体外径 | $>\text{inner\_diameter}$ |
+| `top_recess_diameter_mm` | mm | 顶部同轴锥形环凹陷外径 | 内孔直径与主体外径之间；须与深度同时提供 |
+| `top_recess_depth_mm` | mm | 锥形环从外径连续收敛至贯穿孔的轴向深度 | $>0$ 且小于顶部 C 口段高度；须与直径同时提供 |
 | `height_mm` | mm | 导管轴向总高 | $>0$ |
-| `platform_width_mm` | mm | 平台径向宽度 | $>0$ |
+| `platform_slot_width_mm` | mm | 下段中央平台槽宽度 | $0<\text{槽宽}<\text{主体外径}$ |
 | `platform_height_mm` | mm | 平台所在轴向高度 | 见下方高度链 |
 | `closed_bore_height_mm` | mm | 导孔闭合段高度 | 见下方高度链 |
 | `inner_arc_angle_degrees` | 度 | 导孔内弧角 | $0<\theta<360$ |
 | `outer_arc_angle_degrees` | 度 | 导管外弧角 | $0<\theta<360$ |
+
+单侧平台宽度不是独立输入，而是由主体外径和中央槽宽唯一确定：
+
+$$
+w_{\mathrm{platform}}=
+\frac{d_{\mathrm{outer}}-w_{\mathrm{slot}}}{2}.
+$$
 
 高度必须同时满足
 
