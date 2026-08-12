@@ -65,9 +65,7 @@ def _read_report(path: Path, name: str) -> dict[str, object]:
     return value
 
 
-def _require_complete_qa(
-    report: dict[str, object], expected_status: str, name: str
-) -> None:
+def _require_complete_qa(report: dict[str, object], expected_status: str, name: str) -> None:
     """要求报告状态正确且每个 QA 项均通过。"""
 
     if report.get("status") != expected_status:
@@ -112,9 +110,7 @@ def _resolved_report_path(value: object, report_path: Path, name: str) -> Path:
         raise GeometryError(f"{name}必须为非空路径")
     raw_path = Path(value)
     path = (
-        raw_path.resolve()
-        if raw_path.is_absolute()
-        else (report_path.parent / raw_path).resolve()
+        raw_path.resolve() if raw_path.is_absolute() else (report_path.parent / raw_path).resolve()
     )
     if not path.is_file():
         raise GeometryError(f"{name}文件不存在：{path}")
@@ -194,9 +190,7 @@ def _window_mappings(
                 for section in range(section_count)
             )
         else:
-            samples = _sequence(
-                window.get("samples"), f"observation_windows[{index}].samples"
-            )
+            samples = _sequence(window.get("samples"), f"observation_windows[{index}].samples")
             crest_points = tuple(
                 _vec3(
                     _mapping(sample, f"observation_windows[{index}].samples[]").get(
@@ -268,12 +262,6 @@ def _input_fingerprint(config: CaseConfig) -> dict[str, object]:
         "dental_sha256": _sha256(config.inputs.patient_dentition),
         "guide": str(config.inputs.template.resolve()),
         "guide_sha256": _sha256(config.inputs.template),
-        "surgical_references": [
-            str(path.resolve()) for path in config.inputs.guide_sleeve_assemblies
-        ],
-        "surgical_reference_sha256": [
-            _sha256(path) for path in config.inputs.guide_sleeve_assemblies
-        ],
     }
 
 
@@ -324,10 +312,7 @@ def _validated_result(
     semantics = _mapping(mapping_report.get("semantics"), "semantics")
     jaw = str(semantics.get("jaw", ""))
     if jaw != _expected_mapping_jaw(config.jaw):
-        raise GeometryError(
-            f"牙位报告上下颌 {jaw!r} 与 TwinGuide 病例 "
-            f"{config.jaw.value!r} 不一致"
-        )
+        raise GeometryError(f"牙位报告上下颌 {jaw!r} 与 TwinGuide 病例 {config.jaw.value!r} 不一致")
 
     mapping_sources = _mapping(mapping_report.get("sources"), "mapping.sources")
     mapped_guide = _resolved_report_path(
@@ -340,33 +325,13 @@ def _validated_result(
     )
     if mapped_dental != config.inputs.patient_dentition.resolve():
         raise GeometryError("牙位报告使用的口扫 STL 与 TwinGuide 输入不一致")
-    mapped_surgical_references = {
-        _resolved_report_path(value, mapping_report_path, "mapping.sources.surgical_reference")
-        for value in _sequence(
-            mapping_sources.get("surgical_reference"),
-            "mapping.sources.surgical_reference",
-        )
-    }
-    configured_surgical_references = {
-        path.resolve() for path in config.inputs.guide_sleeve_assemblies
-    }
-    if not configured_surgical_references.issubset(mapped_surgical_references):
-        missing = configured_surgical_references - mapped_surgical_references
-        raise GeometryError(
-            "牙位方向检测缺少 TwinGuide 配置的导管 STL："
-            + ", ".join(str(path) for path in sorted(missing))
-        )
-
     return ToothIdentificationResult(
         mapping_report_path=mapping_report_path,
         mapping_report=mapping_report,
         jaw=jaw,
-        fdi_order=tuple(
-            int(value) for value in _sequence(semantics.get("FDI_order"), "FDI_order")
-        ),
+        fdi_order=tuple(int(value) for value in _sequence(semantics.get("FDI_order"), "FDI_order")),
         present_teeth=tuple(
-            int(value)
-            for value in _sequence(semantics.get("present_teeth"), "present_teeth")
+            int(value) for value in _sequence(semantics.get("present_teeth"), "present_teeth")
         ),
         missing_teeth=tuple(
             int(value)
@@ -401,9 +366,7 @@ def _ensure_overview(config: CaseConfig, cache_root: Path) -> None:
             load_tooth_recognition_result,
         )
 
-        recognition = load_tooth_recognition_result(
-            cache_root / "tooth-recognition"
-        )
+        recognition = load_tooth_recognition_result(cache_root / "tooth-recognition")
         mapping = map_recognized_teeth_to_guide(
             GuideMappingRequest(
                 recognition=recognition,
@@ -433,9 +396,7 @@ def _load_current_result(
         recognition_root / "contact-contours",
         cache_root / "guide-mapping",
     )
-    if not result_path.is_file() or not all(
-        path.exists() for path in required_cache_paths
-    ):
+    if not result_path.is_file() or not all(path.exists() for path in required_cache_paths):
         return None
     try:
         report = _read_report(result_path, "TwinGuide 第二阶段结果")
@@ -480,18 +441,22 @@ def _run_unified_workflow(
             recognize_teeth,
         )
 
-        recognition = recognize_teeth(ToothRecognitionRequest(
-            case_yaml=inputs.case_yaml,
-            output_dir=recognition_directory,
-        ))
+        recognition = recognize_teeth(
+            ToothRecognitionRequest(
+                case_yaml=inputs.case_yaml,
+                output_dir=recognition_directory,
+            )
+        )
         if not recognition.safe_for_guide_mapping:
             raise GeometryError("本次牙位识别未通过导板映射安全门")
-        guide_mapping = map_recognized_teeth_to_guide(GuideMappingRequest(
-            recognition=recognition,
-            output_dir=mapping_directory,
-            case_yaml=inputs.case_yaml,
-            overview_path=raw_overview_path if write_overview else None,
-        ))
+        guide_mapping = map_recognized_teeth_to_guide(
+            GuideMappingRequest(
+                recognition=recognition,
+                output_dir=mapping_directory,
+                case_yaml=inputs.case_yaml,
+                overview_path=raw_overview_path if write_overview else None,
+            )
+        )
         if not guide_mapping.complete:
             raise GeometryError("本次牙位到导板映射未通过全部 QA")
     except GeometryError:

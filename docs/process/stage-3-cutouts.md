@@ -10,7 +10,7 @@ trimesh/manifold3d 生成 PLY 切除体，并先在导板副本上完成真实�
 | 输入 | 作用 |
 | --- | --- |
 | `CaseAnalysis` | 导板表面采样、每个种植位的两根导管和操作结构 |
-| `SleeveGenerationResult` | 标准重建导管及其位姿 |
+| `SleeveGenerationResult` | 标准重建导柱及其位姿 |
 | `ToothIdentificationResult` | 已通过质量检查的 FDI 观察窗区间、牙弓局部方向和语义轴 |
 
 `CutoutPlan` 固定包含三类结果：

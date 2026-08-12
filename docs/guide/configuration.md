@@ -19,7 +19,7 @@
 | --- | --- | --- |
 | `schema_version` | 否 | YAML 文档结构版本 |
 | `case` | 是 | 病例标识及显示元数据 |
-| `objects` | 是 | 定义牙列、牙科导板和导管装配体输入 |
+| `objects` | 是 | 定义牙列和传统模板输入 |
 | `runtime` | 是 | 定义直接进入几何计算的数值参数 |
 | `anatomy` | 是 | 定义上下颌、FDI 牙位分类和病例方向 |
 | `design` | 否 | 定义观察窗、导板锚点、按压梁和特殊结构 |
@@ -44,19 +44,12 @@
 objects:
   dental: {path: input/patient-dentition.stl}
   guide: {path: input/dental-guide.stl}
-  sleeve:
-    files:
-      - {id: sleeve_11, path: input/sleeve-assembly-11.stl}
-      - {id: sleeve_12, path: input/sleeve-assembly-12.stl}
-    active_ids: [sleeve_11, sleeve_12]
 ```
 
 | 字段 | 必填 | 含义与约束 |
 | --- | --- | --- |
 | `objects.dental.path` | 是 | 患者牙列 STL，用于牙位识别、导板映射和净距判定 |
-| `objects.guide.path` | 是 | 原始牙科导板 STL，是开孔、开窗和连接的基体 |
-| `objects.sleeve.files` | 是 | 非空导管装配体表；每项的 `id` 唯一，`path` 指向 STL |
-| `objects.sleeve.active_ids` | 是 | 非空且不重复；只能引用 `files` 中的 ID；顺序就是多种植位的逐装配体分析顺序 |
+| `objects.guide.path` | 是 | 带定位圆环的传统模板 STL，也是开孔、开窗和连接的基体 |
 
 `name` 和 `required` 是对象清单元数据。`objects.handpiece` 与
 `objects.cutter` 记录来源对象；第 7 阶段的手机输入由
@@ -64,8 +57,9 @@ objects:
 
 ## 导管标准尺寸
 
-`runtime.sleeve` 的八个主体字段必填；顶部凹陷的直径和深度可选，但必须同时提供。
-输入装配体只提供位姿和操作结构，最终导柱按以下参数重建。
+`runtime.sleeve` 的八个主体字段必填；`guide_spacing_mm` 是双导导柱的全局几何
+参数，旧病例未配置时默认采用 11.5 mm。顶部凹陷的直径和深度可选，但必须同时提供。
+导柱位姿由传统模板圆环和 `planning.guide_posts` 确定，最终导柱按以下参数重建。
 
 | 字段 | 单位 | 含义 | 约束 |
 | --- | --- | --- | --- |
@@ -79,6 +73,7 @@ objects:
 | `closed_bore_height_mm` | mm | 导孔闭合段高度 | 见下方高度链 |
 | `inner_arc_angle_degrees` | 度 | 导孔内弧角 | $0<\theta<360$ |
 | `outer_arc_angle_degrees` | 度 | 导管外弧角 | $0<\theta<360$ |
+| `guide_spacing_mm` | mm | 左右两根导柱相向内侧 D 面之间的净距；不是轴心距 | 大于 0；默认 11.5 |
 
 单侧平台宽度不是独立输入，而是由主体外径和中央槽宽唯一确定：
 
@@ -86,6 +81,19 @@ $$
 w_{\mathrm{platform}}=
 \frac{d_{\mathrm{outer}}-w_{\mathrm{slot}}}{2}.
 $$
+
+双导放置时先把两个相向 D 面置于中点两侧各
+`guide_spacing_mm / 2`，再根据单柱轴心到 D 面的距离计算轴心。设外半径为
+$R$、外弧角为 $\theta$，则
+
+$$
+d_{\mathrm{axis\to D}}=R\cos\frac{360^\circ-\theta}{2},\qquad
+d_{\mathrm{axis}}=d_{\mathrm{D-face}}+2d_{\mathrm{axis\to D}}.
+$$
+
+轴心距由 D 面净距和既定导柱截面共同决定；不能为了调整两柱间距而修改外弧角。
+导出后必须在 D 面所在截面对最终 STL 反测，实测净距与配置值的绝对误差不得超过
+0.001 mm；超差时生成失败。
 
 高度必须同时满足
 
@@ -159,6 +167,17 @@ $$
 `extension_mm`、`extension_definition`、`mouth_opening_mm`、
 `adapter_length_mm` 和 `height_formula_id`。坐标路径与格式、延长量与定义必须成对提供。
 在医生确认坐标格式、延长量定义和高度公式前，这些字段只记录输入，不参与几何计算。
+
+### `planning.guide_posts`
+
+每个已识别圆环分别配置 `ring_index`、`drill_length_mm`、`implant_length_mm` 和
+`sleeve_template_extension_mm`。套环导板延长量用于从传统模板止停面恢复植体顶端。
+导柱间距不随种植位变化，统一由 `runtime.sleeve.guide_spacing_mm` 配置。
+`ring_index` 对应传统模板圆环识别结果中的编号，不依赖 FDI、sleeve 或 handpiece。
+系统按 `drill_length_mm - 12 mm - implant_length_mm` 计算双导导板延长量；12 mm
+为固定的钻针插入手机长度，不作为病例参数。当前示例起始值为钻针 33 mm、植体
+12 mm、套环导板延长量 9 mm；这三项仍须按种植位显式填写。正式流程要求至少
+配置一个 `guide_posts`，不再支持从导管装配体回退识别。
 
 ### `design.observation_windows`
 
@@ -405,7 +424,7 @@ Blender 阶段结果图和最终标准视图的像素尺寸。
 
 以下字段记录病例规划和审核信息，不直接进入几何计算：
 
-- `planning.implant_sites`：FDI、导管装配体和手机的人工对照表；
+- `planning.implant_sites`：FDI、圆环序号和手机的人工对照表；
 - `planning.connector_frame`：连接拓扑的设计记录；当前拓扑由 `guide_anchors`、按压梁和特殊结构的类型化参数决定；
 - `design.tube_opening`、`design.reinforcement`、`design.handpiece_motion`：设计记录；
 - `qa`：病例质量检查备注或预期值。

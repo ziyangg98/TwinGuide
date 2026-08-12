@@ -16,7 +16,6 @@ PUBLIC_FUNCTIONS = {
     "point_linking.py": {"link_selected_points"},
     "press_beam_points.py": {"select_press_beam_points"},
     "sleeve_anchors.py": {"select_sleeve_anchors"},
-    "sleeve_generation.py": {"recognize_and_build_sleeves"},
     "template_link_points.py": {"select_template_link_points"},
     "template_anchors.py": {"select_template_points"},
     "tooth_identification.py": {"identify_tooth_positions"},

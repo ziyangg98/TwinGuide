@@ -248,15 +248,9 @@ def _load_reference_surfaces(*, visible: bool = False) -> None:
 
 
 def _load_input_fallback() -> None:
-    """没有正式或预览模型时显示输入导板和导柱线框。"""
+    """没有正式或预览模型时显示传统模板与牙列线框。"""
 
-    assert _CONFIG is not None
-    from twin_guide.blender.stl_io import import_stl_mesh
-
-    for index, path in enumerate(_CONFIG.inputs.guide_sleeve_assemblies, start=1):
-        object_ = import_stl_mesh(path, f"TG_InputSleeve_{index}")
-        object_.display_type = "WIRE"
-        object_.hide_render = True
+    _load_reference_surfaces(visible=True)
 
 
 def _snap_to_surface(object_: bpy.types.Object) -> None:

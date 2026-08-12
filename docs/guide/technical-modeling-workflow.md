@@ -20,7 +20,7 @@ TwinGuide 把病例输入转换为可制造的双导管牙科导板。
 
 | 阶段 | 算法说明 | 输入 | 类型化输出 | 模块边界 |
 | --- | --- | --- | --- | --- |
-| 1 | [导管识别与标准重建](../process/stage-1-sleeves.md) | 逐种植位装配体、标准尺寸 | `SleeveGenerationResult` | 不复制输入导管实体 |
+| 1 | [传统模板圆环识别与导柱重建](../process/stage-1-sleeves.md) | 传统模板圆环、规划参数、标准尺寸 | `SleeveGenerationResult` | 不读取导管装配体 |
 | 2 | [牙位识别与导板映射](../process/stage-2-teeth.md) | 牙列、导板、病例牙位语义 | `ToothIdentificationResult` | 不生成梁或切除体 |
 | 3 | [导孔与窗口规划](../process/stage-3-cutouts.md) | 导管位姿、FDI 轴与导板表面 | `CutoutPlan` | 不选择连接锚点 |
 | 4 | [主连接梁锚点](../process/stage-4-link-points.md) | 标准导管、牙位局部标架、导板 | `TemplateLinkPointPlan` | 不生成曲线网格 |
@@ -134,7 +134,7 @@ JSON 记录数值结果与质量检查，PNG 展示对应的几何结果。
 | --- | --- |
 | YAML 数据类型、加载、解析和业务校验 | `src/twin_guide/config/` |
 | 七阶段控制器和上下文 | `src/twin_guide/generation_process.py` |
-| 病例分析和导管识别 | `src/twin_guide/case_analysis.py`、`src/twin_guide/sleeve_generation.py` |
+| 病例分析和导柱定位 | `src/twin_guide/case_analysis.py`、`src/twin_guide/template_ring_estimation.py`、`src/twin_guide/guide_post_positioning.py` |
 | 牙位识别和映射 | `src/twin_guide/tooth_identification.py`、`src/twin_guide/tooth_mapping/` |
 | 导孔和窗规划 | `src/twin_guide/window_cutouts.py`、`src/twin_guide/observation_window_engine/` |
 | 导管 Q/P 和导板锚点 | `src/twin_guide/sleeve_anchors.py`、`src/twin_guide/template_link_points.py` |

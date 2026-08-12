@@ -63,24 +63,13 @@ class CaseDataLayoutTests(unittest.TestCase):
             value = objects.get(key, {}).get("path")
             if value:
                 paths.append(value)
-        for key in ("sleeve", "handpiece"):
+        for key in ("handpiece",):
             records = objects.get(key, {}).get("files", [])
             paths.extend(record["path"] for record in records)
         for value in paths:
             resolved = (case_directory / value).resolve()
             self.assertTrue(resolved.is_relative_to(case_directory.resolve()))
             self.assertTrue(resolved.is_file(), resolved)
-
-    def test_multiple_cases_keep_two_sleeve_assemblies_separate(self) -> None:
-        """多颗病例在输入层保留两个种植位的独立导管装配体。"""
-
-        for case_name in self.multiple_case_names:
-            with self.subTest(case=case_name):
-                case_yaml = self.multiple_dataset / case_name / "case.yaml"
-                content = yaml.safe_load(case_yaml.read_text(encoding="utf-8"))
-                sleeves = content["objects"]["sleeve"]
-                self.assertEqual(len(sleeves["files"]), 2)
-                self.assertEqual(len(sleeves["active_ids"]), 2)
 
     def test_tooth_14_uses_standard_y_beam_without_terminal_u_extension(
         self,
@@ -196,14 +185,6 @@ class CaseDataLayoutTests(unittest.TestCase):
                 self.assertEqual(operation["overlap_rule"], "union_cutters")
                 self.assertEqual(operation["cut_target"], "guide_template_only")
                 self.assertEqual(len(operation["sites"]), 2)
-                sleeve_by_fdi = {
-                    site["fdi"]: site["sleeve_id"]
-                    for site in planning["implant_sites"]
-                }
-                for site in operation["sites"]:
-                    self.assertEqual(
-                        site["sleeve_assembly_id"], sleeve_by_fdi[site["fdi"]]
-                    )
 
     def test_all_cases_use_independent_guide_anchor_records(self) -> None:
         """全部正式病例逐锚点声明牙位、侧别和角度，不再依赖成对站位。"""
@@ -265,53 +246,16 @@ class CaseDataLayoutTests(unittest.TestCase):
                             expected.add("fdis")
                         self.assertEqual(set(station), expected)
 
-    def test_single_case_yaml_is_complete_and_loadable(self) -> None:
-        """每个单颗病例只用自身 YAML 提供完整运行配置。"""
+    def test_migrated_case_yaml_is_complete_and_loadable(self) -> None:
+        """已迁移病例只用传统模板和牙列提供完整运行配置。"""
 
-        for case_name in self.case_names:
-            path = self.dataset / case_name / "case.yaml"
-            with self.subTest(config=path):
-                config = CaseConfig.from_yaml(path)
-                self.assertEqual(
-                    config.case_id,
-                    case_name.replace("tooth-", "single_"),
-                )
-                self.assertTrue(config.inputs.template.is_file())
-                self.assertTrue(config.inputs.guide_sleeve_assembly.is_file())
-                self.assertTrue(config.inputs.patient_dentition.is_file())
-                self.assertTrue(config.tooth_identification.case_yaml.is_file())
-                self.assertGreaterEqual(len(config.handpiece_avoidance), 1)
-                for avoidance in config.handpiece_avoidance:
-                    self.assertTrue(avoidance.handpiece.is_file())
-                    self.assertTrue(avoidance.stop_report.is_file())
-
-    def test_multiple_case_yaml_is_complete_and_loadable(self) -> None:
-        """每个多颗病例只用自身 YAML 提供完整运行配置。"""
-
-        for case_name in self.multiple_case_names:
-            path = self.multiple_dataset / case_name / "case.yaml"
-            with self.subTest(config=path.name):
-                content = yaml.safe_load(path.read_text(encoding="utf-8"))
-                config = CaseConfig.from_yaml(path)
-                self.assertEqual(
-                    config.tooth_identification.case_yaml,
-                    path.resolve(),
-                )
-                self.assertEqual(len(config.inputs.guide_sleeve_assemblies), 2)
-                self.assertEqual(len(config.handpiece_avoidance), 2)
-                active_ids = set(content["objects"]["handpiece"]["active_ids"])
-                planned_ids = {
-                    site["handpiece_id"] for site in content["planning"]["implant_sites"]
-                }
-                avoidance_ids = {
-                    item.avoidance_id for item in config.handpiece_avoidance
-                }
-                self.assertNotIn(None, planned_ids)
-                self.assertEqual(active_ids, planned_ids)
-                self.assertEqual(avoidance_ids, planned_ids)
-                for avoidance in config.handpiece_avoidance:
-                    self.assertTrue(avoidance.handpiece.is_file())
-                    self.assertTrue(avoidance.stop_report.is_file())
+        path = self.dataset / "tooth-17/case.yaml"
+        config = CaseConfig.from_yaml(path)
+        self.assertEqual(config.case_id, "single_17")
+        self.assertTrue(config.inputs.template.is_file())
+        self.assertTrue(config.inputs.patient_dentition.is_file())
+        self.assertGreaterEqual(len(config.guide_posts), 1)
+        self.assertNotIn("sleeve", yaml.safe_load(path.read_text(encoding="utf-8"))["objects"])
 
     def test_input_files_are_nonempty(self) -> None:
         """复制后的 STL 和止挡报告不得为空文件。"""

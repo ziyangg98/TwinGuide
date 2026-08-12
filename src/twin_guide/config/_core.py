@@ -42,6 +42,7 @@ from twin_guide.config.types import (
     GuideComponentBridgeMode,
     GuideComponentBridgeParameters,
     GuideComponentBridgeStation,
+    GuidePostParameters,
     GuideTerminalUExtensionMode,
     GuideTerminalUExtensionParameters,
     HandpieceAvoidanceParameters,
@@ -65,6 +66,7 @@ from twin_guide.config.types import (
 )
 from twin_guide.config.validation import _fdi, validate_special_case_anatomy
 from twin_guide.errors import ConfigurationError
+from twin_guide.guide_post_positioning import calculate_twin_guide_extension_mm
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +86,7 @@ class CaseConfig:
     guide_terminal_u_extension: GuideTerminalUExtensionParameters
     press_beam: PressBeamParameters
     clinical_planning: ClinicalPlanningParameters
+    guide_posts: tuple[GuidePostParameters, ...]
     render: RenderParameters
     output_directory: Path
     editor_overrides: EditorOverrides = dataclass_field(default_factory=EditorOverrides)
@@ -189,14 +192,13 @@ class CaseConfig:
             ),
             guide_anchors=_parse_guide_anchors(guide_anchor_raw),
             guide_component_bridge=_parse_guide_component_bridge(bridge_raw),
-            guide_terminal_u_extension=_parse_guide_terminal_u_extension(
-                terminal_u_raw
-            ),
+            guide_terminal_u_extension=_parse_guide_terminal_u_extension(terminal_u_raw),
             press_beam=_parse_press_beam(press_beam_raw),
             clinical_planning=_parse_clinical_planning(
                 yaml_planning.get("clinical_parameters"),
                 base_directory,
             ),
+            guide_posts=_parse_guide_posts(yaml_planning.get("guide_posts")),
             editor_overrides=_parse_editor_overrides(root.get("editor_overrides")),
             render=_parse_render(_section(runtime, "render")),
             output_directory=Path(__file__).resolve().parents[3] / "output" / case_id,
@@ -213,8 +215,7 @@ class CaseConfig:
                 "Y 型按压梁时必须配置 tooth_identification"
             )
         if (
-            config.press_beam.mode
-            is PressBeamMode.TERMINAL_U_EXTENSION_ANCHOR_Y
+            config.press_beam.mode is PressBeamMode.TERMINAL_U_EXTENSION_ANCHOR_Y
             and not config.guide_terminal_u_extension.enabled
         ):
             raise ConfigurationError(
@@ -225,8 +226,7 @@ class CaseConfig:
             and config.guide_terminal_u_extension.enabled
         ):
             raise ConfigurationError(
-                "terminal_distal_common_node 与 guide_terminal_u_extension "
-                "不得在同一病例中同时启用"
+                "terminal_distal_common_node 与 guide_terminal_u_extension 不得在同一病例中同时启用"
             )
         if (
             config.guide_anchors.terminal_distal_common_node is not None
@@ -235,55 +235,19 @@ class CaseConfig:
             raise ConfigurationError("末端远中公共节点必须保留低位主连接梁")
         if config.tooth_identification is not None:
             validate_special_case_anatomy(config)
+        if not config.guide_posts:
+            raise ConfigurationError("正式流程必须配置至少一个 planning.guide_posts")
         return config
 
 
-def _parse_case_objects(
-    raw: dict[str, object],
-    base_directory: Path,
-) -> InputMeshPaths:
-    """从病例对象表解析牙科导板、导管装配体和患者牙列。"""
+def _parse_case_objects(raw: dict[str, object], base_directory: Path) -> InputMeshPaths:
+    """从病例对象表解析牙科导板和患者牙列。"""
 
+    _reject_unknown(raw, {"dental", "guide", "handpiece", "cutter"}, "objects")
     dental = _mapping(_required(raw, "dental"), "objects.dental")
     guide = _mapping(_required(raw, "guide"), "objects.guide")
-    sleeve = _mapping(_required(raw, "sleeve"), "objects.sleeve")
-    raw_files = _required(sleeve, "files")
-    raw_active_ids = _required(sleeve, "active_ids")
-    if not isinstance(raw_files, list) or not raw_files:
-        raise ConfigurationError("objects.sleeve.files 必须为非空数组")
-    if not isinstance(raw_active_ids, list) or not raw_active_ids:
-        raise ConfigurationError("objects.sleeve.active_ids 必须为非空数组")
-    files: dict[str, str] = {}
-    for index, raw_file in enumerate(raw_files):
-        record = _mapping(raw_file, f"objects.sleeve.files[{index}]")
-        identifier = _required(record, "id")
-        path = _required(record, "path")
-        if not isinstance(identifier, str) or not identifier:
-            raise ConfigurationError(f"objects.sleeve.files[{index}].id 必须为非空字符串")
-        if identifier in files:
-            raise ConfigurationError("objects.sleeve.files.id 不得重复")
-        if not isinstance(path, str) or not path:
-            raise ConfigurationError(f"objects.sleeve.files[{index}].path 必须为非空路径")
-        files[identifier] = path
-    active_ids: list[str] = []
-    for value in raw_active_ids:
-        if not isinstance(value, str) or value not in files:
-            raise ConfigurationError("objects.sleeve.active_ids 必须引用已声明导管装配体")
-        if value in active_ids:
-            raise ConfigurationError("objects.sleeve.active_ids 不得重复")
-        active_ids.append(value)
     return InputMeshPaths(
-        template=_stl_path(
-            _required(guide, "path"), base_directory, "objects.guide.path"
-        ),
-        guide_sleeve_assemblies=tuple(
-            _stl_path(
-                files[identifier],
-                base_directory,
-                f"objects.sleeve.files[{identifier}].path",
-            )
-            for identifier in active_ids
-        ),
+        template=_stl_path(_required(guide, "path"), base_directory, "objects.guide.path"),
         patient_dentition=_stl_path(
             _required(dental, "path"), base_directory, "objects.dental.path"
         ),
@@ -302,6 +266,7 @@ def _parse_sleeve(raw: dict[str, object]) -> SleeveParameters:
         "closed_bore_height_mm",
         "inner_arc_angle_degrees",
         "outer_arc_angle_degrees",
+        "guide_spacing_mm",
         "top_recess_diameter_mm",
         "top_recess_depth_mm",
     }
@@ -319,9 +284,7 @@ def _parse_sleeve(raw: dict[str, object]) -> SleeveParameters:
         positive=True,
     )
     if slot_width >= outer_diameter:
-        raise ConfigurationError(
-            "sleeve.platform_slot_width_mm 必须小于 outer_diameter_mm"
-        )
+        raise ConfigurationError("sleeve.platform_slot_width_mm 必须小于 outer_diameter_mm")
     if (recess_diameter_raw is None) != (recess_depth_raw is None):
         raise ConfigurationError(
             "sleeve.top_recess_diameter_mm 与 sleeve.top_recess_depth_mm 必须同时提供"
@@ -354,6 +317,15 @@ def _parse_sleeve(raw: dict[str, object]) -> SleeveParameters:
             _required(raw, "outer_arc_angle_degrees"),
             "sleeve.outer_arc_angle_degrees",
             positive=True,
+        ),
+        guide_spacing_mm=(
+            11.5
+            if "guide_spacing_mm" not in raw
+            else _number(
+                raw["guide_spacing_mm"],
+                "sleeve.guide_spacing_mm",
+                positive=True,
+            )
         ),
         top_recess_diameter_mm=(
             None
@@ -401,12 +373,8 @@ def _parse_sleeve(raw: dict[str, object]) -> SleeveParameters:
                 "sleeve 顶部凹陷直径必须满足 inner_diameter_mm < "
                 "top_recess_diameter_mm < outer_diameter_mm"
             )
-        if parameters.top_recess_depth_mm >= (
-            parameters.height_mm - parameters.platform_height_mm
-        ):
-            raise ConfigurationError(
-                "sleeve.top_recess_depth_mm 必须小于顶部 C 口段高度"
-            )
+        if parameters.top_recess_depth_mm >= (parameters.height_mm - parameters.platform_height_mm):
+            raise ConfigurationError("sleeve.top_recess_depth_mm 必须小于顶部 C 口段高度")
     return parameters
 
 
@@ -581,16 +549,10 @@ def _parse_windows(
         positive=True,
     )
     if sweep_angle_degrees > 180.0:
-        raise ConfigurationError(
-            "windows.observation_sweep_angle_degrees 必须小于或等于 180"
-        )
-    raw_targets = raw.get(
-        "observation_local_failure_drop_targets_mm", [0.5, 1.0, 2.0]
-    )
+        raise ConfigurationError("windows.observation_sweep_angle_degrees 必须小于或等于 180")
+    raw_targets = raw.get("observation_local_failure_drop_targets_mm", [0.5, 1.0, 2.0])
     if not isinstance(raw_targets, list) or not raw_targets:
-        raise ConfigurationError(
-            "windows.observation_local_failure_drop_targets_mm 必须为非空数组"
-        )
+        raise ConfigurationError("windows.observation_local_failure_drop_targets_mm 必须为非空数组")
     targets = tuple(
         _number(
             value,
@@ -600,9 +562,7 @@ def _parse_windows(
         for index, value in enumerate(raw_targets)
     )
     if any(target <= axis_drop_mm for target in targets):
-        raise ConfigurationError(
-            "观察窗局部失败高度目标必须全部大于全局高度"
-        )
+        raise ConfigurationError("观察窗局部失败高度目标必须全部大于全局高度")
     if any(later <= earlier for earlier, later in itertools.pairwise(targets)):
         raise ConfigurationError("观察窗局部失败高度目标必须严格递增")
     transition_rows_value = raw.get("observation_local_failure_transition_rows", 1)
@@ -611,9 +571,7 @@ def _parse_windows(
         or not isinstance(transition_rows_value, int)
         or transition_rows_value < 0
     ):
-        raise ConfigurationError(
-            "windows.observation_local_failure_transition_rows 必须为非负整数"
-        )
+        raise ConfigurationError("windows.observation_local_failure_transition_rows 必须为非负整数")
     operation_bitangent_margin_mm = _number(
         raw.get(
             "operation_bitangent_margin_mm",
@@ -690,9 +648,7 @@ def _parse_single_handpiece_avoidance(
         positive=True,
     )
     if maximum_angle_degrees > 45.0:
-        raise ConfigurationError(
-            "handpiece_avoidance.maximum_angle_degrees 必须小于或等于 45"
-        )
+        raise ConfigurationError("handpiece_avoidance.maximum_angle_degrees 必须小于或等于 45")
     pose_samples = _positive_integer(
         raw.get("pose_samples", 41),
         "handpiece_avoidance.pose_samples",
@@ -706,9 +662,7 @@ def _parse_single_handpiece_avoidance(
         "handpiece_avoidance.union_batch_size",
     )
     if union_batch_size < 2:
-        raise ConfigurationError(
-            "handpiece_avoidance.union_batch_size 必须不小于 2"
-        )
+        raise ConfigurationError("handpiece_avoidance.union_batch_size 必须不小于 2")
     return HandpieceAvoidanceParameters(
         avoidance_id=avoidance_id,
         handpiece=_stl_path(
@@ -793,13 +747,10 @@ def _merge_operation_window_parameters(
         value = yaml_windows.get(field, expected)
         if value != expected:
             raise ConfigurationError(
-                "case.yaml planning.operation_windows."
-                f"{field} 当前仅支持 {expected}"
+                f"case.yaml planning.operation_windows.{field} 当前仅支持 {expected}"
             )
     if "sites" in yaml_windows and not isinstance(yaml_windows["sites"], list):
-        raise ConfigurationError(
-            "case.yaml planning.operation_windows.sites 必须为数组"
-        )
+        raise ConfigurationError("case.yaml planning.operation_windows.sites 必须为数组")
     key_map = {
         "tangent_margin_mm": "operation_tangent_margin_mm",
         "bitangent_margin_mm": "operation_bitangent_margin_mm",
@@ -809,9 +760,7 @@ def _merge_operation_window_parameters(
         "corner_radius_mm": "operation_corner_radius_mm",
     }
     overrides = {
-        target: yaml_windows[source]
-        for source, target in key_map.items()
-        if source in yaml_windows
+        target: yaml_windows[source] for source, target in key_map.items() if source in yaml_windows
     }
     return {**runtime_windows, **overrides}
 
@@ -1147,6 +1096,64 @@ def _parse_clinical_planning(
     )
 
 
+def _parse_guide_posts(raw_value: object) -> tuple[GuidePostParameters, ...]:
+    """解析各识别圆环对应的钻针长度和植体长度。"""
+
+    if raw_value is None:
+        return ()
+    if not isinstance(raw_value, list):
+        raise ConfigurationError("planning.guide_posts 必须为数组")
+    guide_posts: list[GuidePostParameters] = []
+    for index, raw_item in enumerate(raw_value):
+        name = f"planning.guide_posts[{index}]"
+        item = _mapping(raw_item, name)
+        _reject_unknown(
+            item,
+            {
+                "ring_index",
+                "drill_length_mm",
+                "implant_length_mm",
+                "sleeve_template_extension_mm",
+            },
+            name,
+        )
+        ring_index = _positive_integer(
+            _required(item, "ring_index"),
+            f"{name}.ring_index",
+        )
+        drill_length = _number(
+            _required(item, "drill_length_mm"),
+            f"{name}.drill_length_mm",
+            positive=True,
+        )
+        implant_length = _number(
+            _required(item, "implant_length_mm"),
+            f"{name}.implant_length_mm",
+            positive=True,
+        )
+        sleeve_template_extension = _number(
+            _required(item, "sleeve_template_extension_mm"),
+            f"{name}.sleeve_template_extension_mm",
+            positive=True,
+        )
+        try:
+            calculate_twin_guide_extension_mm(drill_length, implant_length)
+        except ValueError as error:
+            raise ConfigurationError(f"{name}: {error}") from error
+        guide_posts.append(
+            GuidePostParameters(
+                ring_index=ring_index,
+                drill_length_mm=drill_length,
+                implant_length_mm=implant_length,
+                sleeve_template_extension_mm=sleeve_template_extension,
+            )
+        )
+    ring_indices = [item.ring_index for item in guide_posts]
+    if len(set(ring_indices)) != len(ring_indices):
+        raise ConfigurationError("planning.guide_posts 的 ring_index 不得重复")
+    return tuple(sorted(guide_posts, key=lambda item: item.ring_index))
+
+
 def _merge_case_design_section(
     runtime_value: object,
     design_value: object,
@@ -1156,19 +1163,12 @@ def _merge_case_design_section(
 
     if runtime_value is None and design_value is None:
         return None
-    runtime_section = (
-        {} if runtime_value is None else _mapping(runtime_value, f"runtime.{section}")
-    )
-    design_section = (
-        {}
-        if design_value is None
-        else _mapping(design_value, f"design.{section}")
-    )
+    runtime_section = {} if runtime_value is None else _mapping(runtime_value, f"runtime.{section}")
+    design_section = {} if design_value is None else _mapping(design_value, f"design.{section}")
     duplicates = sorted(runtime_section.keys() & design_section.keys())
     if duplicates:
         raise ConfigurationError(
-            f"{section} 在 runtime 与 design 中重复配置字段："
-            f"{', '.join(duplicates)}"
+            f"{section} 在 runtime 与 design 中重复配置字段：{', '.join(duplicates)}"
         )
     return {**runtime_section, **design_section}
 
@@ -1238,8 +1238,7 @@ def _parse_guide_anchors(raw_value: object) -> GuideAnchorParameters:
         implant_fdis = tuple(
             _fdi(
                 value,
-                "guide_anchors.terminal_distal_common_node."
-                f"implant_fdis[{index}]",
+                f"guide_anchors.terminal_distal_common_node.implant_fdis[{index}]",
             )
             for index, value in enumerate(raw_implant_fdis)
         )
@@ -1252,14 +1251,11 @@ def _parse_guide_anchors(raw_value: object) -> GuideAnchorParameters:
             raise ConfigurationError("远中公共节点半径系数不得小于 1.0")
         distal_offset_sleeve_diameters = _number(
             terminal.get("distal_offset_sleeve_diameters", 2.0),
-            "guide_anchors.terminal_distal_common_node."
-            "distal_offset_sleeve_diameters",
+            "guide_anchors.terminal_distal_common_node.distal_offset_sleeve_diameters",
             positive=True,
         )
         if abs(distal_offset_sleeve_diameters - 2.0) > 1e-9:
-            raise ConfigurationError(
-                "远中公共节点必须固定沿远中方向移动 2 个平均导管外径"
-            )
+            raise ConfigurationError("远中公共节点必须固定沿远中方向移动 2 个平均导管外径")
         terminal_distal_common_node = TerminalDistalCommonNodeParameters(
             missing_fdi=missing_fdi,
             reference_neighbor_fdi=neighbor_fdi,
@@ -1268,7 +1264,8 @@ def _parse_guide_anchors(raw_value: object) -> GuideAnchorParameters:
             distal_offset_sleeve_diameters=distal_offset_sleeve_diameters,
         )
     if (
-        mode in {
+        mode
+        in {
             GuideAnchorMode.TERMINAL_DISTAL_COMMON_NODE,
             GuideAnchorMode.ADJACENT_TWO_IMPLANT_TERMINAL_DISTAL_NODE_PATHS,
         }
@@ -1276,7 +1273,8 @@ def _parse_guide_anchors(raw_value: object) -> GuideAnchorParameters:
     ):
         raise ConfigurationError("末端远中公共节点模式必须配置 terminal_distal_common_node")
     if (
-        mode not in {
+        mode
+        not in {
             GuideAnchorMode.TERMINAL_DISTAL_COMMON_NODE,
             GuideAnchorMode.ADJACENT_TWO_IMPLANT_TERMINAL_DISTAL_NODE_PATHS,
         }
@@ -1300,8 +1298,7 @@ def _parse_guide_anchors(raw_value: object) -> GuideAnchorParameters:
         "guide_anchors.back_u_side_ray_angle_degrees",
     )
     if mode is GuideAnchorMode.NEAREST and (
-        "u_side_ray_angle_degrees" in raw
-        or "back_u_side_ray_angle_degrees" in raw
+        "u_side_ray_angle_degrees" in raw or "back_u_side_ray_angle_degrees" in raw
     ):
         raise ConfigurationError("nearest 锚点模式不得配置旋转射线角度")
     stations = _parse_tooth_anchor_stations(
@@ -1309,13 +1306,8 @@ def _parse_guide_anchors(raw_value: object) -> GuideAnchorParameters:
         "guide_anchors.stations",
     )
     if "anchors" in raw:
-        if (
-            "u_side_ray_angle_degrees" in raw
-            or "back_u_side_ray_angle_degrees" in raw
-        ):
-            raise ConfigurationError(
-                "独立 anchors 模式的角度必须配置在每个锚点内"
-            )
+        if "u_side_ray_angle_degrees" in raw or "back_u_side_ray_angle_degrees" in raw:
+            raise ConfigurationError("独立 anchors 模式的角度必须配置在每个锚点内")
         anchors = _parse_guide_anchor_locations(raw["anchors"])
     else:
         anchors = _expand_legacy_guide_anchor_stations(
@@ -1323,7 +1315,8 @@ def _parse_guide_anchors(raw_value: object) -> GuideAnchorParameters:
             stations,
             u_side_angle,
             back_u_side_angle,
-            require_station_angles=mode in {
+            require_station_angles=mode
+            in {
                 GuideAnchorMode.ADJACENT_TWO_IMPLANT_CONTINUOUS_PATHS,
                 GuideAnchorMode.ADJACENT_TWO_IMPLANT_TERMINAL_DISTAL_NODE_PATHS,
             },
@@ -1364,9 +1357,7 @@ def _parse_guide_anchor_locations(
         try:
             side = GuideAnchorSide(str(_required(anchor, "side")))
         except ValueError as error:
-            raise ConfigurationError(
-                f"{section}.side 必须为 u_side 或 back_u_side"
-            ) from error
+            raise ConfigurationError(f"{section}.side 必须为 u_side 或 back_u_side") from error
         tooth_station = _parse_tooth_anchor_stations(
             [_mapping(_required(anchor, "station"), f"{section}.station")],
             f"{section}.station",
@@ -1403,9 +1394,7 @@ def _expand_legacy_guide_anchor_stations(
         raise ConfigurationError("guide_anchors.stations 必须为数组")
     anchors = []
     endpoint_ids = []
-    for index, (raw_station, station) in enumerate(
-        zip(raw_stations, stations, strict=True)
-    ):
+    for index, (raw_station, station) in enumerate(zip(raw_stations, stations, strict=True)):
         mapping = _mapping(raw_station, f"guide_anchors.stations[{index}]")
         endpoint_id = str(mapping.get("id", f"station_{index + 1}")).strip()
         if not CASE_ID_PATTERN.fullmatch(endpoint_id):
@@ -1457,13 +1446,10 @@ def _validate_guide_anchor_locations(
     endpoint_ids = tuple(dict.fromkeys(anchor.endpoint_id for anchor in anchors))
     if len(endpoint_ids) != expected_endpoint_count:
         raise ConfigurationError(
-            f"guide_anchors.{mode.value} 必须配置 "
-            f"{expected_endpoint_count} 个端部的独立锚点"
+            f"guide_anchors.{mode.value} 必须配置 {expected_endpoint_count} 个端部的独立锚点"
         )
     for endpoint_id in endpoint_ids:
-        endpoint_anchors = tuple(
-            anchor for anchor in anchors if anchor.endpoint_id == endpoint_id
-        )
+        endpoint_anchors = tuple(anchor for anchor in anchors if anchor.endpoint_id == endpoint_id)
         sides = tuple(anchor.side for anchor in endpoint_anchors)
         if len(endpoint_anchors) != 2 or set(sides) != set(GuideAnchorSide):
             raise ConfigurationError(
@@ -1602,9 +1588,7 @@ def _parse_guide_component_bridge(
             "guide_component_bridge.mode 必须为 disabled 或 same_side_dual_beam"
         ) from error
     if enabled != (mode is not GuideComponentBridgeMode.DISABLED):
-        raise ConfigurationError(
-            "guide_component_bridge.enabled 必须与 mode 是否为 disabled 一致"
-        )
+        raise ConfigurationError("guide_component_bridge.enabled 必须与 mode 是否为 disabled 一致")
     required_count = _positive_integer(
         raw.get("required_guide_component_count", 2),
         "guide_component_bridge.required_guide_component_count",
@@ -1640,9 +1624,7 @@ def _parse_guide_component_bridge(
         if not CASE_ID_PATTERN.fullmatch(station_id):
             raise ConfigurationError(f"{section}.id 含有无效字符")
         tooth_raw = {
-            key: value
-            for key, value in raw_station.items()
-            if key in {"type", "fdi", "fdis"}
+            key: value for key, value in raw_station.items() if key in {"type", "fdi", "fdis"}
         }
         tooth_station = _parse_tooth_anchor_stations([tooth_raw], section)[0]
         stations.append(
@@ -1681,8 +1663,7 @@ def _parse_guide_component_bridge(
     method = str(endpoint_raw.get("method", "bulb_and_conformal_foot"))
     if endpoint_enabled and method != "bulb_and_conformal_foot":
         raise ConfigurationError(
-            "guide_component_bridge.endpoint_reinforcement.method "
-            "必须为 bulb_and_conformal_foot"
+            "guide_component_bridge.endpoint_reinforcement.method 必须为 bulb_and_conformal_foot"
         )
     return GuideComponentBridgeParameters(
         mode=mode,
@@ -1698,9 +1679,7 @@ def _parse_guide_component_bridge(
             raw.get("dental_clearance_mm", 0.20),
             "guide_component_bridge.dental_clearance_mm",
         ),
-        endpoint_reinforcement=(
-            PressBeamGuideEndpointParameters() if endpoint_enabled else None
-        ),
+        endpoint_reinforcement=(PressBeamGuideEndpointParameters() if endpoint_enabled else None),
     )
 
 
@@ -1730,9 +1709,7 @@ def _parse_guide_terminal_u_extension(
         },
         "guide_terminal_u_extension",
     )
-    enabled = _boolean(
-        raw.get("enabled", False), "guide_terminal_u_extension.enabled"
-    )
+    enabled = _boolean(raw.get("enabled", False), "guide_terminal_u_extension.enabled")
     mode_value = str(
         raw.get(
             "mode",
@@ -1747,8 +1724,7 @@ def _parse_guide_terminal_u_extension(
         mode = GuideTerminalUExtensionMode(mode_value)
     except ValueError as error:
         raise ConfigurationError(
-            "guide_terminal_u_extension.mode 必须为 disabled 或 "
-            "tooth_wrapping_u_beam"
+            "guide_terminal_u_extension.mode 必须为 disabled 或 tooth_wrapping_u_beam"
         ) from error
     if enabled != (mode is not GuideTerminalUExtensionMode.DISABLED):
         raise ConfigurationError(
@@ -1763,13 +1739,9 @@ def _parse_guide_terminal_u_extension(
             "guide_terminal_u_extension.anchor_station",
         )[0]
     if enabled and anchor_station is None:
-        raise ConfigurationError(
-            "tooth_wrapping_u_beam 必须配置 anchor_station"
-        )
+        raise ConfigurationError("tooth_wrapping_u_beam 必须配置 anchor_station")
     if not enabled and anchor_station is not None:
-        raise ConfigurationError(
-            "disabled 末端 U 型延伸梁不得配置 anchor_station"
-        )
+        raise ConfigurationError("disabled 末端 U 型延伸梁不得配置 anchor_station")
 
     terminal_fdi = (
         _fdi(
@@ -1801,9 +1773,7 @@ def _parse_guide_terminal_u_extension(
         positive=True,
     )
     if enabled and turnaround_depth_mm < diameter_mm / 2.0:
-        raise ConfigurationError(
-            "guide_terminal_u_extension.turnaround_depth_mm 不得小于梁半径"
-        )
+        raise ConfigurationError("guide_terminal_u_extension.turnaround_depth_mm 不得小于梁半径")
 
     endpoint_raw = _mapping(
         raw.get("endpoint_reinforcement", {"enabled": False}),
@@ -1853,9 +1823,7 @@ def _parse_guide_terminal_u_extension(
             "guide_terminal_u_extension.safety_margin_mm",
         ),
         turnaround_depth_mm=turnaround_depth_mm,
-        endpoint_reinforcement=(
-            PressBeamGuideEndpointParameters() if endpoint_enabled else None
-        ),
+        endpoint_reinforcement=(PressBeamGuideEndpointParameters() if endpoint_enabled else None),
     )
 
 
@@ -1928,9 +1896,7 @@ def _parse_press_beam(raw_value: object) -> PressBeamParameters:
             {"candidate_scope", "distance_score", "tie_breaker"},
             "press_beam.sleeve_anchor_selection",
         )
-        if str(_required(selection, "candidate_scope")) != (
-            "inner_sleeve_upper_per_implant_site"
-        ):
+        if str(_required(selection, "candidate_scope")) != ("inner_sleeve_upper_per_implant_site"):
             raise ConfigurationError("不支持的多种植位 Y 梁导管候选范围")
         if str(_required(selection, "distance_score")) != "maximin_to_two_guide_anchors":
             raise ConfigurationError("多种植位 Y 梁距离评分必须为 maximin_to_two_guide_anchors")
@@ -1966,23 +1932,19 @@ def _parse_press_beam(raw_value: object) -> PressBeamParameters:
         segment = str(_required(anchor, "segment"))
         if segment not in {"u_side", "back_u_side", "turnaround", "full"}:
             raise ConfigurationError(
-                "press_beam.extension_anchor.segment 必须为 u_side、"
-                "back_u_side、turnaround 或 full"
+                "press_beam.extension_anchor.segment 必须为 u_side、back_u_side、turnaround 或 full"
             )
         selection = str(anchor.get("selection", "farthest_from_guide_anchors"))
         if selection != "farthest_from_guide_anchors":
             raise ConfigurationError(
-                "press_beam.extension_anchor.selection 必须为 "
-                "farthest_from_guide_anchors"
+                "press_beam.extension_anchor.selection 必须为 farthest_from_guide_anchors"
             )
         anchor_overlap_mm = _number(
             anchor.get("overlap_mm", 0.30),
             "press_beam.extension_anchor.overlap_mm",
         )
         if anchor_overlap_mm >= diameter_mm / 2.0:
-            raise ConfigurationError(
-                "press_beam.extension_anchor.overlap_mm 必须小于按压梁半径"
-            )
+            raise ConfigurationError("press_beam.extension_anchor.overlap_mm 必须小于按压梁半径")
         extension_anchor = PressBeamExtensionAnchorParameters(
             segment=segment,
             selection=selection,
@@ -2002,36 +1964,20 @@ def _parse_press_beam(raw_value: object) -> PressBeamParameters:
         raise ConfigurationError("内侧导管高端 Y 型按压梁必须配置两个牙位站位")
     if mode is PressBeamMode.INNER_SLEEVE_UPPER_Y and sleeve_anchor_selection is None:
         sleeve_anchor_selection = PressBeamSleeveAnchorSelectionParameters()
-    if (
-        mode is not PressBeamMode.INNER_SLEEVE_UPPER_Y
-        and sleeve_anchor_selection is not None
-    ):
-        raise ConfigurationError(
-            "只有 inner_sleeve_upper_y 可以配置 sleeve_anchor_selection"
-        )
+    if mode is not PressBeamMode.INNER_SLEEVE_UPPER_Y and sleeve_anchor_selection is not None:
+        raise ConfigurationError("只有 inner_sleeve_upper_y 可以配置 sleeve_anchor_selection")
     if mode is PressBeamMode.THREE_TOOTH_ANCHORS_Y and len(stations) != 3:
         raise ConfigurationError("全牙位锚点 Y 型按压梁必须配置三个牙位站位")
-    if (
-        mode is PressBeamMode.TERMINAL_U_EXTENSION_ANCHOR_Y
-        and len(stations) != 2
-    ):
+    if mode is PressBeamMode.TERMINAL_U_EXTENSION_ANCHOR_Y and len(stations) != 2:
         raise ConfigurationError("末端 U 型延伸梁锚点 Y 型按压梁必须配置两个牙位站位")
-    if (
-        mode is PressBeamMode.TERMINAL_U_EXTENSION_ANCHOR_Y
-        and extension_anchor is None
-    ):
+    if mode is PressBeamMode.TERMINAL_U_EXTENSION_ANCHOR_Y and extension_anchor is None:
         raise ConfigurationError("末端 U 型延伸梁锚点 Y 型按压梁必须配置 extension_anchor")
-    if (
-        mode is not PressBeamMode.TERMINAL_U_EXTENSION_ANCHOR_Y
-        and extension_anchor is not None
-    ):
+    if mode is not PressBeamMode.TERMINAL_U_EXTENSION_ANCHOR_Y and extension_anchor is not None:
         raise ConfigurationError("只有 terminal_u_extension_anchor_y 可以配置 extension_anchor")
     if mode is not PressBeamMode.DISABLED and any(
         station.ray_angle_degrees is None for station in stations
     ):
-        raise ConfigurationError(
-            "Y 型按压梁的每个导板锚点必须显式配置 ray_angle_degrees"
-        )
+        raise ConfigurationError("Y 型按压梁的每个导板锚点必须显式配置 ray_angle_degrees")
     if overlap_mm >= diameter_mm / 2.0:
         raise ConfigurationError("press_beam.guide_overlap_mm 必须小于按压梁半径")
     return PressBeamParameters(

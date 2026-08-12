@@ -70,7 +70,6 @@ def _dependency_paths(config: CaseConfig) -> tuple[Path, ...]:
         return ()
     paths = [
         inputs.template,
-        *inputs.guide_sleeve_assemblies,
         inputs.patient_dentition,
     ]
     return tuple(paths)
@@ -191,11 +190,7 @@ def _observation_features(context: GenerationContext) -> list[dict[str, object]]
     if identification is None:
         return []
     raw_windows = identification.mapping_report.get("observation_windows", [])
-    raw_by_id = {
-        str(item.get("id", "")): item
-        for item in raw_windows
-        if isinstance(item, dict)
-    }
+    raw_by_id = {str(item.get("id", "")): item for item in raw_windows if isinstance(item, dict)}
     valid_teeth = [
         {
             "fdi": tooth.fdi,

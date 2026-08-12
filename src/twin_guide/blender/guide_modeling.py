@@ -993,7 +993,6 @@ def _render_process_images(
 ) -> tuple[Path, ...]:
     """渲染输入、标准重建导管、切口、选点和连接结果。"""
 
-    source_assemblies = case.input_meshes.guide_sleeve_assembly_meshes
     accessory_meshes = case.retained_accessory_meshes
     cut_template_preview = duplicate_mesh_object(
         cut_template_mesh,
@@ -1006,7 +1005,7 @@ def _render_process_images(
     image_specs = [
         (
             "stage-01-sleeve-reconstruction.png",
-            (*source_assemblies, *sleeve_meshes),
+            (case.input_meshes.template_mesh, *sleeve_meshes),
         ),
         (
             "stage-04-anchor-selection.png",
@@ -1142,8 +1141,6 @@ def build_guide_from_links(
     template_mesh = case.input_meshes.template_mesh
     accessory_meshes = case.retained_accessory_meshes
     assign_material(template_mesh, materials["template"])
-    for source_assembly in case.input_meshes.guide_sleeve_assembly_meshes:
-        assign_material(source_assembly, materials["source"])
     for guide in case.guide_sleeves:
         assign_material(guide.guide_mesh, materials["sleeve"])
     for accessory_mesh in accessory_meshes:
@@ -1326,33 +1323,52 @@ def build_guide_from_links(
         tooth_mapping_image = output_directory / "stage-02-tooth-mapping.png"
         if tooth_mapping_image.is_file():
             process_image_paths = (*process_image_paths, tooth_mapping_image)
-    recut_cutters = (
-        (*channel_cutters, *profile_window_cutters)
-        if point_links.recut_sleeve_bore
-        else profile_window_cutters
+    # 观察窗只属于导板和连接结构，不能在导柱融合后再切。无 sleeve 输入
+    # 模式下，估计导柱可能靠近观察窗切割体；若对最终整体复切，会从完整
+    # 导柱上误切一块。先完成结构体的观察窗复切并清除切割碎片，再融合
+    # 导柱，最后仅用固定孔 cutter 恢复导柱内孔。
+    structural_mesh = voxel_union(
+        (cut_template_mesh, *accessory_meshes, *link_meshes),
+        "twin_guide_structure_mesh",
+        fusion_voxel_size_mm,
+        materials["final"],
     )
+    if profile_window_cutters:
+        structural_mesh = voxel_union(
+            (structural_mesh,),
+            "twin_guide_structure_pre_window_recut_mesh",
+            fusion_voxel_size_mm,
+            materials["final"],
+        )
+        structural_mesh = apply_manifold3d_differences(
+            structural_mesh,
+            profile_window_cutters,
+            validate_inputs=not preview,
+            validate_result=not preview,
+        )
+        remove_excess_components(structural_mesh, 1)
+
     final_mesh = voxel_union(
-        (cut_template_mesh, *sleeve_meshes, *accessory_meshes, *link_meshes),
+        (structural_mesh, *sleeve_meshes),
         "twin_guide_mesh",
         fusion_voxel_size_mm,
         materials["final"],
     )
-    if recut_cutters:
+    if point_links.recut_sleeve_bore and channel_cutters:
         final_mesh = voxel_union(
             (final_mesh,),
-            "twin_guide_pre_recut_mesh",
+            "twin_guide_pre_channel_recut_mesh",
             fusion_voxel_size_mm,
             materials["final"],
         )
         final_mesh = apply_manifold3d_differences(
             final_mesh,
-            recut_cutters,
+            channel_cutters,
             validate_inputs=not preview,
             validate_result=not preview,
         )
-        remove_excess_components(final_mesh, 1)
-    else:
-        remove_excess_components(final_mesh, 1)
+    remove_excess_components(final_mesh, 1)
+    if not (profile_window_cutters or point_links.recut_sleeve_bore):
         clean_mesh(final_mesh)
     for avoidance in handpiece_avoidance or ():
         handpiece_cutter = import_polygon_mesh(
@@ -1369,7 +1385,11 @@ def build_guide_from_links(
         )
         remove_excess_components(final_mesh, 1)
         remove_object(handpiece_cutter)
-    requires_serialized_repair = bool(recut_cutters or handpiece_avoidance)
+    requires_serialized_repair = bool(
+        profile_window_cutters
+        or (point_links.recut_sleeve_bore and channel_cutters)
+        or handpiece_avoidance
+    )
     assign_material(final_mesh, materials["final"])
     model_path = output_directory / "twin_guide.stl"
     export_stl_mesh(model_path, final_mesh)

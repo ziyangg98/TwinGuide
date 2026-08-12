@@ -1,18 +1,16 @@
 # TwinGuide
 
-TwinGuide 是基于 Blender 的双导管牙科导板建模工具。程序从牙科导板、导管
-装配体和患者牙列网格出发，规划导孔、观察窗、连接梁、按压梁和手机避让，
+TwinGuide 是基于 Blender 的双导管牙科导板建模工具。程序从带定位圆环的传统模板
+和患者牙列网格出发，规划导柱、导孔、观察窗、连接梁、按压梁和手机避让，
 最终导出一体化 STL 并执行独立验证。
 
 <table>
   <tr>
-    <td width="33.3%" align="center"><img src="docs/images/input-template.png" width="100%" alt="牙科导板输入"></td>
-    <td width="33.3%" align="center"><img src="docs/images/input-sleeves.png" width="100%" alt="导管装配体输入"></td>
-    <td width="33.3%" align="center"><img src="docs/images/input-patient-dentition.png" width="100%" alt="患者牙列输入"></td>
+    <td width="50%" align="center"><img src="docs/images/input-template.png" width="100%" alt="传统模板输入"></td>
+    <td width="50%" align="center"><img src="docs/images/input-patient-dentition.png" width="100%" alt="患者牙列输入"></td>
   </tr>
   <tr>
-    <td align="center">牙科导板</td>
-    <td align="center">导管装配体</td>
+    <td align="center">带定位圆环的传统模板</td>
     <td align="center">患者牙列</td>
   </tr>
 </table>
@@ -21,7 +19,7 @@ TwinGuide 是基于 Blender 的双导管牙科导板建模工具。程序从牙�
 
 | 阶段 | 输入 | 输出 | 成熟度 |
 | --- | --- | --- | --- |
-| 1. 导管识别 | 导管装配体、牙科导板 | 导管位姿与标准重建 | 稳定 |
+| 1. 导柱生成 | 传统模板圆环、规划参数 | 导柱位姿与标准重建 | 稳定 |
 | 2. 牙位识别 | 患者牙列、病例语义 | FDI 牙位与导板映射 | 实验 |
 | 3. 窗口规划 | 导管与牙位结果 | 导孔、操作窗、观察窗 | 实验 |
 | 4. 锚点选择 | 导管、窗口与牙位结果 | 导管端和导板端锚点 | 实验 |
@@ -31,11 +29,11 @@ TwinGuide 是基于 Blender 的双导管牙科导板建模工具。程序从牙�
 
 <table>
   <tr>
-    <td width="50%" align="center"><img src="docs/images/stage-1-sleeve-reconstruction.png" width="100%" alt="第 1 阶段：导管识别与标准重建"></td>
+    <td width="50%" align="center"><img src="docs/images/stage-1-sleeve-reconstruction.png" width="100%" alt="第 1 阶段：传统模板导柱定位与标准重建"></td>
     <td width="50%" align="center"><img src="docs/images/stage-2-tooth-mapping.png" width="100%" alt="第 2 阶段：牙位映射"></td>
   </tr>
   <tr>
-    <td align="center">1. 导管识别与标准重建</td>
+    <td align="center">1. 传统模板导柱定位与标准重建</td>
     <td align="center">2. 牙位映射</td>
   </tr>
   <tr>

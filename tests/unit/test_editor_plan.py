@@ -42,7 +42,6 @@ class EditorPlanTests(unittest.TestCase):
         @dataclass(frozen=True)
         class Inputs:
             template: Path
-            guide_sleeve_assemblies: tuple[Path, ...]
             patient_dentition: Path
 
         @dataclass(frozen=True)
@@ -60,10 +59,10 @@ class EditorPlanTests(unittest.TestCase):
                 "case: {id: demo}\nreview: {status: first}\n",
                 encoding="utf-8",
             )
-            paths = [root / name for name in ("template.stl", "sleeve.stl", "teeth.stl")]
+            paths = [root / name for name in ("template.stl", "teeth.stl")]
             for path in paths:
                 path.write_bytes(b"mesh")
-            inputs = Inputs(paths[0], (paths[1],), paths[2])
+            inputs = Inputs(paths[0], paths[1])
             first = Config("demo", inputs, root / "formal", 1.0)
             second = Config("demo", inputs, root / "ui-plan", 1.0)
             adjusted = Config(
@@ -99,7 +98,7 @@ class EditorPlanTests(unittest.TestCase):
             root = Path(directory)
             config_path = root / "case.yaml"
             config_path.write_text("case: demo", encoding="utf-8")
-            paths = [root / name for name in ("template.stl", "sleeve.stl", "teeth.stl")]
+            paths = [root / name for name in ("template.stl", "teeth.stl")]
             for path in paths:
                 path.write_bytes(b"mesh")
             config = SimpleNamespace(
@@ -107,8 +106,7 @@ class EditorPlanTests(unittest.TestCase):
                 editor_overrides=EditorOverrides(),
                 inputs=SimpleNamespace(
                     template=paths[0],
-                    guide_sleeve_assemblies=(paths[1],),
-                    patient_dentition=paths[2],
+                    patient_dentition=paths[1],
                 ),
                 tooth_identification=None,
                 windows=SimpleNamespace(

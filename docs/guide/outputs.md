@@ -44,7 +44,7 @@ output/<case_id>/
 | `schema_version` | 阶段文档契约版本 |
 | `stage` | `number`、`key`、中文 `title`、`status`、`maturity` 和 `implementation_version` |
 | `case` | 病例 `id` 和运行时上下颌 `jaw`；第 2 阶段可附加显示信息 |
-| `inputs` | 该阶段需要的上游结果以及本次使用的牙列、导板和导管装配体路径 |
+| `inputs` | 该阶段需要的上游结果以及本次使用的牙列和传统模板路径 |
 | `parameters` | 该阶段真正消费的主要配置，而不是整份 YAML 复制 |
 | `result` | 类型化阶段结果的 JSON 序列化；Blender 运行时网格不进入契约 |
 | `quality` | `passed`、布尔 `checks`，以及通用阶段的少量 `metrics` 和跳过/失败 `reason` |
@@ -60,7 +60,7 @@ output/<case_id>/
 
 | 阶段文件 | `result` 主要内容 | `quality.metrics` 主要指标 | PNG 表达内容 |
 | --- | --- | --- | --- |
-| `stage-01-sleeve-reconstruction` | 逐装配体识别的导管位姿、局部标架和标准重建导管 | 导管数、导管索引、长度和导孔直径 | 蓝色输入装配体与灰色标准重建导管 |
+| `stage-01-sleeve-reconstruction` | 传统模板圆环估计的导柱位姿、局部标架和标准重建导柱 | 导柱数、导柱索引、长度和导孔直径 | 蓝色传统模板与灰色标准重建导柱 |
 | `stage-02-tooth-mapping` | 牙弓坐标框、FDI 顺序、现存/缺失牙、导板映射和观察窗端点 | `quality.checks` 的识别、坐标、覆盖、排序和窗口映射安全门；详细数值在 `quality.diagnostics` 与 `result` | 实测牙冠投影、FDI 中心、牙弓距离和观察窗范围 |
 | `stage-03-cutout-planning` | 导孔、操作窗和 FDI 轴扫观察窗切除体 | 三类切除体数量、观察窗 ID、切除体积、最小轴线净距和局部修正状态 | 已完成切口的蓝色导板与灰色导管 |
 | `stage-04-anchor-selection` | 导管 Q/P、导板射线锚点、轨迹和特殊端点 | 导管锚点数、导板锚点数和轨迹数 | 红色导管锚点、黄色导板锚点及射线/轨迹 |

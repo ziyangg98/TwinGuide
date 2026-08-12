@@ -15,10 +15,12 @@
 
 .. automodule:: twin_guide.guide_generation
 
-导管识别与标准重建
+传统模板圆环识别与导柱重建
 ----------------------------------------
 
-.. automodule:: twin_guide.sleeve_generation
+.. automodule:: twin_guide.template_ring_estimation
+
+.. automodule:: twin_guide.guide_post_positioning
 
 .. automodule:: twin_guide.case_analysis
 

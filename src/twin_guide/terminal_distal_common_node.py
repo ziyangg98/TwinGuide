@@ -135,7 +135,9 @@ def select_terminal_distal_common_node(
     )
     if context.sleeve_generation is None:
         raise GeometryError("远中公共节点缺少两导管位姿")
-    guides = context.sleeve_generation.sleeves if terminal_guides is None else terminal_guides
+    guides = (
+        context.sleeve_generation.sleeves if terminal_guides is None else terminal_guides
+    )
     if len(guides) != 2:
         raise GeometryError("远中公共节点必须由末端种植位的两根导管确定")
 

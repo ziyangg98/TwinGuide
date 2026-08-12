@@ -415,7 +415,7 @@ def select_template_points(
 
         parameters = case.config.guide_anchors.terminal_distal_common_node
         if parameters is None or len(parameters.implant_fdis) != len(pair_assignments):
-            raise ValueError("双种植位末端远中节点配置与导管装配体数量不一致")
+            raise ValueError("双种植位末端远中节点配置与模板圆环数量不一致")
         terminal_pair_index = parameters.implant_fdis.index(parameters.missing_fdi)
         terminal_assignment = pair_assignments[terminal_pair_index]
         sleeve_anchor_by_index = {

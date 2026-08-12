@@ -30,8 +30,7 @@ class ToothIdentificationCacheTests(unittest.TestCase):
             )
             dental = root / "dental.stl"
             template = root / "template.stl"
-            sleeve = root / "sleeve.stl"
-            for path in (dental, template, sleeve):
+            for path in (dental, template):
                 path.write_bytes(b"mesh")
 
             def config(case_yaml):
@@ -42,7 +41,6 @@ class ToothIdentificationCacheTests(unittest.TestCase):
                     inputs=SimpleNamespace(
                         patient_dentition=dental,
                         template=template,
-                        guide_sleeve_assemblies=(sleeve,),
                     ),
                 )
 

@@ -23,7 +23,7 @@ STAGE_ARTIFACT_STEMS = {
 }
 
 STAGE_LEGENDS = {
-    1: ("输入装配体：蓝色", "标准重建导管：灰色"),
+    1: ("传统模板：蓝色", "标准重建导柱：灰色"),
     2: ("实测牙冠投影与 FDI 中心", "牙弓距离与观察窗范围"),
     3: ("蓝色：已完成导孔与窗口切除的牙科导板", "灰色：标准重建导管"),
     4: ("导管锚点：红色", "导板锚点：黄色", "射线/轨迹：黄色细管"),
@@ -80,9 +80,7 @@ def _stage_parameters(config: CaseConfig, stage_number: int) -> object:
     if stage_number == 6:
         return {
             "connector_diameter_mm": config.geometry.connector_diameter_mm,
-            "connector_dental_clearance_mm": (
-                config.geometry.connector_dental_clearance_mm
-            ),
+            "connector_dental_clearance_mm": (config.geometry.connector_dental_clearance_mm),
             "fusion_voxel_size_mm": config.geometry.fusion_voxel_size_mm,
         }
     if stage_number == 7:
@@ -103,9 +101,7 @@ def _stage_metrics(stage: StageResult) -> dict[str, object]:
             "sleeve_count": len(sleeves),
             "guide_indices": [sleeve.guide_index for sleeve in sleeves],
             "lengths_mm": [round(sleeve.length_mm, 3) for sleeve in sleeves],
-            "bore_diameters_mm": [
-                round(2.0 * sleeve.bore_radius_mm, 3) for sleeve in sleeves
-            ],
+            "bore_diameters_mm": [round(2.0 * sleeve.bore_radius_mm, 3) for sleeve in sleeves],
         }
     if number == 2:
         return {
@@ -120,33 +116,27 @@ def _stage_metrics(stage: StageResult) -> dict[str, object]:
             "operation_window_count": len(output.windows),
             "profile_window_count": len(output.profile_windows),
             "profile_window_ids": [
-                window_id
-                for window in output.profile_windows
-                for window_id in window.window_ids
+                window_id for window in output.profile_windows for window_id in window.window_ids
             ],
         }
         if output.profile_windows:
-            report = json.loads(
-                output.profile_windows[0].report_path.read_text(encoding="utf-8")
-            )
+            report = json.loads(output.profile_windows[0].report_path.read_text(encoding="utf-8"))
             geometry = report["geometry"]
             solution = report.get("constraint_solution", {})
             depths = [
-                float(window["exterior_wall_sampling"][
-                    "calculated_axis_core_depth_mm"
-                ])
+                float(window["exterior_wall_sampling"]["calculated_axis_core_depth_mm"])
                 for window in report.get("windows", [])
             ]
-            metrics.update({
-                "removed_guide_volume_mm3": round(
-                    float(geometry["removed_volume_mm3"]), 3
-                ),
-                "minimum_axis_clearance_mm": round(
-                    float(geometry["minimum_removed_axis_clearance_mm"]), 3
-                ),
-                "constraint_solution_mode": solution.get("mode"),
-                "maximum_inner_depth_mm": round(max(depths), 3) if depths else None,
-            })
+            metrics.update(
+                {
+                    "removed_guide_volume_mm3": round(float(geometry["removed_volume_mm3"]), 3),
+                    "minimum_axis_clearance_mm": round(
+                        float(geometry["minimum_removed_axis_clearance_mm"]), 3
+                    ),
+                    "constraint_solution_mode": solution.get("mode"),
+                    "maximum_inner_depth_mm": round(max(depths), 3) if depths else None,
+                }
+            )
         return metrics
     if number == 4:
         return {
@@ -158,12 +148,8 @@ def _stage_metrics(stage: StageResult) -> dict[str, object]:
         return {
             "connection_type": output.connection_type,
             "guide_anchor_count": len(output.guide_anchors),
-            "junction_minimum_angle_degrees": round(
-                output.junction_minimum_angle_degrees, 3
-            ),
-            "junction_sleeve_distance_mm": round(
-                output.junction_sleeve_distance_mm, 3
-            ),
+            "junction_minimum_angle_degrees": round(output.junction_minimum_angle_degrees, 3),
+            "junction_sleeve_distance_mm": round(output.junction_sleeve_distance_mm, 3),
             "beam_diameter_mm": round(2.0 * output.radius_mm, 3),
         }
     if number == 6:
@@ -179,21 +165,17 @@ def _stage_metrics(stage: StageResult) -> dict[str, object]:
         "handpiece_count": len(plans),
         "pose_counts": [len(plan.angle_samples_degrees) for plan in plans],
         "angle_ranges_degrees": [
-            [plan.angle_samples_degrees[0], plan.angle_samples_degrees[-1]]
-            for plan in plans
+            [plan.angle_samples_degrees[0], plan.angle_samples_degrees[-1]] for plan in plans
         ],
         "extra_clearances_mm": [plan.extra_clearance_mm for plan in plans],
     }
 
 
 def _source_files(config: CaseConfig) -> dict[str, object]:
-    """返回本次运行实际使用的三类源网格。"""
+    """返回本次运行实际使用的两个源网格。"""
 
     return {
         "template": str(config.inputs.template.resolve()),
-        "sleeve_assemblies": [
-            str(path.resolve()) for path in config.inputs.guide_sleeve_assemblies
-        ],
         "patient_dentition": str(config.inputs.patient_dentition.resolve()),
     }
 
@@ -213,13 +195,10 @@ def _stage_document(
         "business_metrics_available": bool(metrics),
     }
     if completed and stage.definition.number == 3 and stage.output.profile_windows:
-        report = json.loads(
-            stage.output.profile_windows[0].report_path.read_text(encoding="utf-8")
+        report = json.loads(stage.output.profile_windows[0].report_path.read_text(encoding="utf-8"))
+        checks.update(
+            {f"observation_window.{name}": bool(passed) for name, passed in report["QA"].items()}
         )
-        checks.update({
-            f"observation_window.{name}": bool(passed)
-            for name, passed in report["QA"].items()
-        })
     return {
         "schema_version": STAGE_RESULT_SCHEMA,
         "stage": {
@@ -248,9 +227,7 @@ def _stage_document(
         },
         "artifacts": {
             "result_json": str(result_path.resolve()),
-            "overview_png": (
-                str(overview_path.resolve()) if overview_path.is_file() else None
-            ),
+            "overview_png": (str(overview_path.resolve()) if overview_path.is_file() else None),
         },
     }
 

@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
-from twin_guide.errors import ConfigurationError
+from twin_guide.guide_post_positioning import calculate_twin_guide_extension_mm
 
 DEFAULT_CONNECTOR_DIAMETER_MM = 4.60
 DEFAULT_PRESS_BEAM_DIAMETER_MM = 4.60
 DEFAULT_OPERATION_BITANGENT_MARGIN_MM = 3.0
 DEFAULT_GUIDE_ANCHOR_U_SIDE_RAY_ANGLE_DEGREES = 70.0
 DEFAULT_GUIDE_ANCHOR_BACK_U_SIDE_RAY_ANGLE_DEGREES = 90.0
+
 
 class Jaw(StrEnum):
     """病例的上下颌标记。"""
@@ -29,26 +31,15 @@ class Jaw(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class InputMeshPaths:
-    """病例的牙科导板、导管装配体和患者牙列网格路径。"""
+    """病例的牙科导板和患者牙列网格路径。"""
 
     template: Path
-    guide_sleeve_assemblies: tuple[Path, ...]
     patient_dentition: Path
-
-    @property
-    def guide_sleeve_assembly(self) -> Path:
-        """返回单颗病例的唯一导管装配体。"""
-
-        if len(self.guide_sleeve_assemblies) != 1:
-            raise ConfigurationError(
-                "多种植位病例包含多个导管装配体，必须逐装配体处理"
-            )
-        return self.guide_sleeve_assemblies[0]
 
 
 @dataclass(frozen=True, slots=True)
 class SleeveParameters:
-    """控制导管主体和顶部环形凹陷的几何参数。"""
+    """控制双导导柱主体、间距和顶部环形凹陷的几何参数。"""
 
     inner_diameter_mm: float
     outer_diameter_mm: float
@@ -58,6 +49,7 @@ class SleeveParameters:
     closed_bore_height_mm: float
     inner_arc_angle_degrees: float
     outer_arc_angle_degrees: float
+    guide_spacing_mm: float = 11.5
     top_recess_diameter_mm: float | None = None
     top_recess_depth_mm: float = 0.0
 
@@ -72,6 +64,25 @@ class SleeveParameters:
         """返回导管主体外半径。"""
 
         return self.outer_diameter_mm / 2.0
+
+    @property
+    def outer_d_face_offset_mm(self) -> float:
+        """返回轴心沿 C 口方向到外侧 D 面的距离。"""
+
+        opening_angle = math.radians(360.0 - self.outer_arc_angle_degrees)
+        return self.outer_radius_mm * math.cos(0.5 * opening_angle)
+
+    @property
+    def guide_axis_spacing_mm(self) -> float:
+        """由两个相向 D 面净距返回双导轴心距。"""
+
+        return self.guide_spacing_mm + 2.0 * self.outer_d_face_offset_mm
+
+    @property
+    def guide_pair_outer_span_mm(self) -> float:
+        """返回两根导柱沿中心连线方向的最外侧总宽。"""
+
+        return self.guide_axis_spacing_mm + self.outer_diameter_mm
 
     @property
     def top_recess_radius_mm(self) -> float | None:
@@ -115,12 +126,8 @@ class GeometryParameters:
     connector_dental_clearance_mm: float = 0.20
     sleeve_stop_clearance_mm: float = 2.0
     sleeve_stop_front_avoidance_mm: float = 0.0
-    connection_blocks: ConnectionBlockParameters = field(
-        default_factory=ConnectionBlockParameters
-    )
-    connector_guide_endpoint: PressBeamGuideEndpointParameters = (
-        PressBeamGuideEndpointParameters()
-    )
+    connection_blocks: ConnectionBlockParameters = field(default_factory=ConnectionBlockParameters)
+    connector_guide_endpoint: PressBeamGuideEndpointParameters = PressBeamGuideEndpointParameters()
 
     @property
     def connector_radius_mm(self) -> float:
@@ -165,6 +172,25 @@ class ClinicalPlanningParameters:
 
 
 @dataclass(frozen=True, slots=True)
+class GuidePostParameters:
+    """一个已识别圆环对应的种植位轴向规划参数。"""
+
+    ring_index: int
+    drill_length_mm: float
+    implant_length_mm: float
+    sleeve_template_extension_mm: float
+
+    @property
+    def twin_guide_extension_mm(self) -> float:
+        """返回该圆环对应的双导导板延长量。"""
+
+        return calculate_twin_guide_extension_mm(
+            self.drill_length_mm,
+            self.implant_length_mm,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class SleeveGuideOverride:
     """一根导柱独立的三项轴向高度。"""
 
@@ -196,12 +222,15 @@ class OperationWindowOverride:
         """校验种植位编号和非负窗口边距。"""
         if self.site_index <= 0:
             raise ValueError("操作窗口种植位编号必须为正")
-        if min(
-            self.tangent_margin_mm,
-            self.bitangent_margin_mm,
-            self.front_axial_margin_mm,
-            self.rear_axial_margin_mm,
-        ) < 0.0:
+        if (
+            min(
+                self.tangent_margin_mm,
+                self.bitangent_margin_mm,
+                self.front_axial_margin_mm,
+                self.rear_axial_margin_mm,
+            )
+            < 0.0
+        ):
             raise ValueError("操作窗口边距不得为负")
 
 
@@ -297,9 +326,7 @@ class EditorOverrides:
             None,
         )
 
-    def observation_window_for(
-        self, window_id: str
-    ) -> ObservationWindowOverride | None:
+    def observation_window_for(self, window_id: str) -> ObservationWindowOverride | None:
         """按观察窗编号查找拖动覆盖值。"""
         return next(
             (item for item in self.observation_windows if item.window_id == window_id),
@@ -339,9 +366,7 @@ class GuideAnchorMode(StrEnum):
 
     NEAREST = "nearest"
     TOOTH_SECTION_TRAJECTORY = "tooth_section_trajectory"
-    ADJACENT_TWO_IMPLANT_CONTINUOUS_PATHS = (
-        "adjacent_two_implant_continuous_paths"
-    )
+    ADJACENT_TWO_IMPLANT_CONTINUOUS_PATHS = "adjacent_two_implant_continuous_paths"
     TERMINAL_DISTAL_COMMON_NODE = "terminal_distal_common_node"
     ADJACENT_TWO_IMPLANT_TERMINAL_DISTAL_NODE_PATHS = (
         "adjacent_two_implant_terminal_distal_node_paths"
@@ -395,12 +420,8 @@ class GuideAnchorParameters:
     anchors: tuple[GuideAnchorLocation, ...] = ()
     # 旧版站位字段仅用于兼容解析；几何阶段统一消费 anchors。
     stations: tuple[ToothAnchorStation, ...] = ()
-    u_side_ray_angle_degrees: float = (
-        DEFAULT_GUIDE_ANCHOR_U_SIDE_RAY_ANGLE_DEGREES
-    )
-    back_u_side_ray_angle_degrees: float = (
-        DEFAULT_GUIDE_ANCHOR_BACK_U_SIDE_RAY_ANGLE_DEGREES
-    )
+    u_side_ray_angle_degrees: float = DEFAULT_GUIDE_ANCHOR_U_SIDE_RAY_ANGLE_DEGREES
+    back_u_side_ray_angle_degrees: float = DEFAULT_GUIDE_ANCHOR_BACK_U_SIDE_RAY_ANGLE_DEGREES
     terminal_distal_common_node: TerminalDistalCommonNodeParameters | None = None
 
 
@@ -468,12 +489,8 @@ class GuideTerminalUExtensionParameters:
 
     mode: GuideTerminalUExtensionMode = GuideTerminalUExtensionMode.DISABLED
     anchor_station: ToothAnchorStation | None = None
-    u_side_ray_angle_degrees: float = (
-        DEFAULT_GUIDE_ANCHOR_U_SIDE_RAY_ANGLE_DEGREES
-    )
-    back_u_side_ray_angle_degrees: float = (
-        DEFAULT_GUIDE_ANCHOR_BACK_U_SIDE_RAY_ANGLE_DEGREES
-    )
+    u_side_ray_angle_degrees: float = DEFAULT_GUIDE_ANCHOR_U_SIDE_RAY_ANGLE_DEGREES
+    back_u_side_ray_angle_degrees: float = DEFAULT_GUIDE_ANCHOR_BACK_U_SIDE_RAY_ANGLE_DEGREES
     terminal_fdi: int | None = None
     reference_neighbor_fdi: int | None = None
     diameter_mm: float = DEFAULT_CONNECTOR_DIAMETER_MM
@@ -528,9 +545,7 @@ class PressBeamParameters:
     junction_axial_lift_mm: float = 2.0
     minimum_junction_angle_degrees: float = 25.0
     sleeve_anchor_selection: PressBeamSleeveAnchorSelectionParameters | None = None
-    guide_endpoint: PressBeamGuideEndpointParameters = (
-        PressBeamGuideEndpointParameters()
-    )
+    guide_endpoint: PressBeamGuideEndpointParameters = PressBeamGuideEndpointParameters()
 
     @property
     def radius_mm(self) -> float:
@@ -565,6 +580,7 @@ __all__ = [
     "GuideComponentBridgeMode",
     "GuideComponentBridgeParameters",
     "GuideComponentBridgeStation",
+    "GuidePostParameters",
     "GuideTerminalUExtensionMode",
     "GuideTerminalUExtensionParameters",
     "HandpieceAvoidanceParameters",

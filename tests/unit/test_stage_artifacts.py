@@ -44,7 +44,6 @@ class ExampleSleeveParameters:
 @dataclass(frozen=True)
 class ExampleInputs:
     template: Path
-    guide_sleeve_assemblies: tuple[Path, ...]
     patient_dentition: Path
 
 
@@ -65,7 +64,6 @@ class StageArtifactTests(unittest.TestCase):
                 jaw=Jaw.UPPER,
                 inputs=ExampleInputs(
                     output_directory / "template.stl",
-                    (output_directory / "sleeves.stl",),
                     output_directory / "dentition.stl",
                 ),
                 sleeve=ExampleSleeveParameters(20.0),

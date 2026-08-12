@@ -215,7 +215,9 @@ def run_generation_process(
         case.guide_sleeves,
         case.template_frame,
     )
-    results.append(StageResult(STAGES[0], StageRunStatus.COMPLETED, context.sleeve_generation))
+    results.append(
+        StageResult(STAGES[0], StageRunStatus.COMPLETED, context.sleeve_generation)
+    )
     timings[STAGES[0].key] = perf_counter() - started
     started = perf_counter()
     if config.tooth_identification is None:

@@ -20,7 +20,6 @@ class CaseConfigTests(unittest.TestCase):
         self.case_directory = Path(self.temporary_directory.name)
         for filename in (
             "template.stl",
-            "guide_sleeve_assembly.stl",
             "patient_dentition.stl",
             "handpiece.stl",
         ):
@@ -36,7 +35,6 @@ class CaseConfigTests(unittest.TestCase):
             "jaw": "upper",
             "inputs": {
                 "template": "template.stl",
-                "guide_sleeve_assembly": "guide_sleeve_assembly.stl",
                 "patient_dentition": "patient_dentition.stl",
             },
             "sleeve": {
@@ -50,6 +48,7 @@ class CaseConfigTests(unittest.TestCase):
                 "closed_bore_height_mm": 4.777,
                 "inner_arc_angle_degrees": 264.934,
                 "outer_arc_angle_degrees": 211.684,
+                "guide_spacing_mm": 11.5,
             },
             "geometry": {
                 "channel_axial_margin_mm": 5.0,
@@ -73,10 +72,6 @@ class CaseConfigTests(unittest.TestCase):
                 existing = loaded
         inputs = config_data["inputs"]
         assert isinstance(inputs, dict)
-        sleeve_paths = inputs.get("guide_sleeve_assemblies")
-        if sleeve_paths is None:
-            sleeve_paths = [inputs["guide_sleeve_assembly"]]
-        assert isinstance(sleeve_paths, list)
         runtime = {
             key: config_data[key]
             for key in (
@@ -110,27 +105,29 @@ class CaseConfigTests(unittest.TestCase):
         }
         if anatomy_jaw is not None:
             anatomy["jaw"] = anatomy_jaw
+        planning = dict(existing.get("planning", {}))
+        planning.setdefault(
+            "guide_posts",
+            [
+                {
+                    "ring_index": 1,
+                    "drill_length_mm": 33.0,
+                    "implant_length_mm": 12.0,
+                    "sleeve_template_extension_mm": 9.0,
+                }
+            ],
+        )
         content = {
             "schema_version": "1.0",
             "case": {"id": config_data.get("case_id", "case_01")},
             "objects": {
                 "dental": {"path": inputs["patient_dentition"]},
                 "guide": {"path": inputs["template"]},
-                "sleeve": {
-                    "files": [
-                        {"id": f"sleeve_{index:02d}", "path": value}
-                        for index, value in enumerate(sleeve_paths, start=1)
-                    ],
-                    "active_ids": [
-                        f"sleeve_{index:02d}"
-                        for index in range(1, len(sleeve_paths) + 1)
-                    ],
-                },
             },
             "runtime": runtime,
             "anatomy": anatomy,
             "design": design,
-            "planning": existing.get("planning", {}),
+            "planning": planning,
             "review": existing.get("review", {}),
         }
         config_path.write_text(
@@ -159,6 +156,18 @@ class CaseConfigTests(unittest.TestCase):
         self.assertEqual(config.sleeve.closed_bore_height_mm, 4.777)
         self.assertEqual(config.sleeve.inner_arc_angle_degrees, 264.934)
         self.assertEqual(config.sleeve.outer_arc_angle_degrees, 211.684)
+        self.assertEqual(config.sleeve.guide_spacing_mm, 11.5)
+        expected_d_face_offset = config.sleeve.outer_radius_mm * math.cos(
+            math.radians(0.5 * (360.0 - config.sleeve.outer_arc_angle_degrees))
+        )
+        self.assertAlmostEqual(
+            config.sleeve.outer_d_face_offset_mm,
+            expected_d_face_offset,
+        )
+        self.assertAlmostEqual(
+            config.sleeve.guide_axis_spacing_mm,
+            11.5 + 2.0 * expected_d_face_offset,
+        )
         self.assertEqual(config.geometry.connector_diameter_mm, 2.3)
         self.assertEqual(config.geometry.connector_radius_mm, 1.15)
         self.assertEqual(config.geometry.connector_dental_clearance_mm, 0.20)
@@ -267,6 +276,67 @@ class CaseConfigTests(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(ConfigurationError, "延长量数值和定义"):
+            CaseConfig.from_yaml(config_path)
+
+    def test_loads_per_ring_lengths_and_calculates_extension(self):
+        config_path = self._write_config(self._valid_config_data())
+        raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        raw["planning"]["guide_posts"] = [
+            {
+                "ring_index": 1,
+                "drill_length_mm": 33.0,
+                "implant_length_mm": 12.0,
+                "sleeve_template_extension_mm": 9.0,
+            }
+        ]
+        config_path.write_text(
+            yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+
+        config = CaseConfig.from_yaml(config_path)
+
+        self.assertEqual(len(config.guide_posts), 1)
+        self.assertEqual(config.guide_posts[0].ring_index, 1)
+        self.assertEqual(config.guide_posts[0].twin_guide_extension_mm, 9.0)
+        self.assertEqual(config.guide_posts[0].sleeve_template_extension_mm, 9.0)
+        self.assertEqual(config.sleeve.guide_spacing_mm, 11.5)
+
+    def test_requires_both_guide_post_lengths(self):
+        config_path = self._write_config(self._valid_config_data())
+        raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        raw["planning"]["guide_posts"] = [
+            {
+                "ring_index": 1,
+                "drill_length_mm": 35.0,
+                "sleeve_template_extension_mm": 13.0,
+            }
+        ]
+        config_path.write_text(
+            yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(ConfigurationError, "implant_length_mm"):
+            CaseConfig.from_yaml(config_path)
+
+    def test_rejects_nonpositive_extension_in_guide_post(self):
+        config_path = self._write_config(self._valid_config_data())
+        raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        raw["planning"]["guide_posts"] = [
+            {
+                "ring_index": 1,
+                "drill_length_mm": 22.0,
+                "implant_length_mm": 10.0,
+                "sleeve_template_extension_mm": 13.0,
+            }
+        ]
+        config_path.write_text(
+            yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(ConfigurationError, "延长量必须大于 0"):
             CaseConfig.from_yaml(config_path)
 
     def test_rejects_input_path_outside_case_directory(self):
@@ -513,9 +583,7 @@ review:
     def test_loads_tooth_section_trajectory_anchor_stations(self):
         """解析单牙中心与相邻双牙中点的导板锚点站位。"""
 
-        (self.case_directory / "case.yaml").write_text(
-            "case: {}\n", encoding="utf-8"
-        )
+        (self.case_directory / "case.yaml").write_text("case: {}\n", encoding="utf-8")
         config_data = self._valid_config_data()
         config_data["tooth_identification"] = {"case_yaml": "case.yaml"}
         config_data["guide_anchors"] = {
@@ -792,10 +860,7 @@ design:
         self.assertEqual(config.press_beam.junction_axial_lift_mm, 2.5)
         self.assertIsNone(config.press_beam.sleeve_anchor_selection)
         self.assertEqual(
-            tuple(
-                station.ray_angle_degrees
-                for station in config.press_beam.stations
-            ),
+            tuple(station.ray_angle_degrees for station in config.press_beam.stations),
             (75.0, 45.0, 120.0),
         )
 
@@ -880,8 +945,7 @@ anatomy:
             17,
         )
         self.assertEqual(
-            config.guide_anchors.terminal_distal_common_node.
-            distal_offset_sleeve_diameters,
+            config.guide_anchors.terminal_distal_common_node.distal_offset_sleeve_diameters,
             2.0,
         )
 
@@ -1121,9 +1185,7 @@ design:
 
         config = CaseConfig.from_yaml(self._write_config(config_data))
 
-        self.assertEqual(
-            config.press_beam.mode.value, "terminal_u_extension_anchor_y"
-        )
+        self.assertEqual(config.press_beam.mode.value, "terminal_u_extension_anchor_y")
         self.assertEqual(len(config.press_beam.stations), 2)
         self.assertIsNotNone(config.press_beam.extension_anchor)
         assert config.press_beam.extension_anchor is not None

@@ -8,10 +8,6 @@ case:
 objects:
   dental: {path: input/patient-dentition.stl}
   guide: {path: input/dental-guide.stl}
-  sleeve:
-    files:
-      - {id: sleeve_01, path: input/sleeve-assembly.stl}
-    active_ids: [sleeve_01]
 
 runtime:
   sleeve:
@@ -25,6 +21,7 @@ runtime:
     closed_bore_height_mm: 5.00
     inner_arc_angle_degrees: 252.90
     outer_arc_angle_degrees: 246.59
+    guide_spacing_mm: 11.5  # 左右两根导柱相向内侧 D 面之间的净距
   geometry:
     channel_axial_margin_mm: 5.0
     connector_diameter_mm: 4.6
@@ -75,6 +72,12 @@ design:
   press_beam: {mode: disabled}
 
 planning:
+  # 每个已识别圆环分别输入钻针长度和植体长度；12 mm 手机插入长度为程序常量。
+  guide_posts:
+    - ring_index: 1
+      drill_length_mm: 33.0
+      implant_length_mm: 12.0
+      sleeve_template_extension_mm: 9.0
   # 坐标格式、延长量定义和高度公式由医生确认后再启用。
   # clinical_parameters:
   #   implant_coordinates_path: input/implant-coordinates.dat

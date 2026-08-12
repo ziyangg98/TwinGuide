@@ -45,9 +45,22 @@ EPS = 1e-9
 MAX_MISSING_TO_SURGICAL_REFERENCE_MM = 15.0
 MIN_ORIENTATION_DISTANCE_MARGIN_MM = 3.0
 PALETTE = (
-    "#dc2626", "#ea580c", "#d97706", "#65a30d", "#059669", "#0891b2",
-    "#2563eb", "#4f46e5", "#7c3aed", "#c026d3", "#db2777", "#475569",
-    "#0f766e", "#9333ea", "#b45309", "#0369a1",
+    "#dc2626",
+    "#ea580c",
+    "#d97706",
+    "#65a30d",
+    "#059669",
+    "#0891b2",
+    "#2563eb",
+    "#4f46e5",
+    "#7c3aed",
+    "#c026d3",
+    "#db2777",
+    "#475569",
+    "#0f766e",
+    "#9333ea",
+    "#b45309",
+    "#0369a1",
 )
 
 
@@ -137,35 +150,15 @@ def resolve_active_object_paths(
     return selected
 
 
-def resolve_surgical_reference_paths(
-    case_dir: Path,
-    objects: dict[str, object],
-) -> list[Path]:
-    """解析当前病例启用的手术参考文件。"""
-
-    sleeve_node = objects.get("sleeve")
-    if not isinstance(sleeve_node, dict):
-        return []
-    return resolve_active_object_paths(case_dir, sleeve_node, "sleeve")
-
-
-def surgical_reference_centroid(paths: list[Path]) -> np.ndarray | None:
-    """仅在自动左右判向需要时计算手术参考的面积加权中心。"""
-
-    if not paths:
-        return None
-    meshes = [load_mesh(path) for path in paths]
-    areas = np.asarray([max(float(mesh.area), EPS) for mesh in meshes], dtype=float)
-    centroids = np.asarray([np.asarray(mesh.centroid, dtype=float) for mesh in meshes])
-    return np.average(centroids, axis=0, weights=areas)
-
-
 def parse_axis(value: object) -> np.ndarray:
     """内部算法说明。"""
     mapping = {
-        "+X": np.array([1.0, 0.0, 0.0]), "-X": np.array([-1.0, 0.0, 0.0]),
-        "+Y": np.array([0.0, 1.0, 0.0]), "-Y": np.array([0.0, -1.0, 0.0]),
-        "+Z": np.array([0.0, 0.0, 1.0]), "-Z": np.array([0.0, 0.0, -1.0]),
+        "+X": np.array([1.0, 0.0, 0.0]),
+        "-X": np.array([-1.0, 0.0, 0.0]),
+        "+Y": np.array([0.0, 1.0, 0.0]),
+        "-Y": np.array([0.0, -1.0, 0.0]),
+        "+Z": np.array([0.0, 0.0, 1.0]),
+        "-Z": np.array([0.0, 0.0, -1.0]),
     }
     if isinstance(value, str) and value.upper() in mapping:
         return mapping[value.upper()].copy()
@@ -192,6 +185,7 @@ def has_confirmed_axes(anatomy_node: dict[str, object]) -> bool:
 @dataclass
 class CurveModel:
     """内部算法说明。"""
+
     lr: np.ndarray
     ap: np.ndarray
     s: np.ndarray
@@ -308,9 +302,16 @@ def _semantic_fit(
                 label: scale * signed_midline_distance_prior_mm(label, semantics.jaw) + offset
                 for label in semantics.fdi_order
             }
-            values = {label: float(np.nan_to_num(support(value), nan=0.0)) for label, value in locations.items()}
+            values = {
+                label: float(np.nan_to_num(support(value), nan=0.0))
+                for label, value in locations.items()
+            }
             present_score = float(np.mean([values[label] for label in semantics.present_teeth]))
-            missing_score = float(np.mean([values[label] for label in semantics.missing_teeth])) if semantics.missing_teeth else 0.0
+            missing_score = (
+                float(np.mean([values[label] for label in semantics.missing_teeth]))
+                if semantics.missing_teeth
+                else 0.0
+            )
             outside = sum(
                 max(curve.s[0] - value, 0.0) + max(value - curve.s[-1], 0.0)
                 for value in locations.values()
@@ -358,11 +359,13 @@ def _annotate_missing_surgical_consistency(
         )
         delta = np.asarray(surgical_reference_point, dtype=float) - predicted
         planar_delta = delta - float(np.dot(delta, e_occ)) * np.asarray(e_occ, dtype=float)
-        records.append({
-            "FDI": int(fdi),
-            "predicted_global_mm": predicted,
-            "planar_distance_mm": float(np.linalg.norm(planar_delta)),
-        })
+        records.append(
+            {
+                "FDI": int(fdi),
+                "predicted_global_mm": predicted,
+                "planar_distance_mm": float(np.linalg.norm(planar_delta)),
+            }
+        )
     closest = min(records, key=lambda item: float(item["planar_distance_mm"]))
     candidate["missing_surgical_consistency"] = {
         "closest_missing_FDI": int(closest["FDI"]),
@@ -386,16 +389,12 @@ def _select_orientation_candidate(
 
     distance_ranked = sorted(
         candidates,
-        key=lambda item: float(
-            item["missing_surgical_consistency"]["planar_distance_mm"]
-        ),
+        key=lambda item: float(item["missing_surgical_consistency"]["planar_distance_mm"]),
     )
     selected_distance = float(
         distance_ranked[0]["missing_surgical_consistency"]["planar_distance_mm"]
     )
-    next_distance = float(
-        distance_ranked[1]["missing_surgical_consistency"]["planar_distance_mm"]
-    )
+    next_distance = float(distance_ranked[1]["missing_surgical_consistency"]["planar_distance_mm"])
     distance_margin = next_distance - selected_distance
     if selected_distance > MAX_MISSING_TO_SURGICAL_REFERENCE_MM:
         raise RuntimeError(
@@ -464,17 +463,19 @@ def estimate_frame_and_arch(
         point_s = curve.lr_to_s(np.clip(lr, curve.lr[0], curve.lr[-1]))
         support_s, support_values, support = _support_signal(point_s, crown_weights, curve)
         semantic = _semantic_fit(semantics, curve, support)
-        candidates.append({
-            "sign": sign,
-            "e_lr": e_lr,
-            "curve": curve,
-            "point_lr": lr,
-            "point_ap": ap,
-            "point_s": np.asarray(point_s),
-            "support_s": support_s,
-            "support_values": support_values,
-            "semantic": semantic,
-        })
+        candidates.append(
+            {
+                "sign": sign,
+                "e_lr": e_lr,
+                "curve": curve,
+                "point_lr": lr,
+                "point_ap": ap,
+                "point_s": np.asarray(point_s),
+                "support_s": support_s,
+                "support_values": support_values,
+                "semantic": semantic,
+            }
+        )
     consistency_applied = bool(
         not explicit
         and semantics.missing_teeth
@@ -501,15 +502,18 @@ def estimate_frame_and_arch(
         )
     # Explicit axes are already confirmed; use a finite sentinel so the JSON
     # remains standards-compliant (no non-standard Infinity literal).
-    margin = 1.0 if len(candidates) == 1 else float(
-        candidates[0]["semantic"]["score"] - candidates[1]["semantic"]["score"]
+    margin = (
+        1.0
+        if len(candidates) == 1
+        else float(candidates[0]["semantic"]["score"] - candidates[1]["semantic"]["score"])
     )
     selected_consistency = selected.get("missing_surgical_consistency", {})
     consistency_report = {
         "applied": consistency_applied,
         "confirmed": consistency_confirmed,
         "surgical_reference_global_mm": (
-            None if surgical_reference_point is None
+            None
+            if surgical_reference_point is None
             else rounded(np.asarray(surgical_reference_point, dtype=float))
         ),
         "maximum_distance_mm": MAX_MISSING_TO_SURGICAL_REFERENCE_MM,
@@ -621,20 +625,28 @@ def local_crown_height(frame: dict[str, object], s_mm: float, radius_mm: float) 
     return float(np.quantile(values, 0.72))
 
 
-def local_arch_frame(frame: dict[str, object], s_mm: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def local_arch_frame(
+    frame: dict[str, object], s_mm: float
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """内部算法说明。"""
     curve: CurveModel = frame["curve"]
     tangent_2d = curve.tangent_at_s(s_mm)
-    tangent = unit(tangent_2d[0] * np.asarray(frame["e_lr"]) + tangent_2d[1] * np.asarray(frame["e_ap"]))
+    tangent = unit(
+        tangent_2d[0] * np.asarray(frame["e_lr"]) + tangent_2d[1] * np.asarray(frame["e_ap"])
+    )
     point_2d = curve.at_s(np.asarray([s_mm]))[0]
-    interior = np.array([
-        curve.lr[curve.apex_index],
-        float(np.quantile(curve.ap, 0.92)) + 5.0,
-    ])
+    interior = np.array(
+        [
+            curve.lr[curve.apex_index],
+            float(np.quantile(curve.ap, 0.92)) + 5.0,
+        ]
+    )
     normal_2d = unit(np.array([-tangent_2d[1], tangent_2d[0]]))
     if float(np.dot(normal_2d, point_2d - interior)) < 0.0:
         normal_2d = -normal_2d
-    outward = unit(normal_2d[0] * np.asarray(frame["e_lr"]) + normal_2d[1] * np.asarray(frame["e_ap"]))
+    outward = unit(
+        normal_2d[0] * np.asarray(frame["e_lr"]) + normal_2d[1] * np.asarray(frame["e_ap"])
+    )
     return tangent, outward, point_2d
 
 
@@ -648,8 +660,12 @@ def interpolate_polyline(points: np.ndarray, distance: float) -> np.ndarray:
     segment = np.linalg.norm(np.diff(points, axis=0), axis=1)
     cumulative = np.r_[0.0, np.cumsum(segment)]
     if distance > cumulative[-1] + 1e-6:
-        raise RuntimeError(f"section contour length {cumulative[-1]:.3f} mm is below requested {distance:.3f} mm")
-    index = int(np.clip(np.searchsorted(cumulative, distance, side="right") - 1, 0, len(segment) - 1))
+        raise RuntimeError(
+            f"section contour length {cumulative[-1]:.3f} mm is below requested {distance:.3f} mm"
+        )
+    index = int(
+        np.clip(np.searchsorted(cumulative, distance, side="right") - 1, 0, len(segment) - 1)
+    )
     fraction = (distance - cumulative[index]) / max(segment[index], EPS)
     return points[index] + fraction * (points[index + 1] - points[index])
 
@@ -682,10 +698,12 @@ def resample_polyline(points: np.ndarray, count: int) -> np.ndarray:
     length = polyline_length(points)
     if length <= EPS:
         return np.repeat(points[:1], count, axis=0)
-    return np.asarray([
-        interpolate_polyline(points, float(distance))
-        for distance in np.linspace(0.0, length, count)
-    ])
+    return np.asarray(
+        [
+            interpolate_polyline(points, float(distance))
+            for distance in np.linspace(0.0, length, count)
+        ]
+    )
 
 
 def polyline_prefix(points: np.ndarray, maximum_length_mm: float) -> np.ndarray:
@@ -725,10 +743,9 @@ def exterior_facing_component(
     """
 
     uv = np.column_stack(((points - base) @ outward, (points - base) @ e_occ))
-    signed_area = 0.5 * float(np.sum(
-        uv[:, 0] * np.roll(uv[:, 1], -1)
-        - np.roll(uv[:, 0], -1) * uv[:, 1]
-    ))
+    signed_area = 0.5 * float(
+        np.sum(uv[:, 0] * np.roll(uv[:, 1], -1) - np.roll(uv[:, 0], -1) * uv[:, 1])
+    )
     tangent = np.roll(uv, -1, axis=0) - np.roll(uv, 1, axis=0)
     if signed_area >= 0.0:
         normals = np.column_stack((tangent[:, 1], -tangent[:, 0]))
@@ -741,10 +758,7 @@ def exterior_facing_component(
     # outward point must face +outward; flip the complete field when necessary.
     if float(normals[exterior_index, 0]) < 0.0:
         normals = -normals
-    mask = (
-        (normals[:, 0] >= minimum_normal_dot)
-        & (uv[:, 0] >= minimum_outward_offset_mm)
-    )
+    mask = (normals[:, 0] >= minimum_normal_dot) & (uv[:, 0] >= minimum_outward_offset_mm)
     if not bool(mask[exterior_index]):
         raise RuntimeError("section loop has no verified labial/buccal-facing exterior arc")
 
@@ -797,10 +811,9 @@ def guide_physical_coverage_top(
         if len(points) < 8:
             continue
         uv = np.column_stack(((points - base) @ outward, (points - base) @ e_occ))
-        signed_area = 0.5 * float(np.sum(
-            uv[:, 0] * np.roll(uv[:, 1], -1)
-            - np.roll(uv[:, 0], -1) * uv[:, 1]
-        ))
+        signed_area = 0.5 * float(
+            np.sum(uv[:, 0] * np.roll(uv[:, 1], -1) - np.roll(uv[:, 0], -1) * uv[:, 1])
+        )
         boundary_tangent = np.roll(uv, -1, axis=0) - np.roll(uv, 1, axis=0)
         if signed_area >= 0.0:
             normals = np.column_stack((boundary_tangent[:, 1], -boundary_tangent[:, 0]))
@@ -810,10 +823,7 @@ def guide_physical_coverage_top(
         absolute_exterior_index = int(np.argmax(uv[:, 0]))
         if float(normals[absolute_exterior_index, 0]) < 0.0:
             normals = -normals
-        mask = (
-            (normals[:, 0] >= minimum_normal_dot)
-            & (uv[:, 0] >= minimum_outward_offset_mm)
-        )
+        mask = (normals[:, 0] >= minimum_normal_dot) & (uv[:, 0] >= minimum_outward_offset_mm)
         valid_indices = np.flatnonzero(mask)
         if len(valid_indices) == 0:
             rejected_non_exterior_contours += 1
@@ -835,15 +845,17 @@ def guide_physical_coverage_top(
             rejected_non_exterior_contours += 1
             continue
         component_indices = np.asarray(component, dtype=int)
-        candidates.append((
-            float(np.max(uv[component_indices, 0])),
-            points,
-            component_indices,
-            uv,
-            normals,
-            seed,
-            closure_error,
-        ))
+        candidates.append(
+            (
+                float(np.max(uv[component_indices, 0])),
+                points,
+                component_indices,
+                uv,
+                normals,
+                seed,
+                closure_error,
+            )
+        )
     if not candidates:
         raise RuntimeError(
             "guide section has no verified closed exterior surface for physical coverage"
@@ -859,9 +871,11 @@ def guide_physical_coverage_top(
         closure_error,
     ) = max(candidates, key=lambda item: item[0])
     heights = points @ e_occ
-    exterior_top_index = int(exterior_component[np.argmax(
-        heights[exterior_component] + 1e-5 * uv[exterior_component, 0]
-    )])
+    exterior_top_index = int(
+        exterior_component[
+            np.argmax(heights[exterior_component] + 1e-5 * uv[exterior_component, 0])
+        ]
+    )
     global_crest_index = int(np.argmax(heights + 1e-5 * uv[:, 0]))
     route_forward = contour_arc(points, exterior_top_index, global_crest_index, +1)
     route_reverse = contour_arc(points, exterior_top_index, global_crest_index, -1)
@@ -882,9 +896,7 @@ def guide_physical_coverage_top(
         "maximum_outward_offset_mm": maximum_outward_offset,
         "selected_seed_outward_offset_mm": float(uv[seed, 0]),
         "selected_seed_normal_dot": float(normals[seed, 0]),
-        "absolute_outermost_normal_dot": float(
-            normals[int(np.argmax(uv[:, 0])), 0]
-        ),
+        "absolute_outermost_normal_dot": float(normals[int(np.argmax(uv[:, 0])), 0]),
         "closure_error_mm": closure_error,
         "top_route_was_truncated": route_was_truncated,
     }
@@ -923,32 +935,28 @@ def map_axis_sweep(
     if drop_mm <= 0.0:
         raise RuntimeError("axis_drop_mm must be positive")
     sweep_angle_deg = float(node.get("sweep_angle_deg", 90.0))
-    minimum_angle_deg, maximum_angle_deg = axis_sweep_angle_bounds(
-        sweep_angle_deg
-    )
+    minimum_angle_deg, maximum_angle_deg = axis_sweep_angle_bounds(sweep_angle_deg)
     e_occ = unit(np.asarray(frame["e_occ"], dtype=float))
     endpoint_records = []
     for fdi in (start_fdi, end_fdi):
         s_mm = float(centres[fdi])
         crown_height = local_crown_height(frame, s_mm, 3.5)
         fallback = curve_global_point(frame, s_mm, crown_height)
-        base = np.asarray(
-            (tooth_top_points or {}).get(fdi, fallback), dtype=float
-        )
+        base = np.asarray((tooth_top_points or {}).get(fdi, fallback), dtype=float)
         tangent, outward, _ = local_arch_frame(frame, s_mm)
-        endpoint_records.append({
-            "FDI": fdi,
-            "arch_s_mm": s_mm,
-            "base": base,
-            "tangent": tangent,
-            "outward": outward,
-            "tooth_top": base,
-            "tooth_top_height_mm": float(base @ e_occ),
-        })
+        endpoint_records.append(
+            {
+                "FDI": fdi,
+                "arch_s_mm": s_mm,
+                "base": base,
+                "tangent": tangent,
+                "outward": outward,
+                "tooth_top": base,
+                "tooth_top_height_mm": float(base @ e_occ),
+            }
+        )
 
-    top_heights = [
-        float(item["tooth_top_height_mm"]) for item in endpoint_records
-    ]
+    top_heights = [float(item["tooth_top_height_mm"]) for item in endpoint_records]
     reference_index = int(np.argmax(top_heights))
     common_height_mm = top_heights[reference_index] - drop_mm
     anchors = [
@@ -972,16 +980,16 @@ def map_axis_sweep(
     exterior_direction = unit(exterior_direction)
     if float(np.dot(exterior_direction, mean_outward)) < 0.0:
         exterior_direction = -exterior_direction
-    axis_sections = int(node.get(
-        "axis_sections", max(3, math.ceil(axis_length_mm / 0.6) + 1)
-    ))
+    axis_sections = int(node.get("axis_sections", max(3, math.ceil(axis_length_mm / 0.6) + 1)))
     angular_spacing_deg = float(node.get("angular_spacing_deg", 3.0))
     if angular_spacing_deg <= 0.0:
         raise RuntimeError("angular_spacing_deg must be positive")
-    angle_sections = int(node.get(
-        "angle_sections",
-        max(3, math.ceil(sweep_angle_deg / angular_spacing_deg) + 1),
-    ))
+    angle_sections = int(
+        node.get(
+            "angle_sections",
+            max(3, math.ceil(sweep_angle_deg / angular_spacing_deg) + 1),
+        )
+    )
     if axis_sections < 2 or angle_sections < 2:
         raise RuntimeError("axis-sweep sampling requires at least two sections per axis")
     return {
@@ -994,10 +1002,7 @@ def map_axis_sweep(
         "reference_top_height_mm": top_heights[reference_index],
         "common_axis_height_mm": common_height_mm,
         "top_height_difference_mm": abs(top_heights[1] - top_heights[0]),
-        "endpoint_tooth_top_global_mm": [
-            rounded(item["tooth_top"])
-            for item in endpoint_records
-        ],
+        "endpoint_tooth_top_global_mm": [rounded(item["tooth_top"]) for item in endpoint_records],
         "axis_start_global_mm": rounded(anchors[0]),
         "axis_end_global_mm": rounded(anchors[1]),
         "axis_direction_global": rounded(axis_direction),
@@ -1034,32 +1039,38 @@ def guide_section_profile(
         if len(points) < 8:
             continue
         try:
-            exterior_component, uv, _ = exterior_facing_component(
-                points, base, outward, e_occ
-            )
+            exterior_component, uv, _ = exterior_facing_component(points, base, outward, e_occ)
         except RuntimeError:
             rejected_loops += 1
             continue
-        loops.append((
-            float(np.max(uv[:, 0])),
-            polyline_length(np.vstack([points, points[0]])),
-            points,
-            exterior_component,
-            uv,
-        ))
+        loops.append(
+            (
+                float(np.max(uv[:, 0])),
+                polyline_length(np.vstack([points, points[0]])),
+                points,
+                exterior_component,
+                uv,
+            )
+        )
     if not loops:
         raise RuntimeError("guide section has no verified exterior closed contour")
     _, loop_length, points, exterior_component, uv = max(loops, key=lambda item: item[0])
     heights = points @ e_occ
-    exterior_top_index = int(exterior_component[np.argmax(
-        heights[exterior_component] + 1e-5 * uv[exterior_component, 0]
-    )])
+    exterior_top_index = int(
+        exterior_component[
+            np.argmax(heights[exterior_component] + 1e-5 * uv[exterior_component, 0])
+        ]
+    )
     global_crest_index = int(np.argmax(heights + 1e-5 * uv[:, 0]))
     forward = ordered_walk(points, exterior_top_index, +1)
     reverse = ordered_walk(points, exterior_top_index, -1)
     probe = min(1.0, 0.40 * min(polyline_length(forward), polyline_length(reverse)))
-    forward_gain = float(np.dot(interpolate_polyline(forward, probe) - points[exterior_top_index], outward))
-    reverse_gain = float(np.dot(interpolate_polyline(reverse, probe) - points[exterior_top_index], outward))
+    forward_gain = float(
+        np.dot(interpolate_polyline(forward, probe) - points[exterior_top_index], outward)
+    )
+    reverse_gain = float(
+        np.dot(interpolate_polyline(reverse, probe) - points[exterior_top_index], outward)
+    )
     walk = forward if forward_gain >= reverse_gain else reverse
     exterior_top = interpolate_polyline(walk, top_margin_mm)
     bottom = interpolate_polyline(walk, top_margin_mm + height_mm)
@@ -1077,9 +1088,9 @@ def guide_section_profile(
         )
     profile_count = max(2, math.ceil(height_mm / max(profile_spacing_mm, 0.05)) + 1)
     profile_distances = np.linspace(top_margin_mm, top_margin_mm + height_mm, profile_count)
-    exterior_profile = np.asarray([
-        interpolate_polyline(walk, float(distance)) for distance in profile_distances
-    ])
+    exterior_profile = np.asarray(
+        [interpolate_polyline(walk, float(distance)) for distance in profile_distances]
+    )
     top_cap_length = 0.0
     top_cap_was_truncated = False
     crest_point = points[exterior_top_index]
@@ -1094,7 +1105,7 @@ def guide_section_profile(
         local_crest_index = int(np.argmax(route_heights))
         # Reverse the safe exterior-to-crest prefix so the combined cutter
         # starts at the crest, reaches the exterior top, then walks downward.
-        top_cap = top_route[:local_crest_index + 1][::-1]
+        top_cap = top_route[: local_crest_index + 1][::-1]
         top_cap_length = polyline_length(top_cap)
         cap_profile = resample_polyline(top_cap, 7)
         # The cap stops at the crest and joins the exterior 4 mm profile.  It
@@ -1148,32 +1159,34 @@ def map_slots_to_geometry(
             guide_top = coverage["true_top_global_mm"]
         except Exception as error:
             mapping_error = str(error)
-        result.append({
-            "FDI": label,
-            "sequence_index": sequence_index,
-            "status": "missing_slot" if label in semantics.missing_teeth else "present",
-            "guide_coverage_status": "mapped" if guide_top is not None else "outside_guide_coverage",
-            "arch_s_mm": s_mm,
-            "arch_interval_s_mm": rounded(intervals[label]),
-            "arch_LR_AP_mm": rounded(lr_ap),
-            "dental_crown_point_global_mm": rounded(base),
-            "local_tangent_global": rounded(tangent),
-            "local_outward_global": rounded(outward),
-            "guide_top_global_mm": None if guide_top is None else rounded(guide_top),
-            "guide_coverage_method": (
-                None if coverage is None else coverage["coverage_method"]
-            ),
-            "guide_coverage_metrics": (
-                None
-                if coverage is None
-                else {
-                    key: value
-                    for key, value in coverage.items()
-                    if key != "true_top_global_mm"
-                }
-            ),
-            "guide_mapping_error": mapping_error,
-        })
+        result.append(
+            {
+                "FDI": label,
+                "sequence_index": sequence_index,
+                "status": "missing_slot" if label in semantics.missing_teeth else "present",
+                "guide_coverage_status": "mapped"
+                if guide_top is not None
+                else "outside_guide_coverage",
+                "arch_s_mm": s_mm,
+                "arch_interval_s_mm": rounded(intervals[label]),
+                "arch_LR_AP_mm": rounded(lr_ap),
+                "dental_crown_point_global_mm": rounded(base),
+                "local_tangent_global": rounded(tangent),
+                "local_outward_global": rounded(outward),
+                "guide_top_global_mm": None if guide_top is None else rounded(guide_top),
+                "guide_coverage_method": (
+                    None if coverage is None else coverage["coverage_method"]
+                ),
+                "guide_coverage_metrics": (
+                    None
+                    if coverage is None
+                    else {
+                        key: value for key, value in coverage.items() if key != "true_top_global_mm"
+                    }
+                ),
+                "guide_mapping_error": mapping_error,
+            }
+        )
     return result
 
 
@@ -1205,7 +1218,9 @@ def map_windows(
         end = int(node["end_fdi"])
         extent_mode = str(node.get("extent_mode", "center_to_center"))
         s_start, s_end = observation_window_interval(start, end, extent_mode, centres, intervals)
-        requested = int(node.get("requested_sections", max(9, math.ceil(abs(s_end - s_start) / 0.8) + 1)))
+        requested = int(
+            node.get("requested_sections", max(9, math.ceil(abs(s_end - s_start) / 0.8) + 1))
+        )
         samples_s = np.linspace(s_start, s_end, requested)
         height_mm = float(node.get("height_mm", 4.0))
         top_open = bool(node.get("top_open", True))
@@ -1220,59 +1235,71 @@ def map_windows(
                 profile = guide_section_profile(
                     guide, base, tangent, outward, np.asarray(frame["e_occ"]), top_margin, height_mm
                 )
-                samples.append({
-                    "sample_index": index,
-                    "arch_s_mm": float(s_mm),
-                    "true_top_global_mm": rounded(profile["true_top_global_mm"]),
-                    "window_top_global_mm": rounded(profile["window_top_global_mm"]),
-                    "outer_profile_top_global_mm": rounded(profile["outer_profile_top_global_mm"]),
-                    "window_bottom_global_mm": rounded(profile["window_bottom_global_mm"]),
-                    "window_profile_global_mm": rounded(profile["window_profile_global_mm"]),
-                    "top_cap_length_mm": rounded(profile["top_cap_length_mm"]),
-                    "top_cap_was_truncated": bool(profile["top_cap_was_truncated"]),
-                    "window_top_outward_offset_mm": rounded(profile["window_top_outward_offset_mm"]),
-                    "window_bottom_outward_gain_mm": rounded(profile["window_bottom_outward_gain_mm"]),
-                    "local_outward_global": rounded(outward),
-                    "local_tangent_global": rounded(tangent),
-                })
+                samples.append(
+                    {
+                        "sample_index": index,
+                        "arch_s_mm": float(s_mm),
+                        "true_top_global_mm": rounded(profile["true_top_global_mm"]),
+                        "window_top_global_mm": rounded(profile["window_top_global_mm"]),
+                        "outer_profile_top_global_mm": rounded(
+                            profile["outer_profile_top_global_mm"]
+                        ),
+                        "window_bottom_global_mm": rounded(profile["window_bottom_global_mm"]),
+                        "window_profile_global_mm": rounded(profile["window_profile_global_mm"]),
+                        "top_cap_length_mm": rounded(profile["top_cap_length_mm"]),
+                        "top_cap_was_truncated": bool(profile["top_cap_was_truncated"]),
+                        "window_top_outward_offset_mm": rounded(
+                            profile["window_top_outward_offset_mm"]
+                        ),
+                        "window_bottom_outward_gain_mm": rounded(
+                            profile["window_bottom_outward_gain_mm"]
+                        ),
+                        "local_outward_global": rounded(outward),
+                        "local_tangent_global": rounded(tangent),
+                    }
+                )
             except Exception as error:
-                failures.append({"sample_index": index, "arch_s_mm": float(s_mm), "error": str(error)})
+                failures.append(
+                    {"sample_index": index, "arch_s_mm": float(s_mm), "error": str(error)}
+                )
         axis_sweep = None
         if opening_geometry == "axis_sweep":
-            axis_sweep = map_axis_sweep(
-                node, frame, centres, guide, tooth_top_points
-            )
-        reports.append({
-            "id": window_id,
-            "opening_geometry": opening_geometry,
-            "start_fdi": start,
-            "end_fdi": end,
-            "extent_mode": extent_mode,
-            "arch_interval_s_mm": [float(s_start), float(s_end)],
-            "height_mm": height_mm,
-            "top_open": top_open,
-            "opening_side": opening_side,
-            "contour_samples_role": (
-                "cutter_geometry"
-                if opening_geometry == "contour_following"
-                else "diagnostic_only"
-            ),
-            "top_bridge_margin_mm": top_margin,
-            "requested_sample_count": requested,
-            "mapped_sample_count": len(samples),
-            "failed_sample_count": len(failures),
-            "minimum_bottom_outward_gain_mm": (
-                min(item["window_bottom_outward_gain_mm"] for item in samples)
-                if samples else None
-            ),
-            "minimum_top_outward_offset_mm": (
-                min(item["window_top_outward_offset_mm"] for item in samples)
-                if samples else None
-            ),
-            "samples": samples,
-            "failures": failures,
-            "axis_sweep": axis_sweep,
-        })
+            axis_sweep = map_axis_sweep(node, frame, centres, guide, tooth_top_points)
+        reports.append(
+            {
+                "id": window_id,
+                "opening_geometry": opening_geometry,
+                "start_fdi": start,
+                "end_fdi": end,
+                "extent_mode": extent_mode,
+                "arch_interval_s_mm": [float(s_start), float(s_end)],
+                "height_mm": height_mm,
+                "top_open": top_open,
+                "opening_side": opening_side,
+                "contour_samples_role": (
+                    "cutter_geometry"
+                    if opening_geometry == "contour_following"
+                    else "diagnostic_only"
+                ),
+                "top_bridge_margin_mm": top_margin,
+                "requested_sample_count": requested,
+                "mapped_sample_count": len(samples),
+                "failed_sample_count": len(failures),
+                "minimum_bottom_outward_gain_mm": (
+                    min(item["window_bottom_outward_gain_mm"] for item in samples)
+                    if samples
+                    else None
+                ),
+                "minimum_top_outward_offset_mm": (
+                    min(item["window_top_outward_offset_mm"] for item in samples)
+                    if samples
+                    else None
+                ),
+                "samples": samples,
+                "failures": failures,
+                "axis_sweep": axis_sweep,
+            }
+        )
     return reports
 
 
@@ -1287,7 +1314,7 @@ def _sphere(point: np.ndarray, color: str, radius: float) -> trimesh.Trimesh:
     """内部算法说明。"""
     mesh = trimesh.creation.icosphere(subdivisions=2, radius=radius)
     mesh.apply_translation(point)
-    rgb = tuple(int(color[index:index + 2], 16) for index in (1, 3, 5))
+    rgb = tuple(int(color[index : index + 2], 16) for index in (1, 3, 5))
     mesh.visual.face_colors = np.tile(np.asarray((*rgb, 255), dtype=np.uint8), (len(mesh.faces), 1))
     return mesh
 
@@ -1301,18 +1328,32 @@ def export_context(
 ) -> None:
     """内部算法说明。"""
     scene = trimesh.Scene()
-    scene.add_geometry(_colored(dental, (148, 163, 184, 45)), node_name="dental", geom_name="dental")
+    scene.add_geometry(
+        _colored(dental, (148, 163, 184, 45)), node_name="dental", geom_name="dental"
+    )
     scene.add_geometry(_colored(guide, (198, 166, 107, 60)), node_name="guide", geom_name="guide")
     for index, slot in enumerate(slots):
         color = PALETTE[index % len(PALETTE)]
         point = np.asarray(slot["dental_crown_point_global_mm"], dtype=float)
-        scene.add_geometry(_sphere(point, color, 0.52), node_name=f"FDI_{slot['FDI']}_dental", geom_name=f"FDI_{slot['FDI']}_dental")
+        scene.add_geometry(
+            _sphere(point, color, 0.52),
+            node_name=f"FDI_{slot['FDI']}_dental",
+            geom_name=f"FDI_{slot['FDI']}_dental",
+        )
         if slot["guide_top_global_mm"] is not None:
             top = np.asarray(slot["guide_top_global_mm"], dtype=float)
-            scene.add_geometry(_sphere(top, color, 0.38), node_name=f"FDI_{slot['FDI']}_guide", geom_name=f"FDI_{slot['FDI']}_guide")
+            scene.add_geometry(
+                _sphere(top, color, 0.38),
+                node_name=f"FDI_{slot['FDI']}_guide",
+                geom_name=f"FDI_{slot['FDI']}_guide",
+            )
     for window in windows:
-        top_points = [np.asarray(item["window_top_global_mm"], dtype=float) for item in window["samples"]]
-        bottom_points = [np.asarray(item["window_bottom_global_mm"], dtype=float) for item in window["samples"]]
+        top_points = [
+            np.asarray(item["window_top_global_mm"], dtype=float) for item in window["samples"]
+        ]
+        bottom_points = [
+            np.asarray(item["window_bottom_global_mm"], dtype=float) for item in window["samples"]
+        ]
         if len(top_points) >= 2:
             for name, points, rgba in (
                 ("top", top_points, (239, 68, 68, 255)),
@@ -1320,7 +1361,11 @@ def export_context(
             ):
                 path3d = trimesh.load_path(np.asarray(points))
                 path3d.colors = np.tile(np.asarray(rgba, dtype=np.uint8), (len(path3d.entities), 1))
-                scene.add_geometry(path3d, node_name=f"window_{window['id']}_{name}", geom_name=f"window_{window['id']}_{name}")
+                scene.add_geometry(
+                    path3d,
+                    node_name=f"window_{window['id']}_{name}",
+                    geom_name=f"window_{window['id']}_{name}",
+                )
     scene.export(path)
 
 
@@ -1405,8 +1450,7 @@ def render_preview(
     )
 
     centroid_by_fdi = {
-        int(item["FDI"]): item
-        for item in (instance_analysis or {}).get("instances", [])
+        int(item["FDI"]): item for item in (instance_analysis or {}).get("instances", [])
     }
     if instance_analysis is not None:
         for index, instance in enumerate(instance_analysis.get("instances", [])):
@@ -1641,21 +1685,21 @@ def run_case_mapping(
         raise RuntimeError("objects must be a mapping")
     dental_path = resolve_case_path(case_dir, objects.get("dental", {}), "dental")
     guide_path = resolve_case_path(case_dir, objects.get("guide", {}), "guide")
-    surgical_reference_paths = resolve_surgical_reference_paths(case_dir, objects)
-    surgical_reference_point = (
-        None
-        if has_confirmed_axes(anatomy_node)
-        else surgical_reference_centroid(surgical_reference_paths)
+    destination = (
+        Path(output_dir).resolve() if output_dir else case_dir / "输出/tooth_guide_mapping"
     )
-    destination = Path(output_dir).resolve() if output_dir else case_dir / "输出/tooth_guide_mapping"
     destination.mkdir(parents=True, exist_ok=True)
 
     dental = load_mesh(dental_path)
     guide = load_mesh(guide_path)
     frame = estimate_frame_and_arch(
-        dental, guide, anatomy_node, semantics,
-        crown_height_quantile, minimum_normal_dot,
-        surgical_reference_point=surgical_reference_point,
+        dental,
+        guide,
+        anatomy_node,
+        semantics,
+        crown_height_quantile,
+        minimum_normal_dot,
+        surgical_reference_point=None,
     )
     centres, intervals = refine_slot_centres(semantics, frame)
     slots = map_slots_to_geometry(semantics, frame, centres, intervals, guide)
@@ -1663,29 +1707,20 @@ def run_case_mapping(
     windows = map_windows(window_nodes, frame, centres, intervals, guide)
 
     slot_mapping_failures = [item["FDI"] for item in slots if item["guide_mapping_error"]]
-    contour_windows = [
-        item for item in windows if item["opening_geometry"] == "contour_following"
-    ]
-    axis_sweep_windows = [
-        item for item in windows if item["opening_geometry"] == "axis_sweep"
-    ]
+    contour_windows = [item for item in windows if item["opening_geometry"] == "contour_following"]
+    axis_sweep_windows = [item for item in windows if item["opening_geometry"] == "axis_sweep"]
     axis_diagnostic_failed_sections = sum(
         int(item["failed_sample_count"]) for item in axis_sweep_windows
     )
     axis_diagnostic_requested_sections = sum(
         int(item["requested_sample_count"]) for item in axis_sweep_windows
     )
-    failed_window_sections = sum(
-        int(item["failed_sample_count"]) for item in contour_windows
-    )
-    requested_window_sections = sum(
-        int(item["requested_sample_count"]) for item in contour_windows
-    )
+    failed_window_sections = sum(int(item["failed_sample_count"]) for item in contour_windows)
+    requested_window_sections = sum(int(item["requested_sample_count"]) for item in contour_windows)
     window_success_fraction = (
         1.0
         if requested_window_sections == 0
-        else (requested_window_sections - failed_window_sections)
-        / requested_window_sections
+        else (requested_window_sections - failed_window_sections) / requested_window_sections
     )
     explicit_orientation = frame["orientation_method"] == "confirmed_axes_from_case_yaml"
     orientation_consistency = frame["missing_to_surgical_site_consistency"]
@@ -1700,26 +1735,29 @@ def run_case_mapping(
     qa = {
         "FDI_classification_is_complete_exclusive_and_jaw_valid": True,
         "FDI_sets_are_disjoint_and_jaw_valid": True,
-        "FDI_order_is_canonical_and_complete": len(semantics.fdi_order) == len(semantics.present_teeth) + len(semantics.missing_teeth),
-        "one_and_only_one_slot_per_configured_FDI": len(slots) == len(semantics.fdi_order) == len({item["FDI"] for item in slots}),
-        "no_geometry_created_unconfigured_FDI": {item["FDI"] for item in slots} == set(semantics.fdi_order),
-        "directed_arch_centres_are_strictly_monotonic": bool(np.all(np.diff([item["arch_s_mm"] for item in slots]) > 0.25)),
+        "FDI_order_is_canonical_and_complete": len(semantics.fdi_order)
+        == len(semantics.present_teeth) + len(semantics.missing_teeth),
+        "one_and_only_one_slot_per_configured_FDI": len(slots)
+        == len(semantics.fdi_order)
+        == len({item["FDI"] for item in slots}),
+        "no_geometry_created_unconfigured_FDI": {item["FDI"] for item in slots}
+        == set(semantics.fdi_order),
+        "directed_arch_centres_are_strictly_monotonic": bool(
+            np.all(np.diff([item["arch_s_mm"] for item in slots]) > 0.25)
+        ),
         # A declared missing slot must look materially less crown-like than
         # configured present slots.  Without this gate, a mirrored LR axis can
         # place the missing FDI label on a real tooth yet still win the global
         # semantic candidate score, as happened in case #15.
         "automatic_orientation_missing_slot_support_is_distinct": automatic_orientation_missing_slot_support_is_distinct,
         "missing_to_surgical_site_orientation_is_consistent": bool(
-            explicit_orientation
-            or not orientation_consistency["applied"]
-            or consistency_confirmed
+            explicit_orientation or not orientation_consistency["applied"] or consistency_confirmed
         ),
         # A base guide commonly stops before the terminal teeth.  Those teeth
         # remain valid dental slots but are explicitly outside guide coverage.
         # Window mapping, rather than full-arch coverage, is the hard gate.
         "guide_coverage_status_recorded_for_every_slot": all(
-            item["guide_coverage_status"] in {"mapped", "outside_guide_coverage"}
-            for item in slots
+            item["guide_coverage_status"] in {"mapped", "outside_guide_coverage"} for item in slots
         ),
         "contour_following_window_sections_mostly_mapped": window_success_fraction >= 0.80,
         "all_contour_following_profiles_walk_toward_U_exterior": all(
@@ -1740,8 +1778,7 @@ def run_case_mapping(
             or float(frame["orientation_score_margin"]) >= 0.020
             or (
                 float(frame["orientation_score_margin"]) >= 0.005
-                and
-                bool(semantics.missing_teeth)
+                and bool(semantics.missing_teeth)
                 and float(frame["semantic"]["missing_support_mean"]) + 0.15
                 < float(frame["semantic"]["present_support_mean"])
             )
@@ -1755,7 +1792,9 @@ def run_case_mapping(
     report = {
         "schema_version": "1.2-physical-guide-coverage",
         "created_at": datetime.now(UTC).isoformat(),
-        "status": "tooth_guide_mapping_complete" if all(qa.values()) else "tooth_guide_mapping_needs_review",
+        "status": "tooth_guide_mapping_complete"
+        if all(qa.values())
+        else "tooth_guide_mapping_needs_review",
         "case": {
             "id": config.get("case", {}).get("id", case_dir.name),
             "case_yaml": str(case_yaml),
@@ -1763,7 +1802,6 @@ def run_case_mapping(
         "sources": {
             "dental": str(dental_path),
             "guide": str(guide_path),
-            "surgical_reference": [str(path) for path in surgical_reference_paths],
         },
         "semantics": {
             "jaw": semantics.jaw,
@@ -1804,9 +1842,7 @@ def run_case_mapping(
             "failed_contour_following_window_section_count": failed_window_sections,
             "requested_contour_following_window_section_count": requested_window_sections,
             "contour_following_window_mapping_success_fraction": window_success_fraction,
-            "axis_sweep_diagnostic_failed_contour_section_count": (
-                axis_diagnostic_failed_sections
-            ),
+            "axis_sweep_diagnostic_failed_contour_section_count": (axis_diagnostic_failed_sections),
             "axis_sweep_diagnostic_requested_contour_section_count": (
                 axis_diagnostic_requested_sections
             ),
@@ -1817,9 +1853,11 @@ def run_case_mapping(
     if write_diagnostics:
         render_preview(preview_path, frame, slots, windows)
         export_context(context_path, dental, guide, slots, windows)
-        report["outputs"].update({
-            "preview_png": str(preview_path),
-            "context_glb": str(context_path),
-        })
+        report["outputs"].update(
+            {
+                "preview_png": str(preview_path),
+                "context_glb": str(context_path),
+            }
+        )
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     return report
