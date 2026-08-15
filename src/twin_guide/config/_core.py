@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import itertools
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from dataclasses import field as dataclass_field
 from pathlib import Path
 
@@ -28,6 +28,7 @@ from twin_guide.config.types import (
     DEFAULT_CONNECTOR_DIAMETER_MM,
     DEFAULT_GUIDE_ANCHOR_BACK_U_SIDE_RAY_ANGLE_DEGREES,
     DEFAULT_GUIDE_ANCHOR_U_SIDE_RAY_ANGLE_DEGREES,
+    DEFAULT_GUIDE_SPACING_MM,
     DEFAULT_OPERATION_BITANGENT_MARGIN_MM,
     DEFAULT_PRESS_BEAM_DIAMETER_MM,
     ClinicalPlanningParameters,
@@ -56,8 +57,9 @@ from twin_guide.config.types import (
     PressBeamParameters,
     PressBeamSleeveAnchorSelectionParameters,
     RenderParameters,
-    SleeveGuideOverride,
+    SleeveParameterOverrides,
     SleeveParameters,
+    SleeveSiteOverride,
     SurfaceAnchorOverride,
     TerminalDistalCommonNodeParameters,
     ToothAnchorStation,
@@ -176,11 +178,13 @@ class CaseConfig:
             yaml_planning.get("operation_windows"),
         )
         case_id = _case_id(_required(case, "id"))
+        sleeve = _parse_sleeve(_section(runtime, "sleeve"))
+        guide_posts = _parse_guide_posts(yaml_planning.get("guide_posts"), sleeve)
         config = cls(
             case_id=case_id,
             jaw=_case_yaml_jaw(_required(anatomy, "jaw")),
             inputs=_parse_case_objects(_section(root, "objects"), base_directory),
-            sleeve=_parse_sleeve(_section(runtime, "sleeve")),
+            sleeve=sleeve,
             geometry=geometry,
             windows=_parse_windows(
                 window_raw,
@@ -198,8 +202,8 @@ class CaseConfig:
                 yaml_planning.get("clinical_parameters"),
                 base_directory,
             ),
-            guide_posts=_parse_guide_posts(yaml_planning.get("guide_posts")),
-            editor_overrides=_parse_editor_overrides(root.get("editor_overrides")),
+            guide_posts=guide_posts,
+            editor_overrides=_parse_editor_overrides(root.get("editor_overrides"), guide_posts),
             render=_parse_render(_section(runtime, "render")),
             output_directory=Path(__file__).resolve().parents[3] / "output" / case_id,
         )
@@ -237,6 +241,20 @@ class CaseConfig:
             validate_special_case_anatomy(config)
         if not config.guide_posts:
             raise ConfigurationError("正式流程必须配置至少一个 planning.guide_posts")
+        for guide_post in config.guide_posts:
+            effective = guide_post.resolved_sleeve(config.sleeve)
+            height_override = config.editor_overrides.sleeve_for(guide_post.ring_index)
+            if height_override is not None:
+                effective = replace(
+                    effective,
+                    height_mm=height_override.height_mm,
+                    platform_height_mm=height_override.platform_height_mm,
+                    closed_bore_height_mm=height_override.closed_bore_height_mm,
+                )
+            _validate_sleeve(
+                effective,
+                f"planning.guide_posts[ring_index={guide_post.ring_index}].sleeve",
+            )
         return config
 
 
@@ -267,6 +285,7 @@ def _parse_sleeve(raw: dict[str, object]) -> SleeveParameters:
         "inner_arc_angle_degrees",
         "outer_arc_angle_degrees",
         "guide_spacing_mm",
+        "platform_overhang_mm",
         "top_recess_diameter_mm",
         "top_recess_depth_mm",
     }
@@ -319,12 +338,20 @@ def _parse_sleeve(raw: dict[str, object]) -> SleeveParameters:
             positive=True,
         ),
         guide_spacing_mm=(
-            11.5
+            DEFAULT_GUIDE_SPACING_MM
             if "guide_spacing_mm" not in raw
             else _number(
                 raw["guide_spacing_mm"],
                 "sleeve.guide_spacing_mm",
                 positive=True,
+            )
+        ),
+        platform_overhang_mm=(
+            0.20
+            if "platform_overhang_mm" not in raw
+            else _number(
+                raw["platform_overhang_mm"],
+                "sleeve.platform_overhang_mm",
             )
         ),
         top_recess_diameter_mm=(
@@ -346,14 +373,32 @@ def _parse_sleeve(raw: dict[str, object]) -> SleeveParameters:
             )
         ),
     )
+    _validate_sleeve(parameters, "sleeve")
+    return parameters
+
+
+def _validate_sleeve(parameters: SleeveParameters, section: str) -> None:
+    """校验一组已经继承完成的导柱参数。"""
+
     if parameters.outer_diameter_mm <= parameters.inner_diameter_mm:
-        raise ConfigurationError("sleeve.outer_diameter_mm 必须大于 sleeve.inner_diameter_mm")
-    for name, angle in (
+        raise ConfigurationError(
+            f"{section}.outer_diameter_mm 必须大于 {section}.inner_diameter_mm"
+        )
+    if parameters.platform_slot_width_mm >= parameters.outer_diameter_mm:
+        raise ConfigurationError(f"{section}.platform_slot_width_mm 必须小于 outer_diameter_mm")
+    if parameters.platform_overhang_mm < 0.0:
+        raise ConfigurationError(f"{section}.platform_overhang_mm 不得小于 0")
+    for field_name, angle in (
         ("inner_arc_angle_degrees", parameters.inner_arc_angle_degrees),
         ("outer_arc_angle_degrees", parameters.outer_arc_angle_degrees),
     ):
         if angle >= 360.0:
-            raise ConfigurationError(f"sleeve.{name} 必须小于 360")
+            raise ConfigurationError(f"{section}.{field_name} 必须小于 360")
+    if not 180.0 <= parameters.inner_arc_angle_degrees <= 350.0:
+        raise ConfigurationError(
+            f"{section}.inner_arc_angle_degrees 必须在 180 至 350 之间，"
+            "以保证 C 口形态和圆滑过渡可可靠离散"
+        )
     if not (
         0.0
         < parameters.closed_bore_height_mm
@@ -361,7 +406,7 @@ def _parse_sleeve(raw: dict[str, object]) -> SleeveParameters:
         < parameters.height_mm
     ):
         raise ConfigurationError(
-            "sleeve 高度必须满足 0 < closed_bore_height_mm < platform_height_mm < height_mm"
+            f"{section} 高度必须满足 0 < closed_bore_height_mm < platform_height_mm < height_mm"
         )
     if parameters.top_recess_diameter_mm is not None:
         if not (
@@ -370,12 +415,42 @@ def _parse_sleeve(raw: dict[str, object]) -> SleeveParameters:
             < parameters.outer_diameter_mm
         ):
             raise ConfigurationError(
-                "sleeve 顶部凹陷直径必须满足 inner_diameter_mm < "
+                f"{section} 顶部凹陷直径必须满足 inner_diameter_mm < "
                 "top_recess_diameter_mm < outer_diameter_mm"
             )
         if parameters.top_recess_depth_mm >= (parameters.height_mm - parameters.platform_height_mm):
-            raise ConfigurationError("sleeve.top_recess_depth_mm 必须小于顶部 C 口段高度")
-    return parameters
+            raise ConfigurationError(f"{section}.top_recess_depth_mm 必须小于顶部 C 口段高度")
+
+
+def _parse_sleeve_overrides(
+    raw_value: object,
+    name: str,
+    defaults: SleeveParameters,
+) -> SleeveParameterOverrides:
+    """解析一个种植位可省略的三项轴向高度覆盖。"""
+
+    if raw_value is None:
+        return SleeveParameterOverrides()
+    raw = _mapping(raw_value, name)
+    fields = {
+        "height_mm",
+        "platform_height_mm",
+        "closed_bore_height_mm",
+    }
+    _reject_unknown(raw, fields, name)
+    values: dict[str, float | None] = {}
+    for field_name in fields:
+        if field_name not in raw:
+            values[field_name] = None
+            continue
+        values[field_name] = _number(
+            raw[field_name],
+            f"{name}.{field_name}",
+            positive=True,
+        )
+    overrides = SleeveParameterOverrides(**values)
+    _validate_sleeve(overrides.resolve(defaults), name)
+    return overrides
 
 
 def _parse_guide_endpoint(
@@ -799,7 +874,10 @@ def _editor_items(raw: dict[str, object], key: str) -> list[object]:
     return value
 
 
-def _parse_editor_overrides(raw_value: object) -> EditorOverrides:
+def _parse_editor_overrides(
+    raw_value: object,
+    guide_posts: tuple[GuidePostParameters, ...],
+) -> EditorOverrides:
     """解析 Blender 图形化编辑器写回的显式几何覆盖值。"""
 
     if raw_value is None:
@@ -808,6 +886,7 @@ def _parse_editor_overrides(raw_value: object) -> EditorOverrides:
     _reject_unknown(
         raw,
         {
+            "sleeve_sites",
             "sleeve_guides",
             "operation_windows",
             "observation_windows",
@@ -817,7 +896,41 @@ def _parse_editor_overrides(raw_value: object) -> EditorOverrides:
         },
         "editor_overrides",
     )
-    sleeves = []
+    sleeve_sites = []
+    for index, value in enumerate(_editor_items(raw, "sleeve_sites")):
+        item = _mapping(value, f"editor_overrides.sleeve_sites[{index}]")
+        _reject_unknown(
+            item,
+            {"ring_index", "height_mm", "platform_height_mm", "closed_bore_height_mm"},
+            f"editor_overrides.sleeve_sites[{index}]",
+        )
+        try:
+            sleeve_site = SleeveSiteOverride(
+                ring_index=_positive_integer(
+                    _required(item, "ring_index"),
+                    f"editor_overrides.sleeve_sites[{index}].ring_index",
+                ),
+                height_mm=_number(
+                    _required(item, "height_mm"),
+                    f"editor_overrides.sleeve_sites[{index}].height_mm",
+                    positive=True,
+                ),
+                platform_height_mm=_number(
+                    _required(item, "platform_height_mm"),
+                    f"editor_overrides.sleeve_sites[{index}].platform_height_mm",
+                    positive=True,
+                ),
+                closed_bore_height_mm=_number(
+                    _required(item, "closed_bore_height_mm"),
+                    f"editor_overrides.sleeve_sites[{index}].closed_bore_height_mm",
+                    positive=True,
+                ),
+            )
+        except ValueError as error:
+            raise ConfigurationError(f"editor_overrides.sleeve_sites[{index}]: {error}") from error
+        sleeve_sites.append(sleeve_site)
+
+    legacy_sleeves: list[tuple[int, float, float, float]] = []
     for index, value in enumerate(_editor_items(raw, "sleeve_guides")):
         item = _mapping(value, f"editor_overrides.sleeve_guides[{index}]")
         _reject_unknown(
@@ -825,29 +938,66 @@ def _parse_editor_overrides(raw_value: object) -> EditorOverrides:
             {"guide_index", "height_mm", "platform_height_mm", "closed_bore_height_mm"},
             f"editor_overrides.sleeve_guides[{index}]",
         )
-        sleeves.append(
-            SleeveGuideOverride(
-                guide_index=_positive_integer(
+        legacy_sleeves.append(
+            (
+                _positive_integer(
                     _required(item, "guide_index"),
                     f"editor_overrides.sleeve_guides[{index}].guide_index",
                 ),
-                height_mm=_number(
+                _number(
                     _required(item, "height_mm"),
                     f"editor_overrides.sleeve_guides[{index}].height_mm",
                     positive=True,
                 ),
-                platform_height_mm=_number(
+                _number(
                     _required(item, "platform_height_mm"),
                     f"editor_overrides.sleeve_guides[{index}].platform_height_mm",
                     positive=True,
                 ),
-                closed_bore_height_mm=_number(
+                _number(
                     _required(item, "closed_bore_height_mm"),
                     f"editor_overrides.sleeve_guides[{index}].closed_bore_height_mm",
                     positive=True,
                 ),
             )
         )
+    if sleeve_sites and legacy_sleeves:
+        raise ConfigurationError("editor_overrides.sleeve_sites 与旧式 sleeve_guides 不得同时提供")
+    if legacy_sleeves:
+        legacy_by_guide = {item[0]: item[1:] for item in legacy_sleeves}
+        if len(legacy_by_guide) != len(legacy_sleeves):
+            raise ConfigurationError("editor_overrides.sleeve_guides 导柱编号不得重复")
+        expected_indices = set(range(1, 2 * len(guide_posts) + 1))
+        if not set(legacy_by_guide) <= expected_indices:
+            raise ConfigurationError("editor_overrides.sleeve_guides 包含未知导柱编号")
+        for site_index, guide_post in enumerate(guide_posts):
+            left = legacy_by_guide.get(2 * site_index + 1)
+            right = legacy_by_guide.get(2 * site_index + 2)
+            if left is None and right is None:
+                continue
+            left_display = tuple(round(value, 2) for value in left) if left is not None else None
+            right_display = tuple(round(value, 2) for value in right) if right is not None else None
+            matching_pair = left_display is not None and left_display == right_display
+            if not matching_pair:
+                raise ConfigurationError(
+                    "旧式 editor_overrides.sleeve_guides 必须为同一种植位的左右导柱"
+                    "提供保留两位小数后完全一致的高度，才能迁移为 sleeve_sites"
+                )
+            assert left_display is not None
+            try:
+                migrated = SleeveSiteOverride(guide_post.ring_index, *left_display)
+            except ValueError as error:
+                raise ConfigurationError(
+                    f"旧式 editor_overrides.sleeve_guides 保留两位小数后的高度无效：{error}"
+                ) from error
+            sleeve_sites.append(migrated)
+    known_ring_indices = {item.ring_index for item in guide_posts}
+    unknown_ring_indices = {
+        item.ring_index for item in sleeve_sites if item.ring_index not in known_ring_indices
+    }
+    if unknown_ring_indices:
+        joined = ", ".join(map(str, sorted(unknown_ring_indices)))
+        raise ConfigurationError(f"editor_overrides.sleeve_sites 包含未知 ring_index：{joined}")
     operation_windows = []
     for index, value in enumerate(_editor_items(raw, "operation_windows")):
         item = _mapping(value, f"editor_overrides.operation_windows[{index}]")
@@ -992,7 +1142,7 @@ def _parse_editor_overrides(raw_value: object) -> EditorOverrides:
             )
         )
     for name, values, key in (
-        ("导柱", sleeves, "guide_index"),
+        ("导柱种植位", sleeve_sites, "ring_index"),
         ("操作窗口", operation_windows, "site_index"),
         ("观察窗口", observation_windows, "window_id"),
         ("连接节点", connectors, "guide_index"),
@@ -1002,7 +1152,7 @@ def _parse_editor_overrides(raw_value: object) -> EditorOverrides:
         if len(set(identifiers)) != len(identifiers):
             raise ConfigurationError(f"editor_overrides.{name} 编号不得重复")
     return EditorOverrides(
-        sleeve_guides=tuple(sleeves),
+        sleeve_sites=tuple(sleeve_sites),
         operation_windows=tuple(operation_windows),
         observation_windows=tuple(observation_windows),
         connector_avoidance=tuple(connectors),
@@ -1096,7 +1246,10 @@ def _parse_clinical_planning(
     )
 
 
-def _parse_guide_posts(raw_value: object) -> tuple[GuidePostParameters, ...]:
+def _parse_guide_posts(
+    raw_value: object,
+    sleeve_defaults: SleeveParameters,
+) -> tuple[GuidePostParameters, ...]:
     """解析各识别圆环对应的钻针长度和植体长度。"""
 
     if raw_value is None:
@@ -1114,6 +1267,7 @@ def _parse_guide_posts(raw_value: object) -> tuple[GuidePostParameters, ...]:
                 "drill_length_mm",
                 "implant_length_mm",
                 "sleeve_template_extension_mm",
+                "sleeve",
             },
             name,
         )
@@ -1146,6 +1300,11 @@ def _parse_guide_posts(raw_value: object) -> tuple[GuidePostParameters, ...]:
                 drill_length_mm=drill_length,
                 implant_length_mm=implant_length,
                 sleeve_template_extension_mm=sleeve_template_extension,
+                sleeve=_parse_sleeve_overrides(
+                    item.get("sleeve"),
+                    f"{name}.sleeve",
+                    sleeve_defaults,
+                ),
             )
         )
     ring_indices = [item.ring_index for item in guide_posts]

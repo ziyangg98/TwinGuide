@@ -54,6 +54,7 @@ class SleeveEstimate:
     platform_slot_width: float
     top_recess_radius: float | None = None
     top_recess_depth: float = 0.0
+    platform_overhang: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)

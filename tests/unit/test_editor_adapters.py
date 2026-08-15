@@ -5,7 +5,7 @@ from twin_guide.config import (
     EditorOverrides,
     ObservationWindowOverride,
     OperationWindowOverride,
-    SleeveGuideOverride,
+    SleeveSiteOverride,
     SurfaceAnchorOverride,
 )
 from twin_guide.editor_adapters import (
@@ -21,10 +21,8 @@ from twin_guide.editor_adapters import (
 class EditorAdapterTests(unittest.TestCase):
     def test_single_feature_update_preserves_other_semantic_values(self):
         original = EditorOverrides(
-            sleeve_guides=(SleeveGuideOverride(1, 12.0, 6.0, 4.0),),
-            operation_windows=(
-                OperationWindowOverride(1, 0.8, 0.6, 1.0, 0.5),
-            ),
+            sleeve_sites=(SleeveSiteOverride(1, 12.0, 6.0, 4.0),),
+            operation_windows=(OperationWindowOverride(1, 0.8, 0.6, 1.0, 0.5),),
             connector_avoidance=(
                 ConnectorAvoidanceOverride(1, 0.35, 1.0),
                 ConnectorAvoidanceOverride(2, 0.40, 1.5),
@@ -39,12 +37,12 @@ class EditorAdapterTests(unittest.TestCase):
         self.assertEqual(changed.connector_for(1), ConnectorAvoidanceOverride(1, 0.6, 3.0))
         self.assertEqual(changed.connector_for(2), original.connector_for(2))
         self.assertEqual(changed.operation_windows, original.operation_windows)
-        self.assertEqual(changed.sleeve_guides, original.sleeve_guides)
+        self.assertEqual(changed.sleeve_sites, original.sleeve_sites)
 
     def test_upsert_orders_new_features_by_stable_identifier(self):
         overrides = EditorOverrides()
-        overrides = with_sleeve(overrides, SleeveGuideOverride(2, 13.0, 7.0, 4.0))
-        overrides = with_sleeve(overrides, SleeveGuideOverride(1, 12.0, 6.0, 3.0))
+        overrides = with_sleeve(overrides, SleeveSiteOverride(2, 13.0, 7.0, 4.0))
+        overrides = with_sleeve(overrides, SleeveSiteOverride(1, 12.0, 6.0, 3.0))
         overrides = with_operation_window(
             overrides,
             OperationWindowOverride(2, 1.0, 1.0, 1.0, 1.0),
@@ -55,7 +53,7 @@ class EditorAdapterTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            [item.guide_index for item in overrides.sleeve_guides],
+            [item.ring_index for item in overrides.sleeve_sites],
             [1, 2],
         )
         self.assertEqual(
@@ -75,8 +73,8 @@ class EditorAdapterTests(unittest.TestCase):
         original = EditorOverrides(operation_windows=(operation,))
         updates = (
             (
-                "sleeve:guide_1",
-                with_sleeve(original, SleeveGuideOverride(1, 12.0, 6.0, 4.0)),
+                "sleeve:site_1",
+                with_sleeve(original, SleeveSiteOverride(1, 12.0, 6.0, 4.0)),
             ),
             (
                 "observation_window:anterior",

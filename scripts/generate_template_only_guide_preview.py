@@ -84,14 +84,14 @@ def _join_objects(objects: tuple[bpy.types.Object, ...]) -> bpy.types.Object:
     return objects[0]
 
 
-def _measure_exported_d_face_spacing_mm(
+def _measure_exported_section_spacing_mm(
     stl_path: Path,
     pair_direction: Vec3,
     axis: Vec3,
     axis_origin_center: Vec3,
     d_face_section_height_mm: float,
 ) -> float:
-    """在最终 STL 的 C 口截面反测两个相向 D 面的净距。"""
+    """在最终 STL 的指定轴向截面反测两柱相向表面的净距。"""
 
     mesh = trimesh.load_mesh(stl_path, process=True)
     components = list(mesh.split(only_watertight=False))
@@ -115,6 +115,19 @@ def _measure_exported_d_face_spacing_mm(
         coordinates = np.vstack(section_points) @ direction
         ranges.append((float(coordinates.min()), float(coordinates.max())))
     return ranges[1][0] - ranges[0][1]
+
+
+def _measure_exported_outer_span_mm(
+    stl_path: Path,
+    pair_direction: Vec3,
+) -> float:
+    """反测最终双导柱沿两柱中心连线方向的总宽。"""
+
+    mesh = trimesh.load_mesh(stl_path, process=True)
+    coordinates = np.asarray(mesh.vertices, dtype=float) @ np.asarray(
+        pair_direction.as_tuple(), dtype=float
+    )
+    return float(np.ptp(coordinates))
 
 
 def generate_preview(
@@ -159,7 +172,7 @@ def generate_preview(
         math.acos(max(-1.0, min(1.0, lateral.dot(previous_lateral))))
     )
 
-    configured = config.sleeve
+    configured = guide_post.resolved_sleeve(config.sleeve)
     d_face_offset = configured.outer_d_face_offset_mm
     axis_spacing = configured.guide_axis_spacing_mm
     half_spacing = 0.5 * axis_spacing
@@ -190,6 +203,7 @@ def generate_preview(
             inner_arc_angle=math.radians(configured.inner_arc_angle_degrees),
             outer_arc_angle=math.radians(configured.outer_arc_angle_degrees),
             platform_slot_width=configured.platform_slot_width_mm,
+            platform_overhang=configured.platform_overhang_mm,
             top_recess_radius=configured.top_recess_radius_mm,
             top_recess_depth=configured.top_recess_depth_mm,
         )
@@ -205,15 +219,44 @@ def generate_preview(
     guide_only_comparison_path = output_directory / "guide-post-only-comparison.png"
     report_path = output_directory / "template-only-twin-guide-posts.json"
     export_stl_mesh(stl_path, joined)
-    measured_d_face_spacing_mm = _measure_exported_d_face_spacing_mm(
+    z_transition = configured.height_mm - configured.closed_bore_height_mm
+    measured_c_opening_spacing_mm = _measure_exported_section_spacing_mm(
         stl_path,
         lateral,
         inward_axis,
         axis_origin_center,
         0.5 * z_platform,
     )
-    d_face_spacing_error_mm = measured_d_face_spacing_mm - configured.guide_spacing_mm
-    d_face_spacing_passed = abs(d_face_spacing_error_mm) <= GUIDE_D_FACE_SPACING_TOLERANCE_MM
+    measured_platform_spacing_mm = _measure_exported_section_spacing_mm(
+        stl_path,
+        lateral,
+        inward_axis,
+        axis_origin_center,
+        0.5 * (z_platform + z_transition),
+    )
+    measured_closed_spacing_mm = _measure_exported_section_spacing_mm(
+        stl_path,
+        lateral,
+        inward_axis,
+        axis_origin_center,
+        0.5 * (z_transition + configured.height_mm),
+    )
+    measured_outer_span_mm = _measure_exported_outer_span_mm(stl_path, lateral)
+    spacing_checks = {
+        "c_opening": (
+            measured_c_opening_spacing_mm,
+            configured.guide_c_opening_spacing_mm,
+        ),
+        "platform": (measured_platform_spacing_mm, configured.guide_spacing_mm),
+        "closed": (measured_closed_spacing_mm, configured.guide_spacing_mm),
+        "outer_span": (measured_outer_span_mm, configured.guide_pair_outer_span_mm),
+    }
+    spacing_errors_mm = {
+        name: measured - target for name, (measured, target) in spacing_checks.items()
+    }
+    spacing_validation_passed = all(
+        abs(error) <= GUIDE_D_FACE_SPACING_TOLERANCE_MM for error in spacing_errors_mm.values()
+    )
     render_objects(
         image_path,
         (template, joined),
@@ -254,19 +297,24 @@ def generate_preview(
         "implant_length_mm": guide_post.implant_length_mm,
         "twin_guide_extension_mm": extension_mm,
         "guide_spacing_mm": configured.guide_spacing_mm,
-        "guide_spacing_definition": "clearance_between_opposing_inner_d_faces",
-        "measured_exported_d_face_spacing_mm": measured_d_face_spacing_mm,
-        "d_face_spacing_error_mm": d_face_spacing_error_mm,
+        "guide_spacing_definition": "clearance_between_opposing_inner_platform_faces",
+        "measured_exported_platform_spacing_mm": measured_platform_spacing_mm,
+        "measured_exported_c_opening_spacing_mm": measured_c_opening_spacing_mm,
+        "measured_exported_closed_spacing_mm": measured_closed_spacing_mm,
+        "measured_exported_outer_span_mm": measured_outer_span_mm,
+        "spacing_errors_mm": spacing_errors_mm,
         "d_face_spacing_tolerance_mm": GUIDE_D_FACE_SPACING_TOLERANCE_MM,
-        "d_face_spacing_validation_passed": d_face_spacing_passed,
+        "spacing_validation_passed": spacing_validation_passed,
         "outer_d_face_offset_from_axis_mm": d_face_offset,
+        "platform_inner_face_offset_from_axis_mm": configured.platform_inner_face_offset_mm,
         "rotation_source": "template_local_tooth_section_normal",
         "guide_pair_direction": lateral.as_tuple(),
         "local_section_direction": section_direction.as_tuple(),
         "local_section_support_face_count": section_support,
         "local_section_direction_concentration": section_concentration,
         "rotation_from_previous_global_axis_degrees": rotation_from_previous_degrees,
-        "constructed_d_face_spacing_mm": axis_spacing - 2.0 * d_face_offset,
+        "constructed_c_opening_spacing_mm": configured.guide_c_opening_spacing_mm,
+        "constructed_platform_spacing_mm": configured.guide_spacing_mm,
         "guide_axis_spacing_internal_mm": axis_spacing,
         "constructed_pair_outer_span_mm": configured.guide_pair_outer_span_mm,
         "implant_top_center": implant_top.as_tuple(),
@@ -284,11 +332,15 @@ def generate_preview(
         ),
     }
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    if not d_face_spacing_passed:
+    if not spacing_validation_passed:
+        details = "，".join(
+            f"{name} 目标 {target:.6f} mm、实测 {measured:.6f} mm"
+            for name, (measured, target) in spacing_checks.items()
+            if abs(measured - target) > GUIDE_D_FACE_SPACING_TOLERANCE_MM
+        )
         raise ValueError(
-            "最终 STL 的 D 面净距超出公差："
-            f"目标 {configured.guide_spacing_mm:.6f} mm，"
-            f"实测 {measured_d_face_spacing_mm:.6f} mm，"
+            "最终 STL 的双导截面尺寸超出公差："
+            f"{details}，"
             f"允许误差 ±{GUIDE_D_FACE_SPACING_TOLERANCE_MM:.6f} mm"
         )
 

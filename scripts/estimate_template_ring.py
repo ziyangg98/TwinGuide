@@ -10,6 +10,7 @@ from pathlib import Path
 import trimesh
 
 from twin_guide.config import CaseConfig
+from twin_guide.guide_post_positioning import DRILL_LENGTH_INSIDE_HANDPIECE_MM
 from twin_guide.template_ring_estimation import (
     estimate_template_ring_top_plane,
     estimate_template_rings_from_stl,
@@ -47,8 +48,8 @@ def main() -> None:
                         "drill_length_mm": parameters.drill_length_mm,
                         "implant_length_mm": parameters.implant_length_mm,
                         "sleeve_template_extension_mm": (parameters.sleeve_template_extension_mm),
-                        "guide_spacing_mm": config.sleeve.guide_spacing_mm,
-                        "handpiece_insertion_length_mm": 12.0,
+                        "sleeve": asdict(parameters.resolved_sleeve(config.sleeve)),
+                        "drill_length_inside_handpiece_mm": (DRILL_LENGTH_INSIDE_HANDPIECE_MM),
                         "twin_guide_extension_mm": parameters.twin_guide_extension_mm,
                     }
                 ),

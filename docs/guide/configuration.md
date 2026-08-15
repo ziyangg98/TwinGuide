@@ -55,25 +55,30 @@ objects:
 `objects.cutter` 记录来源对象；第 7 阶段的手机输入由
 `runtime.handpiece_avoidance` 指定。
 
-## 导管标准尺寸
+## 导柱标准尺寸
 
-`runtime.sleeve` 的八个主体字段必填；`guide_spacing_mm` 是双导导柱的全局几何
-参数，旧病例未配置时默认采用 11.5 mm。顶部凹陷的直径和深度可选，但必须同时提供。
-导柱位姿由传统模板圆环和 `planning.guide_posts` 确定，最终导柱按以下参数重建。
+`runtime.sleeve` 保存真实标准导柱的 12 项参数。每个
+`planning.guide_posts[].sleeve` 只可覆盖总高、平台总高度和 C 口闭合段高度；
+其余 9 项在所有种植位使用全局标准值。
+同一种植位左右两根导柱共用合并后的完整参数。顶部凹陷的直径和深度必须成对提供。
+导柱位姿由传统模板圆环和 `planning.guide_posts` 确定。
+完整的定位、单柱构造、双柱放置和导出验证顺序见
+{doc}`../process/stage-1-sleeves`。
 
-| 字段 | 单位 | 含义 | 约束 |
-| --- | --- | --- | --- |
-| `inner_diameter_mm` | mm | 标准导孔直径 | $>0$ |
-| `outer_diameter_mm` | mm | 导管主体外径 | $>\text{inner\_diameter}$ |
-| `top_recess_diameter_mm` | mm | 顶部同轴锥形环凹陷外径 | 内孔直径与主体外径之间；须与深度同时提供 |
-| `top_recess_depth_mm` | mm | 锥形环从外径连续收敛至贯穿孔的轴向深度 | $>0$ 且小于顶部 C 口段高度；须与直径同时提供 |
-| `height_mm` | mm | 导管轴向总高 | $>0$ |
-| `platform_slot_width_mm` | mm | 下段中央平台槽宽度 | $0<\text{槽宽}<\text{主体外径}$ |
-| `platform_height_mm` | mm | 平台所在轴向高度 | 见下方高度链 |
-| `closed_bore_height_mm` | mm | 导孔闭合段高度 | 见下方高度链 |
-| `inner_arc_angle_degrees` | 度 | 导孔内弧角 | $0<\theta<360$ |
-| `outer_arc_angle_degrees` | 度 | 导管外弧角 | $0<\theta<360$ |
-| `guide_spacing_mm` | mm | 左右两根导柱相向内侧 D 面之间的净距；不是轴心距 | 大于 0；默认 11.5 |
+| 字段 | 单位 | 含义 | 约束 | 种植位调整 |
+| --- | --- | --- | --- | --- |
+| `inner_diameter_mm` | mm | 标准导孔直径 | $>0$ | 否 |
+| `outer_diameter_mm` | mm | 导管主体外径 | $>\text{inner\_diameter}$ | 否 |
+| `top_recess_diameter_mm` | mm | 凹槽端同轴锥形环凹陷外径 | 内孔直径与主体外径之间；须与深度同时提供 | 否 |
+| `top_recess_depth_mm` | mm | 凹槽端锥形环连续收敛至贯穿孔的轴向深度 | $>0$ 且小于 C 口段高度；须与直径同时提供 | 否 |
+| `height_mm` | mm | 导柱轴向总高 | $>0$ | 是 |
+| `platform_slot_width_mm` | mm | 平台开槽段的中央直槽宽度；直槽通过浅圆弧连接中心圆孔 | $0<\text{槽宽}<\text{主体外径}$ | 否 |
+| `platform_overhang_mm` | mm | 相向内侧平台端面超出主体圆柱外弧的距离 | $\geq0$；默认 0.20 | 否 |
+| `platform_height_mm` | mm | 平台从闭合端向凹槽端延伸的轴向长度 | 见下方高度链 | 是 |
+| `closed_bore_height_mm` | mm | C 口闭合段从闭合端起算的轴向长度；中心导孔仍贯通 | 见下方高度链 | 是 |
+| `inner_arc_angle_degrees` | 度 | C 口段内孔保留圆弧的圆心角 | $180\leq\theta\leq350$，保证 C 口形态和圆滑过渡可可靠离散 | 否 |
+| `outer_arc_angle_degrees` | 度 | C 口段外轮廓保留圆弧的圆心角，同时确定外侧 D 面位置 | $0<\theta<360$ | 否 |
+| `guide_spacing_mm` | mm | 左右两根导柱相向内侧平台端面之间的净距，即“平台端面净距” | $>0$；标准值 11.50 | 否，仅全局设置 |
 
 单侧平台宽度不是独立输入，而是由主体外径和中央槽宽唯一确定：
 
@@ -82,18 +87,24 @@ w_{\mathrm{platform}}=
 \frac{d_{\mathrm{outer}}-w_{\mathrm{slot}}}{2}.
 $$
 
-双导放置时先把两个相向 D 面置于中点两侧各
-`guide_spacing_mm / 2`，再根据单柱轴心到 D 面的距离计算轴心。设外半径为
-$R$、外弧角为 $\theta$，则
+正文将 `guide_spacing_mm` 称为“平台端面净距”；轴心距、双柱外侧总宽和 C 口 D 面净距
+均为派生尺寸。双导放置时先把两个相向内侧平台端面置于中点两侧各
+`guide_spacing_mm / 2`，再根据平台端面到轴心的距离计算轴心。设外半径为
+$R$、平台凸出量为 $e$、外弧角为 $\theta$，则
 
 $$
-d_{\mathrm{axis\to D}}=R\cos\frac{360^\circ-\theta}{2},\qquad
-d_{\mathrm{axis}}=d_{\mathrm{D-face}}+2d_{\mathrm{axis\to D}}.
+d_{\mathrm{axis\to platform}}=R+e,\qquad
+d_{\mathrm{axis}}=d_{\mathrm{platform}}+2(R+e).
 $$
 
-轴心距由 D 面净距和既定导柱截面共同决定；不能为了调整两柱间距而修改外弧角。
-导出后必须在 D 面所在截面对最终 STL 反测，实测净距与配置值的绝对误差不得超过
-0.001 mm；超差时生成失败。
+下部 C 口 D 面净距仍由外弧角决定：
+
+$$
+d_{\mathrm{C-gap}}=d_{\mathrm{axis}}-
+2R\cos\frac{360^\circ-\theta}{2}.
+$$
+
+导出验证分别反测 C 口段、平台开槽段、C 口闭合段及双柱总宽，尺寸公差为 0.001 mm。
 
 高度必须同时满足
 
@@ -170,14 +181,35 @@ $$
 
 ### `planning.guide_posts`
 
-每个已识别圆环分别配置 `ring_index`、`drill_length_mm`、`implant_length_mm` 和
-`sleeve_template_extension_mm`。套环导板延长量用于从传统模板止停面恢复植体顶端。
-导柱间距不随种植位变化，统一由 `runtime.sleeve.guide_spacing_mm` 配置。
+每个已识别圆环分别配置 `ring_index`、`drill_length_mm`、`implant_length_mm`、
+`sleeve_template_extension_mm` 和可选的 `sleeve`。模板延伸长度用于从传统模板
+止停面恢复植体顶端。`sleeve` 只接受 `height_mm`、`platform_height_mm` 和
+`closed_bore_height_mm`，且三个字段均可省略；出现的字段只覆盖当前种植位，
+左右两根同步使用。
 `ring_index` 对应传统模板圆环识别结果中的编号，不依赖 FDI、sleeve 或 handpiece。
 系统按 `drill_length_mm - 12 mm - implant_length_mm` 计算双导导板延长量；12 mm
-为固定的钻针插入手机长度，不作为病例参数。当前示例起始值为钻针 33 mm、植体
-12 mm、套环导板延长量 9 mm；这三项仍须按种植位显式填写。正式流程要求至少
+为钻针位于手机内部的固定长度，不作为病例参数。模板延伸长度与双导延伸长度不要求
+相等；两者之差决定新止停平面相对传统模板圆环上平面的轴向偏移。当前示例起始值为
+钻针 33 mm、植体 12 mm、模板延伸长度 8 mm，因此计算得到的双导延伸长度为 9 mm；
+这三项仍须按种植位显式填写。正式流程要求至少
 配置一个 `guide_posts`，不再支持从导管装配体回退识别。
+
+```yaml
+planning:
+  guide_posts:
+    - ring_index: 1
+      drill_length_mm: 33.00
+      implant_length_mm: 12.00
+      sleeve_template_extension_mm: 8.00
+      sleeve:
+        height_mm: 16.00
+        platform_height_mm: 10.50
+        closed_bore_height_mm: 5.00
+```
+
+三项高度合并后重新执行完整约束校验，并必须满足
+`0 < closed_bore_height_mm < platform_height_mm < height_mm`。其余导柱字段出现在
+种植位 `sleeve` 中会作为配置错误拒绝。
 
 ### `design.observation_windows`
 
@@ -401,10 +433,26 @@ Blender 阶段结果图和最终标准视图的像素尺寸。
 
 ## 图形编辑器覆盖值
 
-`editor_overrides` 由 Blender 面板管理；省略时使用全局参数。
-它可保存 `sleeve_guides`、`operation_windows`、`observation_windows`、
-`connector_avoidance`、`surface_anchors` 和 `press_junction_mm`。左右导柱及避让节点
-按 `guide_index` 独立；表面锚点保存表面类型、世界坐标和法向。
+`editor_overrides` 由 Blender 面板管理。导柱参数的生效顺序为：`runtime.sleeve`
+全局标准值、`planning.guide_posts[].sleeve` 三项种植位高度覆盖、`sleeve_sites`
+三项高度调整。
+`sleeve_sites` 按 `ring_index` 保存总高、平台总高度和 C 口闭合段高度，一组控制点
+同步作用于该种植位左右两根导柱。其余分组为 `operation_windows`、
+`observation_windows`、`connector_avoidance`、`surface_anchors` 和
+`press_junction_mm`。
+
+```yaml
+editor_overrides:
+  sleeve_sites:
+    - ring_index: 1
+      height_mm: 16.00
+      platform_height_mm: 10.50
+      closed_bore_height_mm: 4.90
+```
+
+旧式 `sleeve_guides` 仅在同一种植位的两个 `guide_index` 同时存在，且三项高度各自
+保留两位小数后的结果完全一致时迁移为 `sleeve_sites`；迁移直接采用该共同显示值，
+编辑器再次保存时写出新格式。
 
 `connector_avoidance.path_fraction` 保持旧字段兼容，其含义是从止停台接触点到
 所选侧路线端点的比例；`downward_offset_mm` 是正视方向的下拉偏移。

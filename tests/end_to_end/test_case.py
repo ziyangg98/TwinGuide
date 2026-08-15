@@ -3,6 +3,8 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
+import yaml
+
 from twin_guide import CaseConfig, generate_guide, run_generation_process, validate_guide
 from twin_guide.case_analysis import analyze_case
 from twin_guide.tooth_identification import identify_tooth_positions
@@ -13,9 +15,22 @@ from twin_guide.window_cutouts import plan_window_cutouts
 class EndToEndTests(unittest.TestCase):
     def test_current_case(self):
         code_directory = Path(__file__).resolve().parents[2]
-        case_path = code_directory.parent / "data/cases/single/tooth-17/case.yaml"
-        if not case_path.is_file():
+        cases_directory = code_directory.parent / "data/cases"
+        index_path = cases_directory / "index.yaml"
+        if not index_path.is_file():
             self.skipTest("未提供 tooth-17 仓库外病例数据")
+        index = yaml.safe_load(index_path.read_text(encoding="utf-8"))
+        record = next(
+            (
+                item
+                for item in index["cases"]
+                if item["status"] == "configured" and item["implant_fdis"] == [17]
+            ),
+            None,
+        )
+        if record is None:
+            self.skipTest("未提供17号种植位正式病例数据")
+        case_path = cases_directory / record["path"] / "case.yaml"
         source_config = CaseConfig.from_yaml(case_path)
         with tempfile.TemporaryDirectory() as temporary_output_directory:
             case_config = replace(

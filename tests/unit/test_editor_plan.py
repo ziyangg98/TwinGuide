@@ -18,7 +18,7 @@ from twin_guide.geometry import Vec3
 class EditorPlanTests(unittest.TestCase):
     def test_snapshot_requires_matching_schema_revision_and_geometry(self):
         value = {
-            "schema_version": "twin-guide.ui-editor-snapshot/2.0",
+            "schema_version": "twin-guide.ui-editor-snapshot/3.0",
             "revision": 4,
             "geometry_fingerprint": "geometry-4",
         }
@@ -70,11 +70,7 @@ class EditorPlanTests(unittest.TestCase):
                 inputs,
                 root / "ui-plan",
                 1.0,
-                EditorOverrides(
-                    connector_avoidance=(
-                        ConnectorAvoidanceOverride(1, 0.6, 2.0),
-                    )
-                ),
+                EditorOverrides(connector_avoidance=(ConnectorAvoidanceOverride(1, 0.6, 2.0),)),
             )
 
             first_value = editor_plan_fingerprint(first, config_path)
@@ -104,6 +100,7 @@ class EditorPlanTests(unittest.TestCase):
             config = SimpleNamespace(
                 case_id="demo",
                 editor_overrides=EditorOverrides(),
+                guide_posts=(SimpleNamespace(ring_index=1),),
                 inputs=SimpleNamespace(
                     template=paths[0],
                     patient_dentition=paths[1],
@@ -149,13 +146,32 @@ class EditorPlanTests(unittest.TestCase):
             context = SimpleNamespace(
                 config=config,
                 sleeve_generation=SimpleNamespace(
-                    sleeves=(Sleeve(1, {"axis": [0, 0, 1]}),)
+                    sleeves=(
+                        Sleeve(
+                            1,
+                            {
+                                "axis_origin": [-2.0, 0.0, 0.0],
+                                "axis": [0.0, 0.0, 1.0],
+                                "height": 15.5,
+                                "platform_height": 10.0,
+                                "closed_bore_height": 4.9,
+                            },
+                        ),
+                        Sleeve(
+                            2,
+                            {
+                                "axis_origin": [2.0, 0.0, 0.0],
+                                "axis": [0.0, 0.0, 1.0],
+                                "height": 15.5,
+                                "platform_height": 10.0,
+                                "closed_bore_height": 4.9,
+                            },
+                        ),
+                    )
                 ),
                 tooth_identification=None,
                 case=SimpleNamespace(
-                    operation_features=(
-                        SimpleNamespace(center=Vec3(0.0, 0.0, 0.0)),
-                    )
+                    operation_features=(SimpleNamespace(center=Vec3(0.0, 0.0, 0.0)),)
                 ),
                 window_cutouts=SimpleNamespace(
                     windows=(
@@ -182,9 +198,7 @@ class EditorPlanTests(unittest.TestCase):
                     )
                 ),
                 press_beam_points=SimpleNamespace(
-                    guide_anchors=(
-                        Anchor(Vec3(0.0, 1.0, 0.0), Vec3(0.0, 0.0, 1.0)),
-                    ),
+                    guide_anchors=(Anchor(Vec3(0.0, 1.0, 0.0), Vec3(0.0, 0.0, 1.0)),),
                     junction=Vec3(0.0, 0.0, 1.0),
                     junction_axis=Vec3(0.0, 0.0, 1.0),
                 ),
@@ -205,7 +219,7 @@ class EditorPlanTests(unittest.TestCase):
             self.assertEqual(
                 identifiers,
                 {
-                    "sleeve:guide_1",
+                    "sleeve:site_1",
                     "operation_window:1",
                     "connector:guide_1",
                     "press_anchor:1",

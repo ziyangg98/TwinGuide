@@ -17,10 +17,10 @@ brew install --cask blender
 ## 生成 STL
 
 ```bash
-./twinguide generate --config ../data/cases/single/tooth-11/case.yaml
+./twinguide generate --config ../data/cases/case-3af68d1cfda4/case.yaml
 ```
 
-`generate` 读取病例网格和 `case.yaml`，依次完成传统模板导柱定位与标准重建、
+`generate` 读取病例网格和 `case.yaml`，依次完成传统模板导柱定位与按种植位参数重建、
 牙位识别与导板映射、FDI 观察窗规划、锚点选择、连续连接梁和配置的按压梁。
 随后程序融合全部结构，复切导孔和观察窗；配置手机避让时，再执行运动包络差集，最后导出 STL。
 具体数据流见[生成过程](../process/index.md)。
@@ -38,15 +38,16 @@ brew install --cask blender
 ## 图形化微调
 
 ```bash
-./twinguide ui --config ../data/cases/single/tooth-11/case.yaml
+./twinguide ui --config ../data/cases/case-3af68d1cfda4/case.yaml
 ```
 
 启动后会加载病例模型和结构列表。选择操作窗、观察窗、连接线、支撑结构或导柱，
 即可通过三维手柄或右侧输入框调整参数。
 
 操作窗边缘成对移动且中心移动不改变宽高；观察窗端点逐牙吸附有效 FDI；左右
-连接线的避让节点彼此独立；表面图钉通过鼠标射线沿导板或牙面移动；导柱三个
-圆环沿各自轴线移动并在相邻高度前停止。拖动时按 `Shift` 以 0.1 mm（角度为
+连接线的避让节点彼此独立；表面图钉通过鼠标射线沿导板或牙面移动；每个种植位置
+显示一组三个导柱高度控制环，沿该位置轴线移动时左右导柱同步更新，并在相邻高度前
+停止。拖动时按 `Shift` 以 0.1 mm（角度为
 1°）精调，`Esc` 取消当前拖动。
 
 “保存调整”写回 `case.yaml`；“更新实体预览”重新生成当前模型；“确认导出并检验”
@@ -61,7 +62,7 @@ brew install --cask blender
 
 ```bash
 ./twinguide generate \
-  --config ../data/cases/single/tooth-14/case.yaml --validate
+  --config ../data/cases/case-67d787b33006/case.yaml --validate
 ```
 
 `--validate` 在生成后调用与 `validate` 子命令相同的检查器。检查器按同一份配置
@@ -73,7 +74,7 @@ brew install --cask blender
 ## 查看计算过程
 
 ```bash
-./twinguide process --config ../data/cases/single/tooth-11/case.yaml
+./twinguide process --config ../data/cases/case-3af68d1cfda4/case.yaml
 ```
 
 `process` 计算七个阶段的几何结果并输出运行状态，但不执行最终 STL 的
@@ -83,7 +84,7 @@ brew install --cask blender
 
 ```bash
 ./twinguide validate \
-  --config ../data/cases/single/tooth-11/case.yaml \
+  --config ../data/cases/case-3af68d1cfda4/case.yaml \
   --model output/tooth_11/twin_guide.stl
 ```
 

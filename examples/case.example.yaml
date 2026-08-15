@@ -16,12 +16,13 @@ runtime:
     top_recess_diameter_mm: 2.61
     top_recess_depth_mm: 0.30
     height_mm: 15.50
-    platform_slot_width_mm: 1.65
+    platform_slot_width_mm: 1.60
+    platform_overhang_mm: 0.20
     platform_height_mm: 10.00
-    closed_bore_height_mm: 5.00
-    inner_arc_angle_degrees: 252.90
+    closed_bore_height_mm: 4.90
+    inner_arc_angle_degrees: 257.83
     outer_arc_angle_degrees: 246.59
-    guide_spacing_mm: 11.5  # 左右两根导柱相向内侧 D 面之间的净距
+    guide_spacing_mm: 11.50  # 全局平台端面净距；所有种植位共用
   geometry:
     channel_axial_margin_mm: 5.0
     connector_diameter_mm: 4.6
@@ -72,12 +73,17 @@ design:
   press_beam: {mode: disabled}
 
 planning:
-  # 每个已识别圆环分别输入钻针长度和植体长度；12 mm 手机插入长度为程序常量。
+  # 每个已识别圆环分别输入钻针长度和植体长度；钻针位于手机内部的长度固定为 12 mm。
   guide_posts:
     - ring_index: 1
-      drill_length_mm: 33.0
-      implant_length_mm: 12.0
-      sleeve_template_extension_mm: 9.0
+      drill_length_mm: 33.00
+      implant_length_mm: 12.00
+      sleeve_template_extension_mm: 8.00
+      # sleeve 仅允许覆盖三项轴向高度；左右两根同步使用。
+      sleeve:
+        height_mm: 16.00
+        platform_height_mm: 10.50
+        closed_bore_height_mm: 5.00
   # 坐标格式、延长量定义和高度公式由医生确认后再启用。
   # clinical_parameters:
   #   implant_coordinates_path: input/implant-coordinates.dat

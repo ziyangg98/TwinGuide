@@ -10,6 +10,7 @@ from twin_guide.geometry import Vec3
 from twin_guide.stage_artifacts import (
     STAGE_ARTIFACT_STEMS,
     STAGE_RESULT_SCHEMA,
+    _stage_parameters,
     write_stage_result_documents,
 )
 from twin_guide.types import (
@@ -39,6 +40,17 @@ class ExampleSleeve:
 @dataclass(frozen=True)
 class ExampleSleeveParameters:
     height_mm: float
+    platform_height_mm: float = 10.0
+    closed_bore_height_mm: float = 5.0
+
+
+@dataclass(frozen=True)
+class ExampleGuidePost:
+    ring_index: int
+
+    @staticmethod
+    def resolved_sleeve(defaults):
+        return defaults
 
 
 @dataclass(frozen=True)
@@ -51,9 +63,28 @@ class StageArtifactTests(unittest.TestCase):
     def test_all_stage_stems_are_flat_and_unique(self):
         self.assertEqual(tuple(STAGE_ARTIFACT_STEMS), tuple(range(1, 8)))
         self.assertEqual(len(set(STAGE_ARTIFACT_STEMS.values())), 7)
-        self.assertTrue(
-            all("/" not in stem for stem in STAGE_ARTIFACT_STEMS.values())
+        self.assertTrue(all("/" not in stem for stem in STAGE_ARTIFACT_STEMS.values()))
+
+    def test_stage_one_parameters_include_editor_height_override(self):
+        override = SimpleNamespace(
+            height_mm=16.0,
+            platform_height_mm=9.0,
+            closed_bore_height_mm=4.0,
         )
+        config = SimpleNamespace(
+            sleeve=ExampleSleeveParameters(15.5),
+            guide_posts=(ExampleGuidePost(3),),
+            editor_overrides=SimpleNamespace(
+                sleeve_for=lambda ring_index: override if ring_index == 3 else None
+            ),
+        )
+
+        parameters = _stage_parameters(config, 1)
+
+        effective = parameters["sleeve_by_ring"][0]["parameters"]
+        self.assertEqual(effective["height_mm"], 16.0)
+        self.assertEqual(effective["platform_height_mm"], 9.0)
+        self.assertEqual(effective["closed_bore_height_mm"], 4.0)
 
     def test_completed_and_skipped_stages_share_one_document_shape(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -67,6 +98,7 @@ class StageArtifactTests(unittest.TestCase):
                     output_directory / "dentition.stl",
                 ),
                 sleeve=ExampleSleeveParameters(20.0),
+                guide_posts=(),
             )
             definition_1 = StageDefinition(
                 1,
@@ -121,7 +153,9 @@ class StageArtifactTests(unittest.TestCase):
                 "artifacts",
             ]
             self.assertTrue(all(list(document) == expected_keys for document in documents))
-            self.assertTrue(all(document["schema_version"] == STAGE_RESULT_SCHEMA for document in documents))
+            self.assertTrue(
+                all(document["schema_version"] == STAGE_RESULT_SCHEMA for document in documents)
+            )
             self.assertEqual(documents[0]["result"]["point"], {"x": 1.0, "y": 2.0, "z": 3.0})
             self.assertIsNone(documents[1]["result"])
             self.assertIsNone(documents[1]["quality"]["passed"])

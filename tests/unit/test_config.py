@@ -44,6 +44,7 @@ class CaseConfigTests(unittest.TestCase):
                 "top_recess_depth_mm": 0.30,
                 "height_mm": 16.373,
                 "platform_slot_width_mm": 1.65,
+                "platform_overhang_mm": 0.20,
                 "platform_height_mm": 9.875,
                 "closed_bore_height_mm": 4.777,
                 "inner_arc_angle_degrees": 264.934,
@@ -152,6 +153,7 @@ class CaseConfigTests(unittest.TestCase):
         self.assertEqual(config.sleeve.top_recess_depth_mm, 0.30)
         self.assertEqual(config.sleeve.height_mm, 16.373)
         self.assertEqual(config.sleeve.platform_slot_width_mm, 1.65)
+        self.assertEqual(config.sleeve.platform_overhang_mm, 0.20)
         self.assertEqual(config.sleeve.platform_height_mm, 9.875)
         self.assertEqual(config.sleeve.closed_bore_height_mm, 4.777)
         self.assertEqual(config.sleeve.inner_arc_angle_degrees, 264.934)
@@ -166,7 +168,11 @@ class CaseConfigTests(unittest.TestCase):
         )
         self.assertAlmostEqual(
             config.sleeve.guide_axis_spacing_mm,
-            11.5 + 2.0 * expected_d_face_offset,
+            11.5 + 2.0 * (config.sleeve.outer_radius_mm + 0.20),
+        )
+        self.assertAlmostEqual(
+            config.sleeve.guide_c_opening_spacing_mm,
+            config.sleeve.guide_axis_spacing_mm - 2.0 * expected_d_face_offset,
         )
         self.assertEqual(config.geometry.connector_diameter_mm, 2.3)
         self.assertEqual(config.geometry.connector_radius_mm, 1.15)
@@ -1258,6 +1264,36 @@ design:
         with self.assertRaisesRegex(ConfigurationError, "必须小于"):
             CaseConfig.from_yaml(self._write_config(config_data))
 
+    def test_rejects_negative_platform_overhang(self):
+        config_data = self._valid_config_data()
+        sleeve_data = config_data["sleeve"]
+        self.assertIsInstance(sleeve_data, dict)
+        sleeve_data["platform_overhang_mm"] = -0.01
+
+        with self.assertRaisesRegex(ConfigurationError, "platform_overhang_mm"):
+            CaseConfig.from_yaml(self._write_config(config_data))
+
+    def test_rejects_inner_arc_too_close_to_closed_circle(self):
+        for invalid_angle in (179.99, 350.01):
+            with self.subTest(invalid_angle=invalid_angle):
+                config_data = self._valid_config_data()
+                sleeve_data = config_data["sleeve"]
+                self.assertIsInstance(sleeve_data, dict)
+                sleeve_data["inner_arc_angle_degrees"] = invalid_angle
+
+                with self.assertRaisesRegex(ConfigurationError, "180 至 350"):
+                    CaseConfig.from_yaml(self._write_config(config_data))
+
+    def test_defaults_platform_overhang_to_standard_value(self):
+        config_data = self._valid_config_data()
+        sleeve_data = config_data["sleeve"]
+        self.assertIsInstance(sleeve_data, dict)
+        del sleeve_data["platform_overhang_mm"]
+
+        config = CaseConfig.from_yaml(self._write_config(config_data))
+
+        self.assertEqual(config.sleeve.platform_overhang_mm, 0.20)
+
     def test_rejects_incomplete_or_invalid_top_recess(self):
         config_data = self._valid_config_data()
         sleeve_data = config_data["sleeve"]
@@ -1302,22 +1338,16 @@ design:
         with self.assertRaisesRegex(ConfigurationError, "缺少必填字段：height_mm"):
             CaseConfig.from_yaml(self._write_config(config_data))
 
-    def test_loads_independent_editor_overrides(self):
+    def test_loads_site_editor_overrides(self):
         path = self._write_config(self._valid_config_data())
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
         raw["editor_overrides"] = {
-            "sleeve_guides": [
+            "sleeve_sites": [
                 {
-                    "guide_index": 1,
+                    "ring_index": 1,
                     "height_mm": 16.0,
                     "platform_height_mm": 9.0,
                     "closed_bore_height_mm": 4.0,
-                },
-                {
-                    "guide_index": 2,
-                    "height_mm": 17.0,
-                    "platform_height_mm": 10.0,
-                    "closed_bore_height_mm": 5.0,
                 },
             ],
             "connector_avoidance": [
@@ -1332,11 +1362,239 @@ design:
 
         config = CaseConfig.from_yaml(path)
 
-        self.assertEqual(config.editor_overrides.sleeve_for(2).height_mm, 17.0)
+        self.assertEqual(config.editor_overrides.sleeve_for(1).height_mm, 16.0)
         self.assertEqual(
             config.editor_overrides.connector_for(1).downward_offset_mm,
             2.0,
         )
+
+    def test_guide_post_sleeve_parameters_inherit_and_override_defaults(self):
+        path = self._write_config(self._valid_config_data())
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        raw["planning"]["guide_posts"] = [
+            {
+                "ring_index": 1,
+                "drill_length_mm": 33.0,
+                "implant_length_mm": 12.0,
+                "sleeve_template_extension_mm": 9.0,
+                "sleeve": {
+                    "height_mm": 17.0,
+                    "platform_height_mm": 10.5,
+                    "closed_bore_height_mm": 5.0,
+                },
+            },
+            {
+                "ring_index": 2,
+                "drill_length_mm": 31.0,
+                "implant_length_mm": 10.0,
+                "sleeve_template_extension_mm": 8.0,
+                "sleeve": {
+                    "height_mm": 16.0,
+                    "platform_height_mm": 10.2,
+                    "closed_bore_height_mm": 4.8,
+                },
+            },
+        ]
+        path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+
+        config = CaseConfig.from_yaml(path)
+        first = config.guide_posts[0].resolved_sleeve(config.sleeve)
+        second = config.guide_posts[1].resolved_sleeve(config.sleeve)
+
+        self.assertEqual(first.height_mm, 17.0)
+        self.assertEqual(first.platform_height_mm, 10.5)
+        self.assertEqual(first.closed_bore_height_mm, 5.0)
+        self.assertEqual(first.guide_spacing_mm, 11.5)
+        self.assertEqual(first.inner_diameter_mm, config.sleeve.inner_diameter_mm)
+        self.assertEqual(second.height_mm, 16.0)
+        self.assertEqual(second.platform_height_mm, 10.2)
+        self.assertEqual(second.closed_bore_height_mm, 4.8)
+        self.assertEqual(second.guide_spacing_mm, 11.5)
+        self.assertEqual(second.outer_diameter_mm, config.sleeve.outer_diameter_mm)
+        self.assertNotEqual(first, second)
+
+    def test_guide_post_accepts_all_three_height_overrides(self):
+        path = self._write_config(self._valid_config_data())
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        expected = {
+            "height_mm": 16.50,
+            "platform_height_mm": 10.20,
+            "closed_bore_height_mm": 5.10,
+        }
+        raw["planning"]["guide_posts"][0]["sleeve"] = expected
+        path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+
+        config = CaseConfig.from_yaml(path)
+        effective = config.guide_posts[0].resolved_sleeve(config.sleeve)
+
+        for name, value in expected.items():
+            self.assertEqual(getattr(effective, name), value)
+
+        fixed_names = {
+            "inner_diameter_mm",
+            "outer_diameter_mm",
+            "top_recess_diameter_mm",
+            "top_recess_depth_mm",
+            "platform_slot_width_mm",
+            "platform_overhang_mm",
+            "inner_arc_angle_degrees",
+            "outer_arc_angle_degrees",
+            "guide_spacing_mm",
+        }
+        for name in fixed_names:
+            self.assertEqual(getattr(effective, name), getattr(config.sleeve, name))
+
+    def test_rejects_fixed_guide_post_sleeve_overrides(self):
+        fixed_names = (
+            "inner_diameter_mm",
+            "outer_diameter_mm",
+            "top_recess_diameter_mm",
+            "top_recess_depth_mm",
+            "platform_slot_width_mm",
+            "platform_overhang_mm",
+            "inner_arc_angle_degrees",
+            "outer_arc_angle_degrees",
+            "guide_spacing_mm",
+        )
+        for field_name in fixed_names:
+            with self.subTest(field_name=field_name):
+                path = self._write_config(self._valid_config_data())
+                raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+                raw["planning"]["guide_posts"][0]["sleeve"] = {field_name: 12.0}
+                path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+
+                with self.assertRaisesRegex(ConfigurationError, field_name):
+                    CaseConfig.from_yaml(path)
+
+    def test_accepts_global_guide_spacing_for_all_sites(self):
+        path = self._write_config(self._valid_config_data())
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        raw["runtime"]["sleeve"]["guide_spacing_mm"] = 12.0
+        raw["planning"]["guide_posts"].append(
+            {
+                "ring_index": 2,
+                "drill_length_mm": 31.0,
+                "implant_length_mm": 10.0,
+                "sleeve_template_extension_mm": 8.0,
+                "sleeve": {
+                    "height_mm": 16.0,
+                    "platform_height_mm": 10.2,
+                    "closed_bore_height_mm": 4.8,
+                },
+            }
+        )
+        path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+
+        config = CaseConfig.from_yaml(path)
+
+        self.assertEqual(config.sleeve.guide_spacing_mm, 12.0)
+        self.assertEqual(len(config.guide_posts), 2)
+        for post in config.guide_posts:
+            self.assertEqual(post.resolved_sleeve(config.sleeve).guide_spacing_mm, 12.0)
+
+    def test_rejects_invalid_or_unknown_guide_post_sleeve_override(self):
+        path = self._write_config(self._valid_config_data())
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        post = raw["planning"]["guide_posts"][0]
+        post["sleeve"] = {"height_mm": 8.0, "unknown_mm": 1.0}
+        path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+        with self.assertRaisesRegex(ConfigurationError, "unknown_mm"):
+            CaseConfig.from_yaml(path)
+
+        del post["sleeve"]["unknown_mm"]
+        path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+        with self.assertRaisesRegex(ConfigurationError, "高度必须满足"):
+            CaseConfig.from_yaml(path)
+
+    def test_rejects_recess_geometry_as_site_override(self):
+        path = self._write_config(self._valid_config_data())
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        raw["planning"]["guide_posts"][0]["sleeve"] = {"top_recess_diameter_mm": 2.7}
+        path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+
+        with self.assertRaisesRegex(ConfigurationError, "top_recess_diameter_mm"):
+            CaseConfig.from_yaml(path)
+
+    def test_migrates_matching_legacy_pair_and_rejects_divergence(self):
+        path = self._write_config(self._valid_config_data())
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        matching = {
+            "height_mm": 16.0,
+            "platform_height_mm": 9.0,
+            "closed_bore_height_mm": 4.0,
+        }
+        raw["editor_overrides"] = {
+            "sleeve_guides": [
+                {"guide_index": 1, **matching},
+                {
+                    "guide_index": 2,
+                    "height_mm": 15.999999,
+                    "platform_height_mm": 9.000001,
+                    "closed_bore_height_mm": 3.999999,
+                },
+            ]
+        }
+        path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+        config = CaseConfig.from_yaml(path)
+        self.assertEqual(config.editor_overrides.sleeve_for(1).height_mm, 16.0)
+
+        raw["editor_overrides"]["sleeve_guides"][0]["height_mm"] = 16.004
+        raw["editor_overrides"]["sleeve_guides"][1]["height_mm"] = 16.006
+        path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+        with self.assertRaisesRegex(ConfigurationError, "完全一致"):
+            CaseConfig.from_yaml(path)
+
+        raw["editor_overrides"]["sleeve_guides"][0]["height_mm"] = 16.0
+        raw["editor_overrides"]["sleeve_guides"][1]["height_mm"] = 17.0
+        path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+        with self.assertRaisesRegex(ConfigurationError, "完全一致"):
+            CaseConfig.from_yaml(path)
+
+        for guide in raw["editor_overrides"]["sleeve_guides"]:
+            guide.update(
+                height_mm=10.004,
+                platform_height_mm=9.996,
+                closed_bore_height_mm=4.0,
+            )
+        path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+        with self.assertRaisesRegex(ConfigurationError, "保留两位小数后的高度无效"):
+            CaseConfig.from_yaml(path)
+
+    def test_rejects_invalid_canonical_editor_height_as_configuration_error(self):
+        path = self._write_config(self._valid_config_data())
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        raw["editor_overrides"] = {
+            "sleeve_sites": [
+                {
+                    "ring_index": 1,
+                    "height_mm": 9.0,
+                    "platform_height_mm": 10.0,
+                    "closed_bore_height_mm": 4.0,
+                }
+            ]
+        }
+        path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+
+        with self.assertRaisesRegex(ConfigurationError, "高度必须满足"):
+            CaseConfig.from_yaml(path)
+
+    def test_rejects_editor_height_for_unknown_ring(self):
+        path = self._write_config(self._valid_config_data())
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        raw["editor_overrides"] = {
+            "sleeve_sites": [
+                {
+                    "ring_index": 9,
+                    "height_mm": 16.0,
+                    "platform_height_mm": 10.0,
+                    "closed_bore_height_mm": 4.9,
+                }
+            ]
+        }
+        path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+
+        with self.assertRaisesRegex(ConfigurationError, "未知 ring_index"):
+            CaseConfig.from_yaml(path)
 
 
 if __name__ == "__main__":

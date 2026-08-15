@@ -16,8 +16,8 @@ from twin_guide.ui_jobs import write_manifest
 if TYPE_CHECKING:
     from twin_guide.types import GenerationContext
 
-EDITOR_PLAN_SCHEMA = "twin-guide.ui-editor-plan/2.0"
-EDITOR_SNAPSHOT_SCHEMA = "twin-guide.ui-editor-snapshot/2.0"
+EDITOR_PLAN_SCHEMA = "twin-guide.ui-editor-plan/3.0"
+EDITOR_SNAPSHOT_SCHEMA = "twin-guide.ui-editor-snapshot/3.0"
 
 
 def _json_value(value: object) -> object:
@@ -235,14 +235,35 @@ def build_editor_plan(
     config = context.config
     features: list[dict[str, object]] = []
     if context.sleeve_generation is not None:
-        for sleeve in context.sleeve_generation.sleeves:
+        sleeves = context.sleeve_generation.sleeves
+        for site_index, guide_post in enumerate(config.guide_posts):
+            pair = sleeves[2 * site_index : 2 * site_index + 2]
+            if len(pair) != 2:
+                raise ValueError("每个 planning.guide_posts 必须对应两根导柱")
+            geometry = _json_value(pair[0])
+            if not isinstance(geometry, dict):
+                raise TypeError("导柱编辑几何必须为对象")
+            parameters = geometry.get("parameters")
+            if not isinstance(parameters, dict):
+                raise TypeError("导柱编辑几何缺少 parameters")
+            second = _json_value(pair[1])
+            if not isinstance(second, dict) or not isinstance(second.get("parameters"), dict):
+                raise TypeError("第二根导柱编辑几何缺少 parameters")
+            first_origin = parameters["axis_origin"]
+            second_origin = second["parameters"]["axis_origin"]
+            parameters["axis_origin"] = [
+                0.5 * (float(left) + float(right))
+                for left, right in zip(first_origin, second_origin, strict=True)
+            ]
+            geometry["ring_index"] = guide_post.ring_index
+            geometry["guide_indices"] = [item.guide_index for item in pair]
             features.append(
                 {
-                    "id": f"sleeve:guide_{sleeve.guide_index}",
+                    "id": f"sleeve:site_{guide_post.ring_index}",
                     "kind": "sleeve",
                     "group": "SLEEVE",
-                    "label": f"导柱 {sleeve.guide_index}",
-                    "geometry": _json_value(sleeve),
+                    "label": f"种植位圆环 {guide_post.ring_index} 双导柱",
+                    "geometry": geometry,
                 }
             )
     features.extend(_observation_features(context))

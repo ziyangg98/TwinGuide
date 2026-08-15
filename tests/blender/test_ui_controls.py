@@ -96,7 +96,7 @@ class BlenderUiControlTests(unittest.TestCase):
             ),
             self._control(
                 "sleeve_height",
-                guide_index=1,
+                ring_index=1,
                 role="platform",
                 origin=[0.0, 0.0, 0.0],
                 axis=[0.0, 0.0, 1.0],

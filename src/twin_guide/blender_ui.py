@@ -40,7 +40,7 @@ from twin_guide.config import (
     EditorOverrides,
     ObservationWindowOverride,
     OperationWindowOverride,
-    SleeveGuideOverride,
+    SleeveSiteOverride,
     SurfaceAnchorOverride,
     production_review_status,
 )
@@ -90,15 +90,11 @@ def _working_overrides() -> EditorOverrides:
     """返回当前编辑会话工作值，未初始化时使用病例值。"""
 
     assert _CONFIG is not None
-    return (
-        _CONFIG.editor_overrides
-        if _SESSION is None
-        else _SESSION.working_overrides
-    )
+    return _CONFIG.editor_overrides if _SESSION is None else _SESSION.working_overrides
 
 
 def _load_editor_plan(path: Path) -> dict[str, object]:
-    """读取并校验 UI 唯一消费的 v2 编辑计划或预览快照。"""
+    """读取并校验 UI 唯一消费的 3.0 编辑计划或预览快照。"""
 
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict) or value.get("schema_version") not in {
@@ -117,11 +113,7 @@ def _plan_features(kind: str) -> tuple[dict[str, object], ...]:
     if _EDITOR_PLAN_VALUE is None:
         return ()
     features = _EDITOR_PLAN_VALUE.get("features", [])
-    return tuple(
-        item
-        for item in features
-        if isinstance(item, dict) and item.get("kind") == kind
-    )
+    return tuple(item for item in features if isinstance(item, dict) and item.get("kind") == kind)
 
 
 def _vec(value: dict[str, object] | list[object]) -> Vector:
@@ -255,9 +247,7 @@ def _load_input_fallback() -> None:
 
 def _snap_to_surface(object_: bpy.types.Object) -> None:
     """将锚点投影到指定导板或牙列表面。"""
-    target = bpy.data.objects.get(
-        f"{SURFACE_PREFIX}{object_['tg_surface_role']}"
-    )
+    target = bpy.data.objects.get(f"{SURFACE_PREFIX}{object_['tg_surface_role']}")
     if target is None:
         return
     local = target.matrix_world.inverted() @ object_.location
@@ -294,18 +284,18 @@ def _surface_point(role: str, point: Vector) -> Vector:
 
 
 def _create_sleeve_controls() -> None:
-    """为每根导柱建立三项独立高度手柄。"""
+    """为每个种植位建立一组成对同步的三项高度手柄。"""
     for feature in _plan_features("sleeve"):
         raw = feature.get("geometry")
         if not isinstance(raw, dict):
             continue
-        index = int(raw["guide_index"])
+        ring_index = int(raw["ring_index"])
         parameters = raw.get("parameters")
         if not isinstance(parameters, dict):
             continue
         origin = _vec(parameters["axis_origin"])
         axis = _vec(parameters["axis"]).normalized()
-        override = _working_overrides().sleeve_for(index)
+        override = _working_overrides().sleeve_for(ring_index)
         values = {
             "closed": float(parameters["closed_bore_height"]),
             "platform": float(parameters["platform_height"]),
@@ -319,20 +309,20 @@ def _create_sleeve_controls() -> None:
             )
         for role, value in values.items():
             _control(
-                f"Sleeve_{index}_{role}",
+                f"Sleeve_Site_{ring_index}_{role}",
                 origin + axis * value,
                 "sleeve_height",
-                guide_index=index,
+                ring_index=ring_index,
                 role=role,
                 origin=list(origin),
                 axis=list(axis),
             )
         _hint_label(
-            f"Sleeve_{index}",
-            f"导柱 {index}",
+            f"Sleeve_Site_{ring_index}",
+            f"圆环 {ring_index} 双导柱",
             origin + axis * values["platform"] + Vector((0.0, 0.0, 1.8)),
             "SLEEVE",
-            f"sleeve:guide_{index}",
+            f"sleeve:site_{ring_index}",
             (0.1, 0.65, 1.0, 1.0),
         )
 
@@ -350,21 +340,15 @@ def _create_operation_controls() -> None:
         bitangent = normal.cross(tangent).normalized()
         override = _working_overrides().operation_window_for(site_index)
         working_tangent = (
-            float(raw["tangent_margin_mm"])
-            if override is None
-            else override.tangent_margin_mm
+            float(raw["tangent_margin_mm"]) if override is None else override.tangent_margin_mm
         )
         working_bitangent = (
-            float(raw["bitangent_margin_mm"])
-            if override is None
-            else override.bitangent_margin_mm
+            float(raw["bitangent_margin_mm"]) if override is None else override.bitangent_margin_mm
         )
         width = float(raw["base_width_mm"]) + 2.0 * working_tangent
         height = float(raw["base_height_mm"]) + 2.0 * working_bitangent
         working_offset = (
-            Vector((0.0, 0.0, 0.0))
-            if override is None
-            else Vector(override.center_offset_mm)
+            Vector((0.0, 0.0, 0.0)) if override is None else Vector(override.center_offset_mm)
         )
         front_margin = (
             float(raw["front_axial_margin_mm"])
@@ -377,9 +361,7 @@ def _create_operation_controls() -> None:
             else override.rear_axial_margin_mm
         )
         base_depth = float(raw["base_depth_mm"])
-        cutter_front_center = (
-            feature_center + normal * (base_depth / 2.0 + front_margin)
-        )
+        cutter_front_center = feature_center + normal * (base_depth / 2.0 + front_margin)
         visible_base_center = _surface_point("template", cutter_front_center)
         local_x = working_offset.dot(tangent)
         local_y = working_offset.dot(bitangent)
@@ -559,9 +541,7 @@ def _create_press_controls() -> None:
             index = int(str(feature["id"]).rsplit(":", 1)[-1])
             surface_anchor = _vec(raw["surface_anchor"])
             centerline_anchor = _vec(raw["centerline_anchor"])
-            override = _working_overrides().surface_anchor_for(
-                f"press_anchor_{index}"
-            )
+            override = _working_overrides().surface_anchor_for(f"press_anchor_{index}")
             normal = (
                 _vec(raw["surface_normal"]).normalized()
                 if override is None
@@ -569,16 +549,10 @@ def _create_press_controls() -> None:
             )
             control = _control(
                 f"PressAnchor_{index}",
-                (
-                    _vec(raw["surface_anchor"])
-                    if override is None
-                    else Vector(override.position_mm)
-                ),
+                (_vec(raw["surface_anchor"]) if override is None else Vector(override.position_mm)),
                 "surface_anchor",
                 anchor_id=f"press_anchor_{index}",
-                surface_role=(
-                    "template" if override is None else override.surface_role
-                ),
+                surface_role=("template" if override is None else override.surface_role),
                 normal=list(normal),
                 centerline_depth=(centerline_anchor - surface_anchor).length,
             )
@@ -649,7 +623,9 @@ def _create_observation_controls() -> None:
         end_fdi = int(raw["end_fdi"] if override is None else override.end_fdi)
         drop = float(definition["axis_drop_mm"] if override is None else override.axis_drop_mm)
         height = float(raw["height_mm"] if override is None else override.height_mm)
-        angle = float(definition["sweep_angle_deg"] if override is None else override.sweep_angle_degrees)
+        angle = float(
+            definition["sweep_angle_deg"] if override is None else override.sweep_angle_degrees
+        )
         occlusal = _vec(definition["zero_degree_occlusal_direction_global"]).normalized()
         exterior = _vec(definition["positive_90_degree_exterior_direction_global"]).normalized()
         start_candidate = next(
@@ -746,13 +722,16 @@ def _find_control(kind: str, **values: object) -> bpy.types.Object | None:
     return None
 
 
-def _update_sleeve_hint_label(index: int) -> None:
-    """让导柱入口标签跟随平台高度圆环。"""
+def _update_sleeve_hint_label(ring_index: int) -> None:
+    """让种植位双导柱入口标签跟随平台高度控制点。"""
 
-    platform = _find_control("sleeve_height", guide_index=index, role="platform")
+    platform = _find_control("sleeve_height", ring_index=ring_index, role="platform")
     if platform is None:
         return
-    _move_hint_label(f"Sleeve_{index}", platform.location + Vector((0.0, 0.0, 1.8)))
+    _move_hint_label(
+        f"Sleeve_Site_{ring_index}",
+        platform.location + Vector((0.0, 0.0, 1.8)),
+    )
 
 
 def _update_curve(name: str, points: list[Vector], cyclic: bool = False) -> None:
@@ -915,10 +894,7 @@ def _controls_for_feature(feature_id: str) -> dict[str, bpy.types.Object]:
 
     controls = {}
     for object_ in bpy.data.objects:
-        if (
-            object_.name.startswith(CONTROL_PREFIX)
-            and object_.get("tg_feature_id") == feature_id
-        ):
+        if object_.name.startswith(CONTROL_PREFIX) and object_.get("tg_feature_id") == feature_id:
             controls[str(object_.get("tg_role", object_.get("tg_kind", "main")))] = object_
     return controls
 
@@ -1013,8 +989,8 @@ def _sync_feature_values(feature_id: str) -> None:
         state.feature_fdi_end = int(controls["end"]["tg_fdi"])
         state.feature_value_1 = _axis_distance(controls["drop"])
         state.feature_value_2 = _axis_distance(controls["height"])
-        state.feature_value_3 = (
-            _axis_distance(controls["sweep"]) * float(controls["sweep"]["tg_scale"])
+        state.feature_value_3 = _axis_distance(controls["sweep"]) * float(
+            controls["sweep"]["tg_scale"]
         )
     elif feature_id == "press_junction":
         values = _semantic_values(controls["junction"])
@@ -1080,15 +1056,13 @@ def _feature_values_updated(
         base = route_start + tangent * distance
         control["tg_path_distance"] = distance
         control["tg_tangent"] = list(tangent)
-        control.location = base + Vector(control["tg_down"]) * max(
-            0.0, state.feature_value_2
-        )
+        control.location = base + Vector(control["tg_down"]) * max(0.0, state.feature_value_2)
         _update_connector_overlay(int(control["tg_guide_index"]))
     elif feature_id.startswith("sleeve:"):
         _move_on_axes(controls["closed"], (state.feature_value_1,))
         _move_on_axes(controls["platform"], (state.feature_value_2,))
         _move_on_axes(controls["total"], (state.feature_value_3,))
-        _update_sleeve_hint_label(int(controls["platform"]["tg_guide_index"]))
+        _update_sleeve_hint_label(int(controls["platform"]["tg_ring_index"]))
     elif feature_id.startswith("observation_window:"):
         _move_on_axes(controls["drop"], (state.feature_value_1,))
         _update_observation_overlay(
@@ -1204,19 +1178,12 @@ def _update_press_overlay() -> None:
     if junction is None:
         return
     anchors = sorted(
-        (
-            item
-            for item in bpy.data.objects
-            if item.get("tg_kind") == "surface_anchor"
-        ),
+        (item for item in bpy.data.objects if item.get("tg_kind") == "surface_anchor"),
         key=lambda item: str(item.get("tg_anchor_id", "")),
     )
     for index, anchor in enumerate(anchors, start=1):
         normal = Vector(anchor["tg_normal"]).normalized()
-        centerline_anchor = (
-            anchor.location
-            + normal * float(anchor.get("tg_centerline_depth", 0.0))
-        )
+        centerline_anchor = anchor.location + normal * float(anchor.get("tg_centerline_depth", 0.0))
         _update_curve(
             f"Press_{index}",
             [centerline_anchor, junction.location.copy()],
@@ -1253,9 +1220,7 @@ def _update_observation_overlay(
             for endpoint in (start, end):
                 candidates = json.loads(str(endpoint["tg_candidates"]))
                 current = next(
-                    item
-                    for item in candidates
-                    if int(item["fdi"]) == int(endpoint["tg_fdi"])
+                    item for item in candidates if int(item["fdi"]) == int(endpoint["tg_fdi"])
                 )
                 endpoint.location = _vec(current["point"]) + drop_vector
                 endpoint["tg_axis_origin"] = list(endpoint.location)
@@ -1272,9 +1237,7 @@ def _update_observation_overlay(
                 scalar["tg_origin"] = list(midpoint)
                 scalar.location = midpoint + Vector(scalar["tg_axis"]) * value
     for endpoint in (start, end):
-        label = bpy.data.objects.get(
-            f"{OVERLAY_PREFIX}FDI_{window_id}_{endpoint['tg_role']}"
-        )
+        label = bpy.data.objects.get(f"{OVERLAY_PREFIX}FDI_{window_id}_{endpoint['tg_role']}")
         if label is not None:
             label.location = endpoint.location + Vector((0.0, 0.0, 1.0))
             label.data.body = f"FDI {endpoint['tg_fdi']}"
@@ -1338,11 +1301,7 @@ def _update_window_overlay(index: int) -> None:
     _update_curve(f"Window_{index}", projected, True)
     overlay = bpy.data.objects.get(f"{OVERLAY_PREFIX}Window_{index}")
     if overlay is not None:
-        overlay.color = (
-            (1.0, 0.15, 0.08, 1.0)
-            if projection_failed
-            else (0.15, 0.9, 0.45, 1.0)
-        )
+        overlay.color = (1.0, 0.15, 0.08, 1.0) if projection_failed else (0.15, 0.9, 0.45, 1.0)
     center["tg_projection_failed"] = projection_failed
     _move_hint_label(
         f"Window_{index}",
@@ -1367,21 +1326,21 @@ def _constrain_control(object_: bpy.types.Object) -> None:
             object_.location = origin + axis * distance
             return
         if kind == "sleeve_height":
-            guide_index = int(object_["tg_guide_index"])
+            ring_index = int(object_["tg_ring_index"])
             role = str(object_["tg_role"])
             values = {}
             for candidate_role in ("closed", "platform", "total"):
                 candidate = _find_control(
                     "sleeve_height",
-                    guide_index=guide_index,
+                    ring_index=ring_index,
                     role=candidate_role,
                 )
                 if candidate is not None:
                     candidate_origin = Vector(candidate["tg_origin"])
                     candidate_axis = Vector(candidate["tg_axis"])
-                    values[candidate_role] = (
-                        candidate.location - candidate_origin
-                    ).dot(candidate_axis)
+                    values[candidate_role] = (candidate.location - candidate_origin).dot(
+                        candidate_axis
+                    )
             if role == "closed" and "platform" in values:
                 distance = min(distance, values["platform"] - 0.05)
             elif role == "platform":
@@ -1502,11 +1461,7 @@ def _editor_depsgraph_update(_scene: bpy.types.Scene, _depsgraph: object) -> Non
                 _sync_feature_values(feature_id)
                 features = bpy.context.scene.twin_guide_features
                 matching = next(
-                    (
-                        index
-                        for index, item in enumerate(features)
-                        if item.feature_id == feature_id
-                    ),
+                    (index for index, item in enumerate(features) if item.feature_id == feature_id),
                     None,
                 )
                 if matching is not None:
@@ -1564,12 +1519,12 @@ def _feature_adapter_value(feature_id: str) -> EditorOverrides:
         )
         return with_operation_window(current, value)
     if feature_id.startswith("sleeve:"):
-        index = int(controls["platform"]["tg_guide_index"])
-        value = SleeveGuideOverride(
-            index,
-            _axis_distance(controls["total"]),
-            _axis_distance(controls["platform"]),
-            _axis_distance(controls["closed"]),
+        ring_index = int(controls["platform"]["tg_ring_index"])
+        value = SleeveSiteOverride(
+            ring_index,
+            round(_axis_distance(controls["total"]), 2),
+            round(_axis_distance(controls["platform"]), 2),
+            round(_axis_distance(controls["closed"]), 2),
         )
         return with_sleeve(current, value)
     if feature_id.startswith("observation_window:"):
@@ -1592,8 +1547,7 @@ def _feature_adapter_value(feature_id: str) -> EditorOverrides:
             _axis_distance(controls["height"]),
             min(
                 180.0,
-                _axis_distance(controls["sweep"])
-                * float(controls["sweep"]["tg_scale"]),
+                _axis_distance(controls["sweep"]) * float(controls["sweep"]["tg_scale"]),
             ),
         )
         if not definition and previous is not None:
@@ -1748,9 +1702,7 @@ def _start_job(mode: str) -> None:
         return
     overrides = _SESSION.working_overrides
     changed_ids = (
-        changed_feature_ids(_LAST_PREVIEW_OVERRIDES, overrides)
-        if mode == "preview"
-        else ()
+        changed_feature_ids(_LAST_PREVIEW_OVERRIDES, overrides) if mode == "preview" else ()
     )
     _JOB_CONFIG_PATH = _temporary_job_config(overrides)
     if mode == "plan":
@@ -1863,20 +1815,14 @@ def _poll_job() -> float:
             formal = _CONFIG.output_directory / "twin_guide.stl"  # type: ignore[union-attr]
             snapshot_path = Path(str(manifest.get("editor_snapshot_path", "")))
             revision = int(manifest.get("revision", -1))
-            snapshot = (
-                _load_editor_plan(snapshot_path)
-                if snapshot_path.is_file()
-                else None
-            )
+            snapshot = _load_editor_plan(snapshot_path) if snapshot_path.is_file() else None
             if (
                 formal.is_file()
                 and snapshot is not None
                 and editor_snapshot_matches(
                     snapshot,
                     revision=revision,
-                    geometry_fingerprint=str(
-                        manifest.get("geometry_fingerprint", "")
-                    ),
+                    geometry_fingerprint=str(manifest.get("geometry_fingerprint", "")),
                 )
             ):
                 _EDITOR_PLAN_VALUE = snapshot
@@ -2052,7 +1998,7 @@ def _gizmo_set_value(axis_index: int, value: float) -> None:
         site_index = int(object_["tg_site_index"])
         _update_window_overlay(site_index)
     elif kind == "sleeve_height":
-        _update_sleeve_hint_label(int(object_["tg_guide_index"]))
+        _update_sleeve_hint_label(int(object_["tg_ring_index"]))
     elif kind == "connector_node":
         _update_connector_overlay(int(object_["tg_guide_index"]))
     elif kind == "observation_endpoint":
@@ -2115,6 +2061,7 @@ def _semantic_values(
 
 class TwinGuideState(bpy.types.PropertyGroup):
     """保存彼此独立的病例、修改、任务和检验状态。"""
+
     config_path: bpy.props.StringProperty(name="病例配置", subtype="FILE_PATH")
     case_label: bpy.props.StringProperty(name="当前病例")
     review_status: bpy.props.StringProperty(name="病例审核")
@@ -2128,12 +2075,12 @@ class TwinGuideState(bpy.types.PropertyGroup):
         default=-1,
         update=_feature_index_updated,
     )
-    feature_value_1: bpy.props.FloatProperty(precision=3, update=_feature_values_updated)
-    feature_value_2: bpy.props.FloatProperty(precision=3, update=_feature_values_updated)
-    feature_value_3: bpy.props.FloatProperty(precision=3, update=_feature_values_updated)
-    feature_value_4: bpy.props.FloatProperty(precision=3, update=_feature_values_updated)
-    feature_value_5: bpy.props.FloatProperty(precision=3, update=_feature_values_updated)
-    feature_value_6: bpy.props.FloatProperty(precision=3, update=_feature_values_updated)
+    feature_value_1: bpy.props.FloatProperty(precision=2, update=_feature_values_updated)
+    feature_value_2: bpy.props.FloatProperty(precision=2, update=_feature_values_updated)
+    feature_value_3: bpy.props.FloatProperty(precision=2, update=_feature_values_updated)
+    feature_value_4: bpy.props.FloatProperty(precision=2, update=_feature_values_updated)
+    feature_value_5: bpy.props.FloatProperty(precision=2, update=_feature_values_updated)
+    feature_value_6: bpy.props.FloatProperty(precision=2, update=_feature_values_updated)
     feature_fdi_start: bpy.props.IntProperty(min=11, max=48, update=_feature_fdi_updated)
     feature_fdi_end: bpy.props.IntProperty(min=11, max=48, update=_feature_fdi_updated)
     surface_role: bpy.props.EnumProperty(
@@ -2158,8 +2105,7 @@ class TwinGuideModelViewOperator(bpy.types.Operator):
         """编辑数据准备完成且未锁定时允许切换结构。"""
 
         return bool(
-            _EDITOR_PLAN_PATH is not None
-            and not context.scene.twin_guide_state.editing_locked
+            _EDITOR_PLAN_PATH is not None and not context.scene.twin_guide_state.editing_locked
         )
 
     def execute(self, context: bpy.types.Context) -> set[str]:
@@ -2348,9 +2294,7 @@ class TwinGuideSurfaceDragOperator(bpy.types.Operator):
                 object_.location = self._start_location
             if self._start_normal is not None:
                 object_["tg_normal"] = list(self._start_normal)
-                object_.rotation_quaternion = self._start_normal.to_track_quat(
-                    "Z", "Y"
-                )
+                object_.rotation_quaternion = self._start_normal.to_track_quat("Z", "Y")
                 anchor_index = str(object_["tg_anchor_id"]).rsplit("_", 1)[-1]
                 _move_hint_label(
                     f"PressAnchor_{anchor_index}",
@@ -2383,15 +2327,9 @@ class TwinGuideSurfaceDragOperator(bpy.types.Operator):
         from bpy_extras import view3d_utils
 
         coordinate = (event.mouse_x - region.x, event.mouse_y - region.y)
-        origin = view3d_utils.region_2d_to_origin_3d(
-            region, space.region_3d, coordinate
-        )
-        direction = view3d_utils.region_2d_to_vector_3d(
-            region, space.region_3d, coordinate
-        )
-        target = bpy.data.objects.get(
-            f"{SURFACE_PREFIX}{object_['tg_surface_role']}"
-        )
+        origin = view3d_utils.region_2d_to_origin_3d(region, space.region_3d, coordinate)
+        direction = view3d_utils.region_2d_to_vector_3d(region, space.region_3d, coordinate)
+        target = bpy.data.objects.get(f"{SURFACE_PREFIX}{object_['tg_surface_role']}")
         if target is None:
             return {"RUNNING_MODAL"}
         inverse = target.matrix_world.inverted()
@@ -2421,6 +2359,7 @@ class TwinGuideSurfaceDragOperator(bpy.types.Operator):
 
 class TwinGuideSaveOperator(bpy.types.Operator):
     """仅在明确点击时原子写回病例覆盖值。"""
+
     bl_idname = "twinguide.save_adjustments"
     bl_label = "保存调整"
 
@@ -2451,6 +2390,7 @@ class TwinGuideSaveOperator(bpy.types.Operator):
 
 class TwinGuideResetSelectedOperator(bpy.types.Operator):
     """撤销最近一次已确认的语义编辑。"""
+
     bl_idname = "twinguide.reset_selected"
     bl_label = "撤销"
 
@@ -2492,6 +2432,7 @@ class TwinGuideRedoOperator(bpy.types.Operator):
 
 class TwinGuideRestoreOperator(bpy.types.Operator):
     """从已保存阶段结果恢复全部控制点。"""
+
     bl_idname = "twinguide.restore_saved"
     bl_label = "恢复已保存值"
 
@@ -2513,6 +2454,7 @@ class TwinGuideRestoreOperator(bpy.types.Operator):
 
 class TwinGuidePreviewOperator(bpy.types.Operator):
     """启动不运行几何检验的实体预览。"""
+
     bl_idname = "twinguide.update_preview"
     bl_label = "更新预览"
 
@@ -2539,6 +2481,7 @@ class TwinGuidePreviewOperator(bpy.types.Operator):
 
 class TwinGuideFinalOperator(bpy.types.Operator):
     """保存、生成候选、检验并安全提升正式输出。"""
+
     bl_idname = "twinguide.final_export"
     bl_label = "确认导出并检验"
 
@@ -2573,6 +2516,7 @@ class TwinGuideFinalOperator(bpy.types.Operator):
 
 class TwinGuideCancelOperator(bpy.types.Operator):
     """取消当前后台生成任务。"""
+
     bl_idname = "twinguide.cancel_job"
     bl_label = "取消后台任务"
 
@@ -2660,9 +2604,7 @@ class _TwinGuidePanelRenderer:
         elif feature_id.startswith("connector:"):
             labels = ("沿线位置", "向下偏移 (mm)")
             if _CONFIG is not None:
-                box.label(
-                    text=f"梁直径：{_CONFIG.geometry.connector_diameter_mm:.3f} mm"
-                )
+                box.label(text=f"梁直径：{_CONFIG.geometry.connector_diameter_mm:.3f} mm")
                 blocks = _CONFIG.geometry.connection_blocks
                 enabled = [
                     label
@@ -2706,16 +2648,10 @@ class _TwinGuidePanelRenderer:
         if not state.show_advanced:
             return
         location = selected.location
-        box.label(
-            text=(
-                f"世界坐标：({location.x:.3f}, {location.y:.3f}, {location.z:.3f}) mm"
-            )
-        )
+        box.label(text=(f"世界坐标：({location.x:.3f}, {location.y:.3f}, {location.z:.3f}) mm"))
         if "tg_normal" in selected:
             normal = Vector(selected["tg_normal"])
-            box.label(
-                text=f"法向：({normal.x:.4f}, {normal.y:.4f}, {normal.z:.4f})"
-            )
+            box.label(text=f"法向：({normal.x:.4f}, {normal.y:.4f}, {normal.z:.4f})")
 
     def draw(self, context: bpy.types.Context) -> None:
         """绘制当前病例编辑工作流。"""
@@ -2819,7 +2755,9 @@ def _draw_twinguide_header(
     state = context.scene.twin_guide_state
     layout = self.layout
     layout.separator_spacer()
-    layout.label(text=state.review_status, icon="CHECKMARK" if state.review_status == "已确认" else "INFO")
+    layout.label(
+        text=state.review_status, icon="CHECKMARK" if state.review_status == "已确认" else "INFO"
+    )
     layout.label(text="未保存" if state.dirty else "已保存")
     layout.label(text=f"预览：{state.preview_status}")
     layout.label(text=f"检验：{state.validation_status}")
@@ -2837,9 +2775,7 @@ def register() -> None:
     for item in CLASSES:
         bpy.utils.register_class(item)
     bpy.types.Scene.twin_guide_state = bpy.props.PointerProperty(type=TwinGuideState)
-    bpy.types.Scene.twin_guide_features = bpy.props.CollectionProperty(
-        type=TwinGuideFeatureItem
-    )
+    bpy.types.Scene.twin_guide_features = bpy.props.CollectionProperty(type=TwinGuideFeatureItem)
     if _editor_depsgraph_update not in bpy.app.handlers.depsgraph_update_post:
         bpy.app.handlers.depsgraph_update_post.append(_editor_depsgraph_update)
     if not bpy.app.timers.is_registered(_poll_job):
@@ -2879,9 +2815,7 @@ def launch_from_argv() -> None:
     state.case_label = f"当前病例：{_CONFIG.case_id}"
     review = production_review_status(_CONFIG)
     state.review_status = "已确认" if review.confirmed else "待确认"
-    model_path, model_snapshot_path, model_snapshot = _initial_model(
-        parsed.config.resolve()
-    )
+    model_path, model_snapshot_path, model_snapshot = _initial_model(parsed.config.resolve())
     if model_path is not None:
         _load_model(model_path)
         if model_snapshot is not None:
@@ -2897,11 +2831,9 @@ def launch_from_argv() -> None:
     if not valid_plan and cached_plan.is_file():
         try:
             plan_value = _load_editor_plan(cached_plan)
-            valid_plan = (
-                plan_value.get("schema_version") == EDITOR_PLAN_SCHEMA
-                and plan_value.get("structure_fingerprint")
-                == editor_plan_fingerprint(_CONFIG, parsed.config.resolve())
-            )
+            valid_plan = plan_value.get("schema_version") == EDITOR_PLAN_SCHEMA and plan_value.get(
+                "structure_fingerprint"
+            ) == editor_plan_fingerprint(_CONFIG, parsed.config.resolve())
         except (OSError, ValueError, json.JSONDecodeError):
             valid_plan = False
     if valid_plan:

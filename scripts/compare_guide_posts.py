@@ -108,7 +108,12 @@ def main() -> None:
     )
     generated_axis = -np.asarray(generated["ring_outward_axis"], dtype=float)
     generated_pair = np.asarray(generated["guide_pair_direction"], dtype=float)
-    measured_generated_gap = float(generated["measured_exported_d_face_spacing_mm"])
+    measured_generated_gap = float(
+        generated.get(
+            "measured_exported_platform_spacing_mm",
+            generated.get("measured_exported_d_face_spacing_mm"),
+        )
+    )
     result = {
         "generated_guide_stl": generated["output_stl"],
         "reference_guide_stl": str(arguments.reference_guide_stl.resolve()),

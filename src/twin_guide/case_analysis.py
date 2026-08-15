@@ -115,9 +115,13 @@ def _apply_sleeve_editor_override(
     config: CaseConfig,
     guide: GuideSleeve,
 ) -> GuideSleeve:
-    """把图形编辑器的单导柱高度覆盖值应用到已识别导柱。"""
+    """把图形编辑器的种植位成对高度覆盖值应用到导柱。"""
 
-    override = config.editor_overrides.sleeve_for(guide.guide_index)
+    site_index = (guide.guide_index - 1) // 2
+    if site_index >= len(config.guide_posts):
+        return guide
+    ring_index = config.guide_posts[site_index].ring_index
+    override = config.editor_overrides.sleeve_for(ring_index)
     if override is None:
         return guide
     return replace(
@@ -249,11 +253,11 @@ def _build_template_only_guides(
         raise GeometryError("传统模板 STL 未解析为单个三角网格")
     rings = estimate_template_rings(source)
     arch_frame = _dental_arch_frame(config, source)
-    configured = config.sleeve
-    z_platform = configured.height_mm - configured.platform_height_mm
     guides: list[GuideSleeve] = []
     operation_features: list[OperationFeature] = []
     for site_index, guide_post in enumerate(config.guide_posts, 1):
+        configured = guide_post.resolved_sleeve(config.sleeve)
+        z_platform = configured.height_mm - configured.platform_height_mm
         if guide_post.ring_index > len(rings):
             raise GeometryError(f"guide_posts[{site_index - 1}].ring_index 超出传统模板圆环数量")
         ring = rings[guide_post.ring_index - 1]
@@ -280,6 +284,7 @@ def _build_template_only_guides(
                 inner_arc_angle=math.radians(configured.inner_arc_angle_degrees),
                 outer_arc_angle=math.radians(configured.outer_arc_angle_degrees),
                 platform_slot_width=configured.platform_slot_width_mm,
+                platform_overhang=configured.platform_overhang_mm,
                 top_recess_radius=configured.top_recess_radius_mm,
                 top_recess_depth=configured.top_recess_depth_mm,
             )

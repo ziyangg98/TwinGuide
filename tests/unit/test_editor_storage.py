@@ -5,7 +5,7 @@ from pathlib import Path
 from twin_guide.config import (
     ConnectorAvoidanceOverride,
     EditorOverrides,
-    SleeveGuideOverride,
+    SleeveSiteOverride,
 )
 from twin_guide.config.editor_storage import save_editor_overrides
 
@@ -17,7 +17,7 @@ class EditorStorageTests(unittest.TestCase):
             original = "# clinician note\ncase: {id: demo}\nreview: {}\n"
             path.write_text(original, encoding="utf-8")
             overrides = EditorOverrides(
-                sleeve_guides=(SleeveGuideOverride(1, 16.0, 9.0, 4.0),),
+                sleeve_sites=(SleeveSiteOverride(1, 16.0, 9.0, 4.0),),
                 connector_avoidance=(ConnectorAvoidanceOverride(1, 0.4, 2.5),),
             )
 
@@ -25,13 +25,13 @@ class EditorStorageTests(unittest.TestCase):
             first = path.read_text(encoding="utf-8")
             save_editor_overrides(
                 path,
-                EditorOverrides(
-                    sleeve_guides=(SleeveGuideOverride(1, 17.0, 10.0, 5.0),)
-                ),
+                EditorOverrides(sleeve_sites=(SleeveSiteOverride(1, 17.0, 10.0, 5.0),)),
             )
 
             self.assertEqual(backup.read_text(encoding="utf-8"), original)
             self.assertIn("# clinician note", first)
+            self.assertIn("sleeve_sites:", first)
+            self.assertIn("ring_index: 1", first)
             self.assertIn("path_fraction: 0.4", first)
             self.assertEqual(backup.read_text(encoding="utf-8"), original)
 

@@ -31,10 +31,10 @@ def changed_feature_ids(
                 changed.append(feature_id(item_key))
 
     compare(
-        previous.sleeve_guides,
-        current.sleeve_guides,
-        lambda item: item.guide_index,
-        lambda index: f"sleeve:guide_{index}",
+        previous.sleeve_sites,
+        current.sleeve_sites,
+        lambda item: item.ring_index,
+        lambda index: f"sleeve:site_{index}",
     )
     compare(
         previous.operation_windows,

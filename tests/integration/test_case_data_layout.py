@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import unittest
 from pathlib import Path
 
@@ -12,60 +13,77 @@ from twin_guide.config import CaseConfig
 
 
 class CaseDataLayoutTests(unittest.TestCase):
-    """检查仓库外病例数据中的规范入口与来源文件映射。"""
+    """检查扁平匿名病例目录、索引与正式运行配置。"""
 
     @classmethod
     def setUpClass(cls) -> None:
         cls.project = Path(__file__).resolve().parents[2]
         cls.data_root = cls.project.parent / "data"
-        if not cls.data_root.is_dir():
+        cls.dataset = cls.data_root / "cases"
+        if not (cls.dataset / "index.yaml").is_file():
             raise unittest.SkipTest("未提供仓库外 TwinGuide 病例数据")
-        cls.dataset = cls.data_root / "cases/single"
-        cls.case_names = tuple(
-            f"tooth-{value}" for value in (11, 12, 13, 14, 15, 16, 17, 47)
+        cls.index = yaml.safe_load(
+            (cls.dataset / "index.yaml").read_text(encoding="utf-8")
         )
-        cls.multiple_dataset = cls.data_root / "cases/multiple"
-        cls.multiple_case_names = (
-            "teeth-12-13",
-            "teeth-14-15",
-            "teeth-15-16",
-            "teeth-16-17",
+        cls.case_records = tuple(cls.index["cases"])
+        cls.configured_records = tuple(
+            record
+            for record in cls.case_records
+            if record["status"] == "configured"
         )
+        cls.configured_by_fdis = {
+            tuple(record["implant_fdis"]): cls.dataset / record["path"]
+            for record in cls.configured_records
+        }
+
+    def test_index_and_directories_are_consistent(self) -> None:
+        """索引必须逐一覆盖匿名病例目录，且不得使用旧分类路径。"""
+
+        indexed = {record["path"] for record in self.case_records}
+        observed = {path.name for path in self.dataset.glob("case-*") if path.is_dir()}
+        self.assertEqual(indexed, observed)
+        self.assertEqual(self.index["case_count"], len(observed))
+        for name in observed:
+            self.assertRegex(name, r"^case-[0-9a-f]{12}$")
+            self.assertIsNone(re.search(r"AI[_-]|tooth|teeth|副本", name, re.I))
+
+    def test_case_yaml_presence_matches_status(self) -> None:
+        """只有 configured 病例可以在根目录提供正式 case.yaml。"""
+
+        for record in self.case_records:
+            with self.subTest(case=record["id"]):
+                case_directory = self.dataset / record["path"]
+                metadata = yaml.safe_load(
+                    (case_directory / "metadata.yaml").read_text(encoding="utf-8")
+                )
+                self.assertEqual(metadata["id"], record["id"])
+                self.assertEqual(metadata["patient_id"], record["patient_id"])
+                self.assertEqual(metadata["status"], record["status"])
+                self.assertEqual(
+                    (case_directory / "case.yaml").is_file(),
+                    record["status"] == "configured",
+                )
 
     def test_case_yaml_object_paths_resolve_inside_case_directory(self) -> None:
-        """每个 YAML 的启用对象必须指向本病例的规范输入目录。"""
+        """每个正式 YAML 的启用对象必须指向本病例目录。"""
 
-        datasets = (
-            (self.dataset, self.case_names),
-            (self.multiple_dataset, self.multiple_case_names),
-        )
-        for dataset, case_names in datasets:
-            for case_name in case_names:
-                with self.subTest(case=case_name):
-                    case_directory = dataset / case_name
-                    self._assert_case_object_paths(case_directory)
-
-    def test_blender_wrapper_returns_nonzero_for_python_failures(self) -> None:
-        """Blender 启动器必须把未捕获 Python 异常传播为失败退出码。"""
-
-        wrapper = (self.project / "scripts/blender.sh").read_text(encoding="utf-8")
-        self.assertNotIn("--gpu-backend", wrapper)
-        self.assertIn("--python-exit-code 1", wrapper)
+        for record in self.configured_records:
+            with self.subTest(case=record["id"]):
+                self._assert_case_object_paths(self.dataset / record["path"])
 
     def _assert_case_object_paths(self, case_directory: Path) -> None:
-        """检查一份病例 YAML 的全部对象路径。"""
         case_yaml = case_directory / "case.yaml"
-        self.assertTrue(case_yaml.is_file())
         content = yaml.safe_load(case_yaml.read_text(encoding="utf-8"))
+        self.assertEqual(content["case"]["id"], case_directory.name)
         objects = content["objects"]
         paths: list[str] = []
         for key in ("dental", "guide", "cutter"):
             value = objects.get(key, {}).get("path")
             if value:
                 paths.append(value)
-        for key in ("handpiece",):
-            records = objects.get(key, {}).get("files", [])
-            paths.extend(record["path"] for record in records)
+        paths.extend(
+            record["path"] for record in objects.get("handpiece", {}).get("files", [])
+        )
         for value in paths:
             resolved = (case_directory / value).resolve()
             self.assertTrue(resolved.is_relative_to(case_directory.resolve()))
@@ -74,10 +92,10 @@ class CaseDataLayoutTests(unittest.TestCase):
     def test_tooth_14_uses_standard_y_beam_without_terminal_u_extension(
         self,
     ) -> None:
-        """14 号病例不应生成临床不需要的尾部 U 型梁。"""
+        """14号配置不应生成临床不需要的尾部U型梁。"""
 
         content = yaml.safe_load(
-            (self.dataset / "tooth-14" / "case.yaml").read_text(encoding="utf-8")
+            (self.configured_by_fdis[(14,)] / "case.yaml").read_text(encoding="utf-8")
         )
         design = content["design"]
         self.assertNotIn("guide_terminal_u_extension", design)
@@ -92,184 +110,82 @@ class CaseDataLayoutTests(unittest.TestCase):
             [45.0, 60.0],
         )
 
-    def test_all_cases_have_no_legacy_algorithm_selection(self) -> None:
-        """唯一生产算法不再需要病例级策略开关。"""
+    def test_configured_cases_use_current_design_schema(self) -> None:
+        """正式病例不再配置旧算法或导管实体来源分支。"""
 
-        datasets = (
-            (self.dataset, self.case_names),
-            (self.multiple_dataset, self.multiple_case_names),
-        )
-        for dataset, case_names in datasets:
-            for case_name in case_names:
-                with self.subTest(case=case_name):
-                    case_yaml = dataset / case_name / "case.yaml"
-                    content = yaml.safe_load(case_yaml.read_text(encoding="utf-8"))
-                    self.assertNotIn("algorithms", content["design"])
+        for record in self.configured_records:
+            case_yaml = self.dataset / record["path"] / "case.yaml"
+            content = yaml.safe_load(case_yaml.read_text(encoding="utf-8"))
+            with self.subTest(case=record["id"]):
+                self.assertNotIn("algorithms", content["design"])
+                self.assertNotIn("sleeve_geometry", content["design"])
+                self.assertNotIn("sleeve", content["objects"])
 
-    def test_multiple_cases_define_continuous_frame_parameters(self) -> None:
-        """多颗 YAML 完整定义跨两个种植位的连接梁和按压梁。"""
+    def test_configured_cases_use_independent_guide_anchor_records(self) -> None:
+        """正式病例逐锚点声明牙位、侧别和角度。"""
 
-        for case_name in self.multiple_case_names:
-            with self.subTest(case=case_name):
-                case_yaml = self.multiple_dataset / case_name / "case.yaml"
-                content = yaml.safe_load(case_yaml.read_text(encoding="utf-8"))
-                design = content["design"]
-                planning = content["planning"]
-                self.assertEqual(len(planning["implant_sites"]), 2)
-                frame = planning["connector_frame"]
-                guide_anchor_records = design["guide_anchors"]["anchors"]
-                endpoint_ids = list(
-                    dict.fromkeys(record["endpoint"] for record in guide_anchor_records)
-                )
-                if case_name == "teeth-16-17":
-                    self.assertEqual(
-                        endpoint_ids,
-                        ["s_mesial"],
-                    )
-                    self.assertEqual(
-                        frame["path_sequence"],
-                        [
-                            "s_mesial",
-                            "implant_site_1",
-                            "implant_site_2",
-                            "terminal_distal_common_node",
-                        ],
-                    )
-                else:
-                    self.assertEqual(
-                        endpoint_ids,
-                        ["s_minus", "s_plus"],
-                    )
-                    self.assertEqual(
-                        frame["path_sequence"],
-                        ["s_minus", "implant_site_1", "implant_site_2", "s_plus"],
-                    )
-                for endpoint_id in endpoint_ids:
-                    endpoint_records = [
-                        record
-                        for record in guide_anchor_records
-                        if record["endpoint"] == endpoint_id
-                    ]
-                    self.assertEqual(len(endpoint_records), 2)
-                    self.assertEqual(
-                        {record["side"] for record in endpoint_records},
-                        {"u_side", "back_u_side"},
-                    )
-                    for record in endpoint_records:
-                        station = record["station"]
-                        self.assertIn(
-                            station["type"],
-                            {"tooth_center", "tooth_pair_midpoint"},
-                        )
-                        if station["type"] == "tooth_center":
-                            self.assertIsInstance(station["fdi"], int)
-                        else:
-                            self.assertEqual(len(station["fdis"]), 2)
-                self.assertEqual(frame["levels"], ["upper", "lower"])
-                press_beam = design["press_beam"]
-                expected_press_station_count = (
-                    3 if press_beam["mode"] == "three_tooth_anchors_y" else 2
-                )
-                self.assertEqual(
-                    len(press_beam["stations"]), expected_press_station_count
-                )
-                if press_beam["mode"] == "inner_sleeve_upper_y":
-                    self.assertEqual(
-                        press_beam["sleeve_anchor_selection"]["distance_score"],
-                        "maximin_to_two_guide_anchors",
-                    )
-                else:
-                    self.assertNotIn("sleeve_anchor_selection", press_beam)
-                operation = planning["operation_windows"]
-                self.assertEqual(operation["mode"], "per_implant_site")
-                self.assertEqual(operation["overlap_rule"], "union_cutters")
-                self.assertEqual(operation["cut_target"], "guide_template_only")
-                self.assertEqual(len(operation["sites"]), 2)
-
-    def test_all_cases_use_independent_guide_anchor_records(self) -> None:
-        """全部正式病例逐锚点声明牙位、侧别和角度，不再依赖成对站位。"""
-
-        datasets = (
-            (self.dataset, self.case_names),
-            (self.multiple_dataset, self.multiple_case_names),
-        )
-        terminal_cases = {"tooth-17", "teeth-16-17"}
-        for dataset, case_names in datasets:
-            for case_name in case_names:
-                with self.subTest(case=case_name):
-                    case_yaml = dataset / case_name / "case.yaml"
-                    content = yaml.safe_load(case_yaml.read_text(encoding="utf-8"))
-                    guide_anchors = content["design"]["guide_anchors"]
-                    self.assertNotIn("stations", guide_anchors)
-                    self.assertNotIn("u_side_ray_angle_degrees", guide_anchors)
-                    self.assertNotIn("back_u_side_ray_angle_degrees", guide_anchors)
-                    records = guide_anchors["anchors"]
-                    expected_count = 2 if case_name in terminal_cases else 4
-                    self.assertEqual(len(records), expected_count)
-                    for record in records:
-                        self.assertIn(record["side"], {"u_side", "back_u_side"})
-                        self.assertIn("station", record)
-                        self.assertGreater(record["ray_angle_degrees"], 0.0)
-
-    def test_all_cases_use_the_single_reconstructed_sleeve_path(self) -> None:
-        """正式病例不再配置导管实体来源分支。"""
-
-        datasets = (
-            (self.dataset, self.case_names),
-            (self.multiple_dataset, self.multiple_case_names),
-        )
-        for dataset, case_names in datasets:
-            for case_name in case_names:
-                with self.subTest(case=case_name):
-                    case_yaml = dataset / case_name / "case.yaml"
-                    content = yaml.safe_load(case_yaml.read_text(encoding="utf-8"))
-                    self.assertNotIn("sleeve_geometry", content["design"])
+        for record in self.configured_records:
+            case_yaml = self.dataset / record["path"] / "case.yaml"
+            content = yaml.safe_load(case_yaml.read_text(encoding="utf-8"))
+            guide_anchors = content["design"]["guide_anchors"]
+            with self.subTest(case=record["id"]):
+                self.assertNotIn("stations", guide_anchors)
+                self.assertNotIn("u_side_ray_angle_degrees", guide_anchors)
+                self.assertNotIn("back_u_side_ray_angle_degrees", guide_anchors)
+                records = guide_anchors["anchors"]
+                expected_count = 2 if record["implant_fdis"] == [17] else 4
+                self.assertEqual(len(records), expected_count)
+                for anchor in records:
+                    self.assertIn(anchor["side"], {"u_side", "back_u_side"})
+                    self.assertIn("station", anchor)
+                    self.assertGreater(anchor["ray_angle_degrees"], 0.0)
 
     def test_press_beam_station_records_use_only_applicable_fields(self) -> None:
-        """按压梁站位不保留模式无关的 ID 或显式空字段。"""
+        """按压梁站位不保留模式无关字段。"""
 
-        datasets = (
-            (self.dataset, self.case_names),
-            (self.multiple_dataset, self.multiple_case_names),
-        )
-        for dataset, case_names in datasets:
-            for case_name in case_names:
-                case_yaml = dataset / case_name / "case.yaml"
-                content = yaml.safe_load(case_yaml.read_text(encoding="utf-8"))
-                for station in content["design"]["press_beam"]["stations"]:
-                    with self.subTest(case=case_name, station=station):
-                        expected = {"type", "ray_angle_degrees"}
-                        if station["type"] == "tooth_center":
-                            expected.add("fdi")
-                        else:
-                            self.assertEqual(station["type"], "tooth_pair_midpoint")
-                            expected.add("fdis")
-                        self.assertEqual(set(station), expected)
+        for record in self.configured_records:
+            case_yaml = self.dataset / record["path"] / "case.yaml"
+            content = yaml.safe_load(case_yaml.read_text(encoding="utf-8"))
+            for station in content["design"]["press_beam"]["stations"]:
+                with self.subTest(case=record["id"], station=station):
+                    expected = {"type", "ray_angle_degrees"}
+                    if station["type"] == "tooth_center":
+                        expected.add("fdi")
+                    else:
+                        self.assertEqual(station["type"], "tooth_pair_midpoint")
+                        expected.add("fdis")
+                    self.assertEqual(set(station), expected)
 
     def test_migrated_case_yaml_is_complete_and_loadable(self) -> None:
-        """已迁移病例只用传统模板和牙列提供完整运行配置。"""
+        """每份正式配置均可加载，且内部ID与匿名目录一致。"""
 
-        path = self.dataset / "tooth-17/case.yaml"
-        config = CaseConfig.from_yaml(path)
-        self.assertEqual(config.case_id, "single_17")
-        self.assertTrue(config.inputs.template.is_file())
-        self.assertTrue(config.inputs.patient_dentition.is_file())
-        self.assertGreaterEqual(len(config.guide_posts), 1)
-        self.assertNotIn("sleeve", yaml.safe_load(path.read_text(encoding="utf-8"))["objects"])
+        for record in self.configured_records:
+            path = self.dataset / record["path"] / "case.yaml"
+            config = CaseConfig.from_yaml(path)
+            with self.subTest(case=record["id"]):
+                self.assertEqual(config.case_id, record["id"])
+                self.assertTrue(config.inputs.template.is_file())
+                self.assertTrue(config.inputs.patient_dentition.is_file())
+                self.assertGreaterEqual(len(config.guide_posts), 1)
 
     def test_input_files_are_nonempty(self) -> None:
-        """复制后的 STL 和止挡报告不得为空文件。"""
+        """规范化后的输入文件不得为空。"""
 
-        patterns = (
-            self.dataset.glob("tooth-*/input/*"),
-            self.multiple_dataset.glob("teeth-*/input/*"),
-        )
-        for paths in patterns:
-            for path in paths:
+        for case_directory in self.dataset.glob("case-*"):
+            for path in (case_directory / "input").glob("*"):
+                if not path.is_file():
+                    continue
                 with self.subTest(path=path):
                     self.assertGreater(path.stat().st_size, 0)
                     if path.suffix == ".json":
                         json.loads(path.read_text(encoding="utf-8"))
+
+    def test_blender_wrapper_returns_nonzero_for_python_failures(self) -> None:
+        """Blender启动器必须把未捕获Python异常传播为失败退出码。"""
+
+        wrapper = (self.project / "scripts/blender.sh").read_text(encoding="utf-8")
+        self.assertNotIn("--gpu-backend", wrapper)
+        self.assertIn("--python-exit-code 1", wrapper)
 
 
 if __name__ == "__main__":

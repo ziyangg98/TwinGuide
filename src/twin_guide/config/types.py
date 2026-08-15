@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
 
@@ -14,6 +14,7 @@ DEFAULT_PRESS_BEAM_DIAMETER_MM = 4.60
 DEFAULT_OPERATION_BITANGENT_MARGIN_MM = 3.0
 DEFAULT_GUIDE_ANCHOR_U_SIDE_RAY_ANGLE_DEGREES = 70.0
 DEFAULT_GUIDE_ANCHOR_BACK_U_SIDE_RAY_ANGLE_DEGREES = 90.0
+DEFAULT_GUIDE_SPACING_MM = 11.50
 
 
 class Jaw(StrEnum):
@@ -49,7 +50,8 @@ class SleeveParameters:
     closed_bore_height_mm: float
     inner_arc_angle_degrees: float
     outer_arc_angle_degrees: float
-    guide_spacing_mm: float = 11.5
+    guide_spacing_mm: float = DEFAULT_GUIDE_SPACING_MM
+    platform_overhang_mm: float = 0.20
     top_recess_diameter_mm: float | None = None
     top_recess_depth_mm: float = 0.0
 
@@ -73,10 +75,22 @@ class SleeveParameters:
         return self.outer_radius_mm * math.cos(0.5 * opening_angle)
 
     @property
-    def guide_axis_spacing_mm(self) -> float:
-        """由两个相向 D 面净距返回双导轴心距。"""
+    def platform_inner_face_offset_mm(self) -> float:
+        """返回轴心到相向内侧平台端面的距离。"""
 
-        return self.guide_spacing_mm + 2.0 * self.outer_d_face_offset_mm
+        return self.outer_radius_mm + self.platform_overhang_mm
+
+    @property
+    def guide_axis_spacing_mm(self) -> float:
+        """由两个相向内侧平台端面净距返回双导轴心距。"""
+
+        return self.guide_spacing_mm + 2.0 * self.platform_inner_face_offset_mm
+
+    @property
+    def guide_c_opening_spacing_mm(self) -> float:
+        """返回下部 C 口截面两个相向 D 面的净距。"""
+
+        return self.guide_axis_spacing_mm - 2.0 * self.outer_d_face_offset_mm
 
     @property
     def guide_pair_outer_span_mm(self) -> float:
@@ -91,6 +105,29 @@ class SleeveParameters:
         if self.top_recess_diameter_mm is None:
             return None
         return self.top_recess_diameter_mm / 2.0
+
+
+@dataclass(frozen=True, slots=True)
+class SleeveParameterOverrides:
+    """一个种植位相对全局标准导柱参数的三项轴向高度覆盖值。"""
+
+    height_mm: float | None = None
+    platform_height_mm: float | None = None
+    closed_bore_height_mm: float | None = None
+
+    def resolve(self, defaults: SleeveParameters) -> SleeveParameters:
+        """把已填写字段覆盖到全局标准值，返回一组完整参数。"""
+
+        updates = {
+            name: value
+            for name, value in (
+                ("height_mm", self.height_mm),
+                ("platform_height_mm", self.platform_height_mm),
+                ("closed_bore_height_mm", self.closed_bore_height_mm),
+            )
+            if value is not None
+        }
+        return replace(defaults, **updates)
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,6 +216,7 @@ class GuidePostParameters:
     drill_length_mm: float
     implant_length_mm: float
     sleeve_template_extension_mm: float
+    sleeve: SleeveParameterOverrides = SleeveParameterOverrides()
 
     @property
     def twin_guide_extension_mm(self) -> float:
@@ -189,20 +227,25 @@ class GuidePostParameters:
             self.implant_length_mm,
         )
 
+    def resolved_sleeve(self, defaults: SleeveParameters) -> SleeveParameters:
+        """返回该种植位继承并覆盖后的完整双导导柱参数。"""
+
+        return self.sleeve.resolve(defaults)
+
 
 @dataclass(frozen=True, slots=True)
-class SleeveGuideOverride:
-    """一根导柱独立的三项轴向高度。"""
+class SleeveSiteOverride:
+    """一个种植位左右两根导柱共用的三项轴向高度。"""
 
-    guide_index: int
+    ring_index: int
     height_mm: float
     platform_height_mm: float
     closed_bore_height_mm: float
 
     def __post_init__(self) -> None:
-        """校验导柱编号及三项严格高度关系。"""
-        if self.guide_index <= 0:
-            raise ValueError("导柱编号必须为正")
+        """校验圆环编号及三项严格高度关系。"""
+        if self.ring_index <= 0:
+            raise ValueError("导柱种植位圆环编号必须为正")
         if not 0.0 < self.closed_bore_height_mm < self.platform_height_mm < self.height_mm:
             raise ValueError("导柱高度必须满足：底部高度 < 平台高度 < 总高度")
 
@@ -298,17 +341,17 @@ class SurfaceAnchorOverride:
 class EditorOverrides:
     """Blender 图形化编辑器写回病例的显式几何覆盖值。"""
 
-    sleeve_guides: tuple[SleeveGuideOverride, ...] = ()
+    sleeve_sites: tuple[SleeveSiteOverride, ...] = ()
     operation_windows: tuple[OperationWindowOverride, ...] = ()
     observation_windows: tuple[ObservationWindowOverride, ...] = ()
     connector_avoidance: tuple[ConnectorAvoidanceOverride, ...] = ()
     surface_anchors: tuple[SurfaceAnchorOverride, ...] = ()
     press_junction_mm: tuple[float, float, float] | None = None
 
-    def sleeve_for(self, guide_index: int) -> SleeveGuideOverride | None:
-        """按导柱编号查找高度覆盖值。"""
+    def sleeve_for(self, ring_index: int) -> SleeveSiteOverride | None:
+        """按种植位圆环编号查找成对高度覆盖值。"""
         return next(
-            (item for item in self.sleeve_guides if item.guide_index == guide_index),
+            (item for item in self.sleeve_sites if item.ring_index == ring_index),
             None,
         )
 
@@ -594,8 +637,9 @@ __all__ = [
     "PressBeamParameters",
     "PressBeamSleeveAnchorSelectionParameters",
     "RenderParameters",
-    "SleeveGuideOverride",
+    "SleeveParameterOverrides",
     "SleeveParameters",
+    "SleeveSiteOverride",
     "SurfaceAnchorOverride",
     "TerminalDistalCommonNodeParameters",
     "ToothAnchorStation",

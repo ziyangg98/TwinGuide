@@ -10,7 +10,7 @@ from twin_guide.config import (
     EditorOverrides,
     ObservationWindowOverride,
     OperationWindowOverride,
-    SleeveGuideOverride,
+    SleeveSiteOverride,
     SurfaceAnchorOverride,
 )
 
@@ -26,16 +26,16 @@ def _upsert[T](items: tuple[T, ...], value: T, key: Callable[[T], object]) -> tu
 
 def with_sleeve(
     overrides: EditorOverrides,
-    value: SleeveGuideOverride,
+    value: SleeveSiteOverride,
 ) -> EditorOverrides:
-    """替换一根导柱的语义高度值。"""
+    """替换一个种植位左右导柱共用的语义高度值。"""
 
     return replace(
         overrides,
-        sleeve_guides=_upsert(
-            overrides.sleeve_guides,
+        sleeve_sites=_upsert(
+            overrides.sleeve_sites,
             value,
-            lambda item: item.guide_index,
+            lambda item: item.ring_index,
         ),
     )
 

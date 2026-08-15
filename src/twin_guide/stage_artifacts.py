@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
-from dataclasses import fields, is_dataclass
+from dataclasses import fields, is_dataclass, replace
 from enum import Enum
 from pathlib import Path
 
@@ -64,7 +64,29 @@ def _stage_parameters(config: CaseConfig, stage_number: int) -> object:
     """返回该阶段实际消费的主要配置。"""
 
     if stage_number == 1:
-        return _json_value(config.sleeve)
+        sleeve_by_ring = []
+        for item in config.guide_posts:
+            parameters = item.resolved_sleeve(config.sleeve)
+            editor_overrides = getattr(config, "editor_overrides", None)
+            editor_override = (
+                editor_overrides.sleeve_for(item.ring_index)
+                if editor_overrides is not None
+                else None
+            )
+            if editor_override is not None:
+                parameters = replace(
+                    parameters,
+                    height_mm=editor_override.height_mm,
+                    platform_height_mm=editor_override.platform_height_mm,
+                    closed_bore_height_mm=editor_override.closed_bore_height_mm,
+                )
+            sleeve_by_ring.append(
+                {"ring_index": item.ring_index, "parameters": _json_value(parameters)}
+            )
+        return {
+            "sleeve_defaults": _json_value(config.sleeve),
+            "sleeve_by_ring": sleeve_by_ring,
+        }
     if stage_number == 3:
         return {
             "windows": _json_value(config.windows),

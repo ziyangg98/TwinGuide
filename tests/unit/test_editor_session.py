@@ -4,14 +4,13 @@ from twin_guide.config import (
     ConnectorAvoidanceOverride,
     EditorOverrides,
     OperationWindowOverride,
+    SleeveSiteOverride,
 )
 from twin_guide.editor_session import EditorSession, changed_feature_ids
 
 
 def _overrides(offset: float) -> EditorOverrides:
-    return EditorOverrides(
-        connector_avoidance=(ConnectorAvoidanceOverride(1, 0.4, offset),)
-    )
+    return EditorOverrides(connector_avoidance=(ConnectorAvoidanceOverride(1, 0.4, offset),))
 
 
 class EditorSessionTests(unittest.TestCase):
@@ -51,15 +50,19 @@ class EditorSessionTests(unittest.TestCase):
         previous = _overrides(1.0)
         current = EditorOverrides(
             connector_avoidance=(ConnectorAvoidanceOverride(1, 0.4, 2.0),),
-            operation_windows=(
-                OperationWindowOverride(1, 1.0, 1.0, 1.0, 1.0),
-            ),
+            operation_windows=(OperationWindowOverride(1, 1.0, 1.0, 1.0, 1.0),),
         )
 
         self.assertEqual(
             changed_feature_ids(previous, current),
             ("connector:guide_1", "operation_window:1"),
         )
+
+    def test_changed_site_height_uses_ring_based_pair_feature_id(self):
+        previous = EditorOverrides()
+        current = EditorOverrides(sleeve_sites=(SleeveSiteOverride(3, 16.0, 10.0, 4.9),))
+
+        self.assertEqual(changed_feature_ids(previous, current), ("sleeve:site_3",))
 
 
 if __name__ == "__main__":

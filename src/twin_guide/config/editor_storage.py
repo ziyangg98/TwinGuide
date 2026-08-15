@@ -22,15 +22,15 @@ def editor_overrides_data(overrides: EditorOverrides) -> dict[str, object]:
     """把类型化覆盖值转换为稳定、无 Python 标签的 YAML 数据。"""
 
     result: dict[str, object] = {}
-    if overrides.sleeve_guides:
-        result["sleeve_guides"] = [
+    if overrides.sleeve_sites:
+        result["sleeve_sites"] = [
             {
-                "guide_index": item.guide_index,
+                "ring_index": item.ring_index,
                 "height_mm": item.height_mm,
                 "platform_height_mm": item.platform_height_mm,
                 "closed_bore_height_mm": item.closed_bore_height_mm,
             }
-            for item in overrides.sleeve_guides
+            for item in overrides.sleeve_sites
         ]
     if overrides.operation_windows:
         result["operation_windows"] = [

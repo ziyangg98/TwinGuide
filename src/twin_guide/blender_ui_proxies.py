@@ -75,7 +75,7 @@ def _feature_id(kind: str, properties: dict[str, object]) -> str:
     """由语义属性生成稳定结构编号。"""
 
     if kind == "sleeve_height":
-        return f"sleeve:guide_{properties['guide_index']}"
+        return f"sleeve:site_{properties['ring_index']}"
     if kind.startswith("window_"):
         return f"operation_window:{properties['site_index']}"
     if kind == "connector_node":
@@ -112,9 +112,9 @@ def _mesh_data(
             )
             for index in range(8)
         ]
-        faces = [
-            (0, 2 + index, 2 + (index + 1) % 8) for index in range(8)
-        ] + [(1, 2 + (index + 1) % 8, 2 + index) for index in range(8)]
+        faces = [(0, 2 + index, 2 + (index + 1) % 8) for index in range(8)] + [
+            (1, 2 + (index + 1) % 8, 2 + index) for index in range(8)
+        ]
         return vertices, [], faces
     if kind == "window_size":
         size = 0.58
@@ -166,10 +166,20 @@ def _mesh_data(
             (0.0, -0.75, 0.0),
             (0.0, 0.0, -0.18),
         ]
-        return vertices, [], [
-            (0, 1, 2), (0, 2, 3), (0, 3, 4), (0, 4, 1),
-            (5, 2, 1), (5, 3, 2), (5, 4, 3), (5, 1, 4),
-        ]
+        return (
+            vertices,
+            [],
+            [
+                (0, 1, 2),
+                (0, 2, 3),
+                (0, 3, 4),
+                (0, 4, 1),
+                (5, 2, 1),
+                (5, 3, 2),
+                (5, 4, 3),
+                (5, 1, 4),
+            ],
+        )
     vertices = [
         (0.0, 0.0, 0.86),
         (0.0, 0.0, -0.86),

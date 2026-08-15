@@ -112,8 +112,7 @@ def _reuse_numerically_unchanged_links(
     if previous is None:
         return current
     old_links = {
-        (link.guide_index, link.sleeve_label, link.link_label): link
-        for link in previous.links
+        (link.guide_index, link.sleeve_label, link.link_label): link for link in previous.links
     }
     links = []
     for link in current.links:
@@ -122,11 +121,14 @@ def _reuse_numerically_unchanged_links(
             old is not None
             and len(old.centerline) == len(link.centerline)
             and max(
-                (first.distance_to(second) for first, second in zip(
-                    old.centerline,
-                    link.centerline,
-                    strict=True,
-                )),
+                (
+                    first.distance_to(second)
+                    for first, second in zip(
+                        old.centerline,
+                        link.centerline,
+                        strict=True,
+                    )
+                ),
                 default=0.0,
             )
             <= 5e-5
@@ -196,9 +198,7 @@ def run_generation_process(
     )
     previous = (
         _LAST_PROCESS
-        if changed_feature_ids
-        and not force_rebuild
-        and process_key == _LAST_PROCESS_KEY
+        if changed_feature_ids and not force_rebuild and process_key == _LAST_PROCESS_KEY
         else None
     )
     previous_context = None if previous is None else previous.context
@@ -215,15 +215,11 @@ def run_generation_process(
         case.guide_sleeves,
         case.template_frame,
     )
-    results.append(
-        StageResult(STAGES[0], StageRunStatus.COMPLETED, context.sleeve_generation)
-    )
+    results.append(StageResult(STAGES[0], StageRunStatus.COMPLETED, context.sleeve_generation))
     timings[STAGES[0].key] = perf_counter() - started
     started = perf_counter()
     if config.tooth_identification is None:
-        results.append(
-            _skipped(STAGES[1], "病例未配置牙位工作流 case.yaml；不生成 FDI 观察窗")
-        )
+        results.append(_skipped(STAGES[1], "病例未配置牙位工作流 case.yaml；不生成 FDI 观察窗"))
     else:
         if previous_context is not None and previous_context.tooth_identification is not None:
             context.tooth_identification = previous_context.tooth_identification
@@ -271,9 +267,7 @@ def run_generation_process(
     )
     if template_points_reusable:
         context.guide_component_bridge = previous_context.guide_component_bridge
-        context.guide_terminal_u_extension = (
-            previous_context.guide_terminal_u_extension
-        )
+        context.guide_terminal_u_extension = previous_context.guide_terminal_u_extension
         context.template_link_points = previous_context.template_link_points
         cache_hits.append(STAGES[3].key)
     else:
@@ -292,8 +286,7 @@ def run_generation_process(
             ),
             TemplatePointSelectionConfig(
                 template_clearance_mm=(
-                    config.geometry.connector_radius_mm
-                    + config.geometry.fusion_voxel_size_mm
+                    config.geometry.connector_radius_mm + config.geometry.fusion_voxel_size_mm
                 ),
                 connector_radius_mm=config.geometry.connector_radius_mm,
             ),
@@ -309,17 +302,21 @@ def run_generation_process(
         feature_id.startswith("press_anchor:") or feature_id == "press_junction"
         for feature_id in changed
     )
-    changed_sleeves = {
+    changed_rings = {
         int(feature_id.rsplit("_", 1)[1])
         for feature_id in changed
-        if feature_id.startswith("sleeve:guide_")
+        if feature_id.startswith("sleeve:site_")
     }
-    previous_press = (
-        None if previous_context is None else previous_context.press_beam_points
-    )
+    changed_sleeves = {
+        guide_index
+        for site_index, guide_post in enumerate(config.guide_posts)
+        if guide_post.ring_index in changed_rings
+        for guide_index in (2 * site_index + 1, 2 * site_index + 2)
+    }
+    previous_press = None if previous_context is None else previous_context.press_beam_points
     sleeve_edit_keeps_press_plan = bool(
         changed_sleeves
-        and all(feature_id.startswith("sleeve:guide_") for feature_id in changed)
+        and all(feature_id.startswith("sleeve:site_") for feature_id in changed)
         and previous_press is not None
         and (
             previous_press.sleeve_anchor is None
@@ -335,14 +332,10 @@ def run_generation_process(
     ):
         context.press_beam_points = previous_press
         cache_hits.append(STAGES[4].key)
-        results.append(
-            StageResult(STAGES[4], StageRunStatus.COMPLETED, context.press_beam_points)
-        )
+        results.append(StageResult(STAGES[4], StageRunStatus.COMPLETED, context.press_beam_points))
     else:
         context.press_beam_points = select_press_beam_points(context)
-        results.append(
-            StageResult(STAGES[4], StageRunStatus.COMPLETED, context.press_beam_points)
-        )
+        results.append(StageResult(STAGES[4], StageRunStatus.COMPLETED, context.press_beam_points))
     timings[STAGES[4].key] = perf_counter() - started
     started = perf_counter()
     context.point_linking = link_selected_points(
@@ -352,9 +345,7 @@ def run_generation_process(
             include_lower_main=config.geometry.connection_blocks.lower_main,
             include_upper_main=config.geometry.connection_blocks.upper_main,
             include_press_beam=config.geometry.connection_blocks.press_beam,
-            stop_platform_front_avoidance_mm=(
-                config.geometry.sleeve_stop_front_avoidance_mm
-            ),
+            stop_platform_front_avoidance_mm=(config.geometry.sleeve_stop_front_avoidance_mm),
             stop_platform_overrides=config.editor_overrides.connector_avoidance,
             connector_guide_endpoint=config.geometry.connector_guide_endpoint,
         ),

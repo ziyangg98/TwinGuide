@@ -3,8 +3,9 @@
 ## 配置与病例分析
 
 `CaseConfig` 是文件路径和数值参数的唯一入口；`analyze_case()` 读取网格并建立
-各步骤共用的 `CaseAnalysis`。导柱参数由 `SleeveParameters` 提供，连接梁参数由
-`GeometryParameters` 提供。
+各步骤共用的 `CaseAnalysis`。每个种植位置的导柱参数由全局 `SleeveParameters`、
+该位置的三项高度覆盖和编辑器三项高度调整合并得到；其余 9 项保持全局一致。
+连接梁参数由 `GeometryParameters` 提供。
 `SleeveEstimate.c_opening_direction` 保存世界坐标单位向量。它是两导管中心连线
 在各自轴线法平面上的投影，因此两个 C 口相对。
 
@@ -12,7 +13,7 @@
 
 | 上下文字段 | 结果类型 | 运行时行为 |
 | --- | --- | --- |
-| `sleeve_generation` | `SleeveGenerationResult` | 按每个传统模板圆环生成一对标准导柱，并建立导板局部标架 |
+| `sleeve_generation` | `SleeveGenerationResult` | 按每个传统模板圆环的最终有效参数生成一对导柱，并建立导板局部标架 |
 | `tooth_identification` | `ToothIdentificationResult` | 从 `case.yaml` 现场识别牙位并映射到导板 |
 | `window_cutouts` | `CutoutPlan` | 生成导孔、操作窗以及 FDI 轴扫掠观察窗切除体 |
 | `template_link_points` | `TemplateLinkPointPlan` | 生成单/多种植位连续路径锚点，末端病例可加入远中公共节点 |

@@ -21,13 +21,12 @@ def _plan_channels(case: CaseAnalysis) -> tuple[CylinderCutout, ...]:
     """沿全部导管轴线构造带轴向余量的牙科导板通道。"""
 
     axial_margin_mm = case.config.geometry.channel_axial_margin_mm
-    guide_inner_radius_mm = case.config.sleeve.inner_radius_mm
     channels = tuple(
         CylinderCutout(
             name=f"guide_{guide.guide_index}_channel",
             start=guide.center + guide.axis * (guide.axial_min_mm - axial_margin_mm),
             end=guide.center + guide.axis * (guide.axial_max_mm + axial_margin_mm),
-            radius_mm=guide_inner_radius_mm,
+            radius_mm=guide.bore_radius_mm,
         )
         for guide in case.guide_sleeves
     )
@@ -57,9 +56,7 @@ def _plan_operation_window(
     guide_spacing_mm = abs(guide_offset.dot(tangent))
     editor_overrides = getattr(case.config, "editor_overrides", None)
     override = (
-        None
-        if editor_overrides is None
-        else editor_overrides.operation_window_for(site_index)
+        None if editor_overrides is None else editor_overrides.operation_window_for(site_index)
     )
     tangent_margin_mm = (
         case.config.windows.operation_tangent_margin_mm
@@ -71,9 +68,7 @@ def _plan_operation_window(
         if override is None
         else override.bitangent_margin_mm
     )
-    short_edge_mm = operation_feature.diameter_mm + 2.0 * (
-        bitangent_margin_mm
-    )
+    short_edge_mm = operation_feature.diameter_mm + 2.0 * (bitangent_margin_mm)
     long_edge_mm = (
         guide_spacing_mm
         + first_guide.body_radius_mm
@@ -87,13 +82,8 @@ def _plan_operation_window(
         and abs((sample.position - center).dot(short_direction)) <= short_edge_mm * 0.5 + 2.0
     )
     if not local_samples:
-        raise ValueError(
-            f"种植位 {site_index} 的操作窗范围内没有导板表面采样点"
-        )
-    depth_coordinates = tuple(
-        (sample.position - center).dot(normal)
-        for sample in local_samples
-    )
+        raise ValueError(f"种植位 {site_index} 的操作窗范围内没有导板表面采样点")
+    depth_coordinates = tuple((sample.position - center).dot(normal) for sample in local_samples)
     local_depth_mm = max(depth_coordinates) - min(depth_coordinates)
     base_depth_mm = max(
         local_depth_mm,

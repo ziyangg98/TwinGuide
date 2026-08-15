@@ -2,12 +2,14 @@ import unittest
 
 from twin_guide.guide_post_positioning import (
     DRILL_HANDPIECE_INSERTION_MM,
+    DRILL_LENGTH_INSIDE_HANDPIECE_MM,
     calculate_twin_guide_extension_mm,
 )
 
 
 class TwinGuideExtensionTests(unittest.TestCase):
-    def test_uses_fixed_twelve_millimeter_handpiece_insertion(self):
+    def test_uses_fixed_twelve_millimeter_length_inside_handpiece(self):
+        self.assertEqual(DRILL_LENGTH_INSIDE_HANDPIECE_MM, 12.0)
         self.assertEqual(DRILL_HANDPIECE_INSERTION_MM, 12.0)
         self.assertEqual(calculate_twin_guide_extension_mm(35.0, 11.0), 12.0)
 

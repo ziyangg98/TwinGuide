@@ -7,6 +7,7 @@ import math
 import bpy
 from mathutils import Matrix
 
+from twin_guide.blender.mesh_queries import clean_mesh
 from twin_guide.blender.sleeve_estimation_adapter import mesh_object_to_triangle_data
 from twin_guide.errors import GeometryError
 from twin_guide.sleeve_estimation.c_opening import rounded_c_opening_slot_profile
@@ -22,6 +23,7 @@ def validate_sleeve_boolean_parameters(estimate: SleeveEstimate) -> None:
         "platform_height": estimate.platform_height,
         "closed_bore_height": estimate.closed_bore_height,
         "platform_slot_width": estimate.platform_slot_width,
+        "platform_overhang": estimate.platform_overhang,
         "inner_radius": estimate.inner_radius,
         "outer_radius": estimate.outer_radius,
         "inner_arc_angle": estimate.inner_arc_angle,
@@ -39,6 +41,8 @@ def validate_sleeve_boolean_parameters(estimate: SleeveEstimate) -> None:
         raise GeometryError("导管高度必须满足 0 < closed_bore_height < platform_height < height")
     if not 0.0 < estimate.platform_slot_width < 2.0 * estimate.outer_radius:
         raise GeometryError("platform_slot_width 必须小于导柱外径")
+    if estimate.platform_overhang < 0.0:
+        raise GeometryError("platform_overhang 不得小于 0")
     if estimate.top_recess_radius is None:
         if estimate.top_recess_depth != 0.0:
             raise GeometryError("top_recess_radius 与 top_recess_depth 必须同时启用")
@@ -55,6 +59,8 @@ def validate_sleeve_boolean_parameters(estimate: SleeveEstimate) -> None:
     ):
         if not 0.0 < angle < 2.0 * math.pi:
             raise GeometryError(f"{name} 必须严格位于 0 与 2*pi 之间")
+    if not math.pi <= estimate.inner_arc_angle <= math.radians(350.0):
+        raise GeometryError("inner_arc_angle 必须位于 180 与 350 度之间")
     if estimate.axis.length <= 1e-10:
         raise GeometryError("导管轴向不得为零向量")
     axis = estimate.axis.normalized()
@@ -74,7 +80,6 @@ def create_closed_sleeve_object(
     validate_sleeve_boolean_parameters(estimate)
     inner_gap = 2.0 * math.pi - estimate.inner_arc_angle
     outer_gap = 2.0 * math.pi - estimate.outer_arc_angle
-    inner_cut = estimate.inner_radius * math.cos(0.5 * inner_gap)
     outer_cut = estimate.outer_radius * math.cos(0.5 * outer_gap)
     z_platform = estimate.height - estimate.platform_height
     z_transition = estimate.height - estimate.closed_bore_height
@@ -89,7 +94,7 @@ def create_closed_sleeve_object(
     )
     platform = Manifold.cube(
         (
-            estimate.outer_radius,
+            estimate.outer_radius + estimate.platform_overhang,
             2.0 * estimate.outer_radius,
             estimate.height - z_platform,
         )
@@ -132,29 +137,41 @@ def create_closed_sleeve_object(
             -epsilon,
         )
     )
-    rounded_slot_profile = CrossSection(
-        [
-            rounded_c_opening_slot_profile(
-                estimate.inner_radius,
-                inner_opening_y,
-                outer_cut,
-                cutter_end,
-            )
-        ]
+    rounded_slot_points = rounded_c_opening_slot_profile(
+        estimate.inner_radius,
+        inner_opening_y,
+        outer_cut,
+        cutter_end,
+        radial_overlap=2.0 * epsilon,
     )
+    rounded_slot_profile = CrossSection([rounded_slot_points])
     rounded_slot = rounded_slot_profile.extrude(z_platform + 2.0 * epsilon).translate(
         (0.0, 0.0, -epsilon)
     )
     cutters += outer_clearance + rounded_slot
 
     slot_half_width = 0.5 * estimate.platform_slot_width
-    middle_slot = Manifold.cube(
-        (
-            cutter_end - (inner_cut - 2.0 * epsilon),
-            2.0 * slot_half_width,
-            z_transition - z_platform + 2.0 * epsilon,
+    middle_slot_height = z_transition - z_platform + 2.0 * epsilon
+    if slot_half_width >= estimate.inner_radius:
+        middle_slot = Manifold.cube(
+            (
+                cutter_end + 2.0 * epsilon,
+                2.0 * slot_half_width,
+                middle_slot_height,
+            )
+        ).translate((-2.0 * epsilon, -slot_half_width, z_platform - epsilon))
+    else:
+        middle_slot_points = rounded_c_opening_slot_profile(
+            estimate.inner_radius,
+            slot_half_width,
+            outer_cut + epsilon,
+            cutter_end,
+            radial_overlap=2.0 * epsilon,
         )
-    ).translate((inner_cut - 2.0 * epsilon, -slot_half_width, z_platform - epsilon))
+        middle_slot_profile = CrossSection([middle_slot_points])
+        middle_slot = middle_slot_profile.extrude(middle_slot_height).translate(
+            (0.0, 0.0, z_platform - epsilon)
+        )
     cutters += middle_slot
     body -= cutters
     if str(body.status()) != "Error.NoError":
@@ -165,6 +182,7 @@ def create_closed_sleeve_object(
     mesh.update()
     body_object = bpy.data.objects.new(name, mesh)
     bpy.context.collection.objects.link(body_object)
+    clean_mesh(body_object)
 
     axis = estimate.axis.normalized()
     c_opening_direction = (

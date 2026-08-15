@@ -93,6 +93,48 @@ class BlenderBackendTests(unittest.TestCase):
         with self.assertRaises(GeometryError):
             validate_sleeve_boolean_parameters(estimate)
 
+    def test_sleeve_reconstruction_rejects_unsupported_inner_arc(self):
+        for angle_degrees in (179.99, 350.01):
+            estimate = SleeveEstimate(
+                axis_origin=Vec3(0.0, 0.0, 0.0),
+                axis=Vec3(0.0, 0.0, 1.0),
+                c_opening_direction=Vec3(1.0, 0.0, 0.0),
+                height=8.0,
+                platform_height=2.8,
+                closed_bore_height=1.4,
+                platform_slot_width=1.6,
+                inner_radius=1.025,
+                outer_radius=2.55,
+                inner_arc_angle=math.radians(angle_degrees),
+                outer_arc_angle=math.radians(246.59),
+            )
+            with (
+                self.subTest(angle_degrees=angle_degrees),
+                self.assertRaisesRegex(GeometryError, "180 与 350"),
+            ):
+                validate_sleeve_boolean_parameters(estimate)
+
+    def test_reconstructed_sleeve_is_valid_at_maximum_inner_arc(self):
+        estimate = SleeveEstimate(
+            axis_origin=Vec3(0.0, 0.0, 0.0),
+            axis=Vec3(0.0, 0.0, 1.0),
+            c_opening_direction=Vec3(1.0, 0.0, 0.0),
+            height=15.5,
+            platform_height=10.0,
+            closed_bore_height=4.9,
+            platform_slot_width=1.6,
+            platform_overhang=0.2,
+            inner_radius=1.025,
+            outer_radius=2.55,
+            inner_arc_angle=math.radians(350.0),
+            outer_arc_angle=math.radians(246.59),
+        )
+
+        sleeve = create_closed_sleeve_object(estimate, "maximum_inner_arc_sleeve")
+        integrity = inspect_triangle_mesh(mesh_object_to_triangle_data(sleeve))
+
+        self.assertTrue(integrity.valid, integrity)
+
     def test_reconstructed_sleeve_is_closed_and_manifold(self):
         estimate = SleeveEstimate(
             axis_origin=Vec3(0.0, 0.0, 0.0),
@@ -145,14 +187,15 @@ class BlenderBackendTests(unittest.TestCase):
             c_opening_direction=Vec3(1.0, 0.0, 0.0),
             height=15.5,
             platform_height=10.0,
-            closed_bore_height=5.0,
+            closed_bore_height=4.9,
             inner_radius=1.025,
             outer_radius=2.55,
-            inner_arc_angle=math.radians(252.90),
+            inner_arc_angle=math.radians(257.83),
             outer_arc_angle=math.radians(246.59),
             top_recess_radius=1.305,
             top_recess_depth=0.30,
-            platform_slot_width=1.65,
+            platform_slot_width=1.60,
+            platform_overhang=0.20,
         )
 
         sleeve = create_closed_sleeve_object(estimate, "top_recess_sleeve")
@@ -166,11 +209,15 @@ class BlenderBackendTests(unittest.TestCase):
         self.assertFalse(point_inside_mesh(tree, Vec3(0.90, 0.70, 0.45)))
         self.assertFalse(point_inside_mesh(tree, Vec3(1.45, 1.50, 0.45)))
         self.assertTrue(point_inside_mesh(tree, Vec3(1.35, 1.50, 0.45)))
+        self.assertFalse(point_inside_mesh(tree, Vec3(1.07, 0.70, 8.00)))
+        self.assertTrue(point_inside_mesh(tree, Vec3(1.07, 0.77, 8.00)))
         self.assertTrue(point_inside_mesh(tree, Vec3(2.50, 2.40, 15.30)))
-        self.assertFalse(point_inside_mesh(tree, Vec3(2.60, 2.40, 15.30)))
+        self.assertFalse(point_inside_mesh(tree, Vec3(2.80, 2.40, 15.30)))
         self.assertTrue(point_inside_mesh(tree, Vec3(-2.45, 0.0, 15.30)))
         self.assertEqual(topology_edge_counts(sleeve), (0, 0))
         self.assertEqual(len(mesh_component_vertex_counts(sleeve)), 1)
+        triangle_data = mesh_object_to_triangle_data(sleeve)
+        self.assertAlmostEqual(max(point.x for point in triangle_data.vertices), 2.75, delta=1e-6)
 
     def test_generated_sleeve_parameters_drive_q_and_wall_thickness(self):
         estimates = tuple(
@@ -277,15 +324,9 @@ class BlenderBackendTests(unittest.TestCase):
             for index, x in enumerate((-5.0, 5.0), 1)
         )
 
-        self.assertFalse(
-            _point_is_outside_guide_bores(Vec3(-5.0, 0.0, 4.0), guides)
-        )
-        self.assertFalse(
-            _point_is_outside_guide_bores(Vec3(5.0, 0.0, 4.0), guides)
-        )
-        self.assertTrue(
-            _point_is_outside_guide_bores(Vec3(0.0, 0.0, 4.0), guides)
-        )
+        self.assertFalse(_point_is_outside_guide_bores(Vec3(-5.0, 0.0, 4.0), guides))
+        self.assertFalse(_point_is_outside_guide_bores(Vec3(5.0, 0.0, 4.0), guides))
+        self.assertTrue(_point_is_outside_guide_bores(Vec3(0.0, 0.0, 4.0), guides))
 
     def test_connector_validation_excludes_planned_dental_trim(self):
         dentition = create_axis_cylinder(
@@ -344,9 +385,7 @@ class BlenderBackendTests(unittest.TestCase):
         self.assertGreater(len(union_mesh.data.vertices), 0)
 
     def test_voxel_union_accepts_one_mesh_without_joining(self):
-        source = create_axis_cylinder(
-            "single", Vec3(0.0, 0.0, -1.0), Vec3(0.0, 0.0, 1.0), 1.0
-        )
+        source = create_axis_cylinder("single", Vec3(0.0, 0.0, -1.0), Vec3(0.0, 0.0, 1.0), 1.0)
 
         with patch("bpy.ops.object.join") as join:
             union_mesh = voxel_union((source,), "single_union", 0.2)
@@ -378,12 +417,8 @@ class BlenderBackendTests(unittest.TestCase):
         self.assertEqual(topology_edge_counts(difference_mesh), (0, 0))
 
     def test_manifold3d_difference_returns_closed_mesh_and_preserves_cutter(self):
-        target_mesh = create_axis_cylinder(
-            "target", Vec3(0.0, 0.0, -2.0), Vec3(0.0, 0.0, 2.0), 2.0
-        )
-        cutter_mesh = create_axis_cylinder(
-            "cutter", Vec3(0.0, 0.0, -3.0), Vec3(0.0, 0.0, 3.0), 0.5
-        )
+        target_mesh = create_axis_cylinder("target", Vec3(0.0, 0.0, -2.0), Vec3(0.0, 0.0, 2.0), 2.0)
+        cutter_mesh = create_axis_cylinder("cutter", Vec3(0.0, 0.0, -3.0), Vec3(0.0, 0.0, 3.0), 0.5)
 
         difference_mesh = apply_manifold3d_difference(target_mesh, cutter_mesh)
 
@@ -393,9 +428,7 @@ class BlenderBackendTests(unittest.TestCase):
         self.assertEqual(duplicate_triangle_count(difference_mesh), 0)
 
     def test_manifold3d_multiple_differences_convert_only_final_mesh(self):
-        target_mesh = create_axis_cylinder(
-            "target", Vec3(0.0, 0.0, -2.0), Vec3(0.0, 0.0, 2.0), 3.0
-        )
+        target_mesh = create_axis_cylinder("target", Vec3(0.0, 0.0, -2.0), Vec3(0.0, 0.0, 2.0), 3.0)
         first_cutter = create_axis_cylinder(
             "first_cutter", Vec3(-1.0, 0.0, -3.0), Vec3(-1.0, 0.0, 3.0), 0.5
         )
@@ -403,9 +436,7 @@ class BlenderBackendTests(unittest.TestCase):
             "second_cutter", Vec3(1.0, 0.0, -3.0), Vec3(1.0, 0.0, 3.0), 0.5
         )
 
-        difference_mesh = apply_manifold3d_differences(
-            target_mesh, (first_cutter, second_cutter)
-        )
+        difference_mesh = apply_manifold3d_differences(target_mesh, (first_cutter, second_cutter))
 
         self.assertIn(first_cutter, bpy.data.objects.values())
         self.assertIn(second_cutter, bpy.data.objects.values())

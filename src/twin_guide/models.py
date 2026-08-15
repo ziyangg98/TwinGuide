@@ -130,7 +130,7 @@ class CaseAnalysis:
 
     @property
     def guide_sleeve_pairs(self) -> tuple[tuple[GuideSleeve, GuideSleeve], ...]:
-        """按种植位返回每个装配体所属的两根导管。"""
+        """按种植位返回每个定位圆环生成的两根导柱。"""
 
         if len(self.guide_sleeves) % 2:
             raise ValueError("导管数量必须为偶数")

@@ -19,7 +19,7 @@ TwinGuide 是基于 Blender 的双导管牙科导板建模工具。程序从带�
 
 | 阶段 | 输入 | 输出 | 成熟度 |
 | --- | --- | --- | --- |
-| 1. 导柱生成 | 传统模板圆环、规划参数 | 导柱位姿与标准重建 | 稳定 |
+| 1. 导柱生成 | 传统模板圆环、规划参数 | 导柱位姿与按种植位参数重建 | 稳定 |
 | 2. 牙位识别 | 患者牙列、病例语义 | FDI 牙位与导板映射 | 实验 |
 | 3. 窗口规划 | 导管与牙位结果 | 导孔、操作窗、观察窗 | 实验 |
 | 4. 锚点选择 | 导管、窗口与牙位结果 | 导管端和导板端锚点 | 实验 |
@@ -29,11 +29,11 @@ TwinGuide 是基于 Blender 的双导管牙科导板建模工具。程序从带�
 
 <table>
   <tr>
-    <td width="50%" align="center"><img src="docs/images/stage-1-sleeve-reconstruction.png" width="100%" alt="第 1 阶段：传统模板导柱定位与标准重建"></td>
+    <td width="50%" align="center"><img src="docs/images/stage-1-sleeve-reconstruction.png" width="100%" alt="第 1 阶段：传统模板导柱定位与按种植位参数重建"></td>
     <td width="50%" align="center"><img src="docs/images/stage-2-tooth-mapping.png" width="100%" alt="第 2 阶段：牙位映射"></td>
   </tr>
   <tr>
-    <td align="center">1. 传统模板导柱定位与标准重建</td>
+    <td align="center">1. 传统模板导柱定位与按种植位参数重建</td>
     <td align="center">2. 牙位映射</td>
   </tr>
   <tr>
@@ -67,7 +67,8 @@ TwinGuide 是基于 Blender 的双导管牙科导板建模工具。程序从带�
 病例目录结构如下：
 
 ```text
-../data/cases/<cohort>/<case>/
+../data/cases/case-<opaque-id>/
+  metadata.yaml
   case.yaml
   input/
   working/
@@ -94,23 +95,23 @@ brew install --cask blender
 
 ```bash
 ./twinguide generate \
-  --config ../data/cases/single/tooth-11/case.yaml --validate
+  --config ../data/cases/case-3af68d1cfda4/case.yaml --validate
 ```
 
 指定临时输出目录：
 
 ```bash
 ./twinguide generate \
-  --config ../data/cases/single/tooth-11/case.yaml \
+  --config ../data/cases/case-3af68d1cfda4/case.yaml \
   --output output/tooth-11-check
 ```
 
 只运行七阶段计算或验证已有 STL：
 
 ```bash
-./twinguide process --config ../data/cases/single/tooth-11/case.yaml
+./twinguide process --config ../data/cases/case-3af68d1cfda4/case.yaml
 
-./twinguide validate --config ../data/cases/single/tooth-11/case.yaml \
+./twinguide validate --config ../data/cases/case-3af68d1cfda4/case.yaml \
   --model output/tooth_11/twin_guide.stl
 ```
 
@@ -118,7 +119,7 @@ brew install --cask blender
 微调窗口、连接、按压／支撑点和独立高度：
 
 ```bash
-./twinguide ui --config ../data/cases/single/tooth-11/case.yaml
+./twinguide ui --config ../data/cases/case-3af68d1cfda4/case.yaml
 ```
 
 界面提供保存调整、更新预览和导出检验三个操作。
@@ -126,8 +127,8 @@ brew install --cask blender
 生成命令默认拒绝标记为 `pending`、`pending_user_input` 或 `unreviewed` 的病例。
 `--allow-unreviewed` 可在诊断运行中跳过本次审核检查。
 
-已有 8 个单种植位和 4 个双种植位病例的逐例结果、最终等轴图、阶段状态和
-验证指标见[规范病例结果](docs/guide/case-results.md)。
+统一病例索引当前包含 109 个病例，其中 8 个单种植位病例具有可运行配置；逐例
+结果、最终等轴图、阶段状态和验证指标见[规范病例结果](docs/guide/case-results.md)。
 
 <!-- sphinx-homepage-end -->
 
