@@ -10,9 +10,11 @@ from twin_guide.blender.booleans import (
     apply_manifold3d_difference,
     apply_manifold3d_differences,
 )
+from twin_guide.blender.guide_modeling import _prepare_template_for_boolean_cutting
 from twin_guide.blender.mesh_builders import (
     create_axis_cylinder,
     create_centerline_tube,
+    create_window_cutter,
     voxel_union,
 )
 from twin_guide.blender.mesh_queries import (
@@ -34,11 +36,12 @@ from twin_guide.blender.sleeve_reconstruction import (
 from twin_guide.errors import GeometryError
 from twin_guide.geometry import Vec3
 from twin_guide.guide_validation import (
+    _operation_window_result,
     _point_is_outside_dental_trim,
     _point_is_outside_guide_bores,
     _point_is_retained,
 )
-from twin_guide.models import GuideSleeve, TemplateFrame
+from twin_guide.models import GuideSleeve, TemplateFrame, WindowCutout, WindowPurpose
 from twin_guide.sleeve_anchors import SleeveAnchorSelectionConfig, select_sleeve_anchors
 from twin_guide.sleeve_estimation.mesh_integrity import inspect_triangle_mesh
 from twin_guide.sleeve_estimation.types import SleeveEstimate
@@ -393,6 +396,43 @@ class BlenderBackendTests(unittest.TestCase):
         join.assert_not_called()
         self.assertGreater(len(union_mesh.data.vertices), 0)
 
+    def test_non_manifold_template_is_repaired_before_boolean_cutting(self):
+        mesh = bpy.data.meshes.new("open_box_data")
+        mesh.from_pydata(
+            (
+                (-1.0, -1.0, -1.0),
+                (1.0, -1.0, -1.0),
+                (1.0, 1.0, -1.0),
+                (-1.0, 1.0, -1.0),
+                (-1.0, -1.0, 1.0),
+                (1.0, -1.0, 1.0),
+                (1.0, 1.0, 1.0),
+                (-1.0, 1.0, 1.0),
+            ),
+            (),
+            (
+                (0, 3, 2, 1),
+                (0, 1, 5, 4),
+                (1, 2, 6, 5),
+                (2, 3, 7, 6),
+                (3, 0, 4, 7),
+            ),
+        )
+        mesh.update()
+        source = bpy.data.objects.new("open_box", mesh)
+        bpy.context.collection.objects.link(source)
+        self.assertNotEqual(topology_edge_counts(source), (0, 0))
+
+        material = bpy.data.materials.new("template")
+        repaired = _prepare_template_for_boolean_cutting(
+            source,
+            "repaired_open_box",
+            0.2,
+            material,
+        )
+
+        self.assertEqual(topology_edge_counts(repaired), (0, 0))
+
     def test_excess_component_cleanup_preserves_largest_mesh(self):
         main_mesh = create_axis_cylinder("main", Vec3(0.0, 0.0, -2.0), Vec3(0.0, 0.0, 2.0), 1.0)
         bpy.ops.mesh.primitive_cube_add(size=0.1, location=(5.0, 0.0, 0.0))
@@ -442,6 +482,29 @@ class BlenderBackendTests(unittest.TestCase):
         self.assertIn(second_cutter, bpy.data.objects.values())
         self.assertEqual(topology_edge_counts(difference_mesh), (0, 0))
         self.assertEqual(len(mesh_component_vertex_counts(difference_mesh)), 1)
+
+    def test_operation_window_validation_detects_and_clears_refilled_structure(self):
+        window = WindowCutout(
+            name="operation_window_01",
+            purpose=WindowPurpose.OPERATION,
+            center=Vec3(0.0, 0.0, 0.0),
+            normal=Vec3(0.0, 0.0, 1.0),
+            tangent=Vec3(1.0, 0.0, 0.0),
+            width_mm=6.0,
+            height_mm=6.0,
+            depth_mm=12.0,
+            corner_radius_mm=0.5,
+        )
+        bpy.ops.mesh.primitive_cube_add(size=10.0)
+        target = bpy.context.object
+        blocked = _operation_window_result(build_bvh(target), (window,))
+        self.assertFalse(blocked.passed)
+        self.assertGreater(blocked.metrics["blocked_sample_count"], 0)
+
+        cutter = create_window_cutter(window)
+        opened = apply_manifold3d_differences(target, (cutter,))
+        cleared = _operation_window_result(build_bvh(opened), (window,))
+        self.assertTrue(cleared.passed, cleared.metrics)
 
     def test_detects_geometrically_duplicate_triangles(self):
         mesh = bpy.data.meshes.new("duplicates")

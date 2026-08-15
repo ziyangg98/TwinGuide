@@ -61,7 +61,7 @@ $$
 \mathbf b=\operatorname{unit}(\mathbf n\times\mathbf t).
 $$
 
-宽、高和深度为
+宽、高为
 
 $$
 W=|\Delta\mathbf C\cdot\mathbf t|+R_1+R_2+2m_t,
@@ -71,13 +71,8 @@ $$
 H=d_{\mathrm{operation}}+2m_b,
 $$
 
-$$
-D=\max(D_{\mathrm{local}},L_1,L_2)+2m_a.
-$$
-
-其中 $m_t,m_b,m_a$ 分别是长边、短边和轴向余量。
-$D_{\mathrm{local}}$ 是以操作特征中心 $\mathbf C_o$ 为原点的局部采样沿
-$\mathbf n$ 的坐标极差，其中采样集与代码一致为
+其中 $m_t,m_b$ 分别是长边和短边余量。竖向不再用局部厚度极差
+围绕 $\mathbf C_o$ 对称放置，而是直接求完整上下边界。局部导板采样集为
 
 $$
 \mathcal S=\left\{\mathbf x:
@@ -86,15 +81,24 @@ $$
 \right\}.
 $$
 
-因此
+再把局部导板采样点以及左右导柱的轴向上下端点合并为集合 $\mathcal Q$，并定义
 
 $$
-D_{\mathrm{local}}=
-\max_{\mathbf x\in\mathcal S}(\mathbf x-\mathbf C_o)\cdot\mathbf n
--\min_{\mathbf x\in\mathcal S}(\mathbf x-\mathbf C_o)\cdot\mathbf n.
+z_-=\min_{\mathbf x\in\mathcal Q}(\mathbf x-\mathbf C_o)\cdot\mathbf n-m_r,
+\qquad
+z_+=\max_{\mathbf x\in\mathcal Q}(\mathbf x-\mathbf C_o)\cdot\mathbf n+m_f,
 $$
 
-局部厚度只在上述长、短边范围附近的真实导板采样上测量。
+其中 $m_f,m_r$ 分别是前、后轴向余量。最终切割体为
+
+$$
+D=z_+-z_-,
+\qquad
+\mathbf C_{\mathrm{window}}=\mathbf C_o+\frac{z_-+z_+}{2}\mathbf n.
+$$
+
+因此操作窗在第一次规划时就完整覆盖局部导板和两根导柱的竖向范围，
+即使导板内外表面相对圆环中心不对称，也不会在一侧留下未切除材料。
 
 ## 3. FDI 轴扫观察窗
 

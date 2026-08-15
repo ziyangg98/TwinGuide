@@ -64,8 +64,8 @@ class OperationWindowTests(unittest.TestCase):
             1,
         )
 
-        self.assertEqual(result.depth_mm, 18.0)
-        self.assertEqual(result.center, Vec3(0.0, 0.0, 2.0))
+        self.assertEqual(result.depth_mm, 20.0)
+        self.assertEqual(result.center, Vec3(0.0, 0.0, 6.0))
         self.assertEqual(result.normal, Vec3(0.0, 0.0, 1.0))
 
     def test_site_override_changes_only_requested_window_geometry(self):
@@ -94,8 +94,8 @@ class OperationWindowTests(unittest.TestCase):
             1,
         )
 
-        self.assertEqual(result.depth_mm, 15.0)
-        self.assertEqual(result.center, Vec3(1.0, 0.0, 1.5))
+        self.assertEqual(result.depth_mm, 17.0)
+        self.assertEqual(result.center, Vec3(1.0, 0.0, 5.5))
         self.assertEqual(result.width_mm, 14.0)
         self.assertEqual(result.height_mm, 8.0)
 

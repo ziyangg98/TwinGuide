@@ -37,6 +37,7 @@ from twin_guide.models import (
     GuideSleeve,
     ProfileWindowCutout,
     ValidationResult,
+    WindowCutout,
 )
 from twin_guide.point_linking import PointLinkingPlan
 from twin_guide.types import ConnectorEndpointSource
@@ -46,6 +47,55 @@ RETAINED_FRACTION_MINIMUM = 0.90
 BORE_VOXEL_MARGIN_FACTOR = 3.0
 CONNECTOR_INSIDE_FRACTION_MINIMUM = 0.95
 OBSERVATION_CREST_CLEARANCE_MINIMUM_MM = 0.2
+
+
+def _operation_window_probe_points(window: WindowCutout) -> tuple[Vec3, ...]:
+    """在操作窗中央区域生成三维畅通性探针。
+
+    探针避开圆角边界和两端导柱，只检查本应完全打开的窗口
+    中央区域。
+    """
+
+    normal = window.normal.normalized()
+    tangent = window.tangent.normalized()
+    bitangent = normal.cross(tangent).normalized()
+    return tuple(
+        window.center
+        + tangent * (window.width_mm * tangent_fraction)
+        + bitangent * (window.height_mm * bitangent_fraction)
+        + normal * (window.depth_mm * axial_fraction)
+        for tangent_fraction in (-0.15, 0.0, 0.15)
+        for bitangent_fraction in (-0.25, 0.0, 0.25)
+        for axial_fraction in (-0.35, -0.175, 0.0, 0.175, 0.35)
+    )
+
+
+def _operation_window_result(
+    model_bvh: BVHTree,
+    windows: tuple[WindowCutout, ...],
+) -> ValidationResult:
+    """检查最终融合后的操作窗中央区域没有残留结构。"""
+
+    metrics: dict[str, int | float] = {"window_count": len(windows)}
+    total_samples = 0
+    blocked_samples = 0
+    for window in windows:
+        probes = _operation_window_probe_points(window)
+        blocked = sum(
+            point_inside_mesh(model_bvh, point)
+            and not (
+                (side := nearest_mesh_surface_side(model_bvh, point)) is not None
+                and side > 1e-6
+            )
+            for point in probes
+        )
+        total_samples += len(probes)
+        blocked_samples += blocked
+        metrics[f"{window.name}_sample_count"] = len(probes)
+        metrics[f"{window.name}_blocked_sample_count"] = blocked
+    metrics["sample_count"] = total_samples
+    metrics["blocked_sample_count"] = blocked_samples
+    return ValidationResult("operation_windows", blocked_samples == 0, metrics)
 
 
 def _point_is_retained(model_bvh: BVHTree, point: Vec3, distance_tolerance_mm: float) -> bool:
@@ -924,6 +974,7 @@ def validate_guide(
             channel_metrics,
         )
     )
+    results.append(_operation_window_result(model_bvh, cutout_plan.windows))
     if tooth_identification is not None:
         results.append(
             _observation_window_result(model_bvh, cutout_plan.profile_windows)

@@ -84,11 +84,12 @@ def _plan_operation_window(
     if not local_samples:
         raise ValueError(f"种植位 {site_index} 的操作窗范围内没有导板表面采样点")
     depth_coordinates = tuple((sample.position - center).dot(normal) for sample in local_samples)
-    local_depth_mm = max(depth_coordinates) - min(depth_coordinates)
-    base_depth_mm = max(
-        local_depth_mm,
-        first_guide.length_mm,
-        second_guide.length_mm,
+    guide_depth_coordinates = tuple(
+        (
+            guide.center + guide.axis * axial_coordinate - center
+        ).dot(normal)
+        for guide in guides
+        for axial_coordinate in (guide.axial_min_mm, guide.axial_max_mm)
     )
     front_margin_mm = (
         case.config.windows.operation_front_axial_margin_mm
@@ -100,8 +101,10 @@ def _plan_operation_window(
         if override is None
         else override.rear_axial_margin_mm
     )
-    depth_mm = base_depth_mm + front_margin_mm + rear_margin_mm
-    shifted_center = center + normal * (front_margin_mm - rear_margin_mm) * 0.5
+    axial_min_mm = min(*depth_coordinates, *guide_depth_coordinates) - rear_margin_mm
+    axial_max_mm = max(*depth_coordinates, *guide_depth_coordinates) + front_margin_mm
+    depth_mm = axial_max_mm - axial_min_mm
+    shifted_center = center + normal * ((axial_min_mm + axial_max_mm) * 0.5)
     if override is not None:
         shifted_center = shifted_center + Vec3(*override.center_offset_mm)
     return WindowCutout(

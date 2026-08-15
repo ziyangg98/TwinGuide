@@ -88,7 +88,7 @@ brew install --cask blender
   --model output/tooth_11/twin_guide.stl
 ```
 
-`validate` 检查拓扑、导管、连接梁、按压梁、导孔、观察窗和特殊结构。
+`validate` 检查拓扑、导管、连接梁、按压梁、导孔、操作窗、观察窗和特殊结构。
 手机包络差集由 `generate` 执行，`validate` 检查差集后的最终模型，
 不把包络重新应用到待检查模型。由于验证基准来自 `run_generation_process()`，
 命令仍可能复用或刷新第 2 阶段缓存，并重写病例默认输出目录中的七阶段 JSON；

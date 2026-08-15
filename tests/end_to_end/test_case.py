@@ -92,6 +92,7 @@ class EndToEndTests(unittest.TestCase):
                     "connector_endpoint_reinforcement",
                     "press_beam",
                     "channels",
+                    "operation_windows",
                     "observation_windows",
                     "terminal_distal_common_node",
                 },
@@ -104,6 +105,7 @@ class EndToEndTests(unittest.TestCase):
                 "connector_endpoint_reinforcement",
                 "press_beam",
                 "channels",
+                "operation_windows",
                 "observation_windows",
                 "terminal_distal_common_node",
             )

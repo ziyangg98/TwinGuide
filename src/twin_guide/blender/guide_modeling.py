@@ -33,6 +33,7 @@ from twin_guide.blender.mesh_queries import (
     clean_mesh,
     prepare_local_aligned_surface,
     remove_excess_components,
+    topology_edge_counts,
 )
 from twin_guide.blender.rendering import create_materials, render_objects
 from twin_guide.blender.scene import duplicate_mesh_object, remove_object
@@ -43,6 +44,7 @@ from twin_guide.blender.stl_io import (
     import_stl_mesh,
 )
 from twin_guide.clearance_adjustment import HandpieceAvoidancePlan
+from twin_guide.errors import GeometryError
 from twin_guide.geometry import Vec3
 from twin_guide.models import (
     BuildArtifacts,
@@ -77,10 +79,7 @@ def _stable_value(value: object) -> object:
     if isinstance(value, list | tuple):
         return [_stable_value(item) for item in value]
     if is_dataclass(value) and not isinstance(value, type):
-        return {
-            field.name: _stable_value(getattr(value, field.name))
-            for field in fields(value)
-        }
+        return {field.name: _stable_value(getattr(value, field.name)) for field in fields(value)}
     raise TypeError(f"无法建立实体缓存指纹：{type(value).__name__}")
 
 
@@ -108,9 +107,7 @@ def _connector_feature_cache_path(
         "radius_mm": plan.radius_mm,
         "curve_resolution": plan.curve_resolution,
         "connector_guide_endpoint": _stable_value(plan.connector_guide_endpoint),
-        "dental_clearance_mm": (
-            case.config.geometry.connector_dental_clearance_mm
-        ),
+        "dental_clearance_mm": (case.config.geometry.connector_dental_clearance_mm),
         "voxel_size_mm": case.config.geometry.fusion_voxel_size_mm,
         "template": _file_identity(case.config.inputs.template),
         "dentition": _file_identity(case.config.inputs.patient_dentition),
@@ -272,9 +269,7 @@ def _clear_generated_artifacts(output_directory: Path) -> None:
     for directory in legacy_directories:
         if directory.is_dir():
             shutil.rmtree(directory)
-    legacy_stage_2_overview = (
-        cache_root / "stage-02-tooth-mapping" / "overview.png"
-    )
+    legacy_stage_2_overview = cache_root / "stage-02-tooth-mapping" / "overview.png"
     if legacy_stage_2_overview.is_file():
         legacy_stage_2_overview.unlink()
     stage_7_cache = cache_root / "stage-07-clearance-adjustment"
@@ -320,6 +315,36 @@ def _create_generated_sleeves(
     )
 
 
+def _prepare_template_for_boolean_cutting(
+    template_mesh: bpy.types.Object,
+    name: str,
+    voxel_size_mm: float,
+    material: bpy.types.Material,
+) -> bpy.types.Object:
+    """仅在模板存在开边或非流形边时，用正式融合精度重建封闭切割基体。"""
+
+    target = duplicate_mesh_object(template_mesh, name)
+    boundary_edges, non_manifold_edges = topology_edge_counts(target)
+    if boundary_edges == 0 and non_manifold_edges == 0:
+        return target
+    repaired = voxel_union(
+        (target,),
+        f"{name}_voxel_repaired",
+        voxel_size_mm,
+        material,
+    )
+    remove_object(target)
+    repaired_boundary_edges, repaired_non_manifold_edges = topology_edge_counts(repaired)
+    if repaired_boundary_edges or repaired_non_manifold_edges:
+        remove_object(repaired)
+        raise GeometryError(
+            "传统模板体素修复后仍不是封闭流形："
+            f"boundary_edges={repaired_boundary_edges}, "
+            f"non_manifold_edges={repaired_non_manifold_edges}"
+        )
+    return repaired
+
+
 def _trim_main_connectors_against_dentition(
     link_meshes: tuple[bpy.types.Object, ...],
     dentition_mesh: bpy.types.Object,
@@ -330,9 +355,7 @@ def _trim_main_connectors_against_dentition(
     """在导板融合前裁掉主连接梁进入牙体保护空间的部分。"""
 
     connector_meshes = tuple(
-        mesh
-        for mesh in link_meshes
-        if mesh.name.startswith(MAIN_CONNECTOR_PREFIXES)
+        mesh for mesh in link_meshes if mesh.name.startswith(MAIN_CONNECTOR_PREFIXES)
     )
     if not connector_meshes:
         return link_meshes
@@ -656,14 +679,9 @@ def create_point_link_meshes(
             )
     if connector_endpoint is not None:
         assert template_mesh is not None
-        for label, surface_anchor, surface_normal, center, incidents in (
-            connector_groups.values()
-        ):
+        for label, surface_anchor, surface_normal, center, incidents in connector_groups.values():
             incident = sum(incidents, Vec3(0.0, 0.0, 0.0)).normalized()
-            bulb_center = (
-                center
-                - incident * connector_endpoint.bulb_forward_offset_mm
-            )
+            bulb_center = center - incident * connector_endpoint.bulb_forward_offset_mm
             bpy.ops.mesh.primitive_ico_sphere_add(
                 subdivisions=3,
                 radius=plan.radius_mm * connector_endpoint.bulb_radius_factor,
@@ -1079,14 +1097,16 @@ def _render_handpiece_avoidance(
     for plan in plans:
         pivot = Vec3(*plan.pivot)
         axis = Vec3(*plan.rotation_axis).normalized()
-        axes.append(create_axis_cylinder(
-            f"handpiece_{plan.avoidance_id}_rotation_axis",
-            pivot - axis * 24.0,
-            pivot + axis * 24.0,
-            0.35,
-            materials["avoidance_axis"],
-            48,
-        ))
+        axes.append(
+            create_axis_cylinder(
+                f"handpiece_{plan.avoidance_id}_rotation_axis",
+                pivot - axis * 24.0,
+                pivot + axis * 24.0,
+                0.35,
+                materials["avoidance_axis"],
+                48,
+            )
+        )
         bpy.ops.mesh.primitive_uv_sphere_add(
             segments=48,
             ring_count=24,
@@ -1162,14 +1182,12 @@ def build_guide_from_links(
         and point_links.terminal_distal_common_node is None
     )
     if incremental_connectors:
-        main_connector_meshes, connector_cache_hit = (
-            _incremental_main_connector_meshes(
-                case,
-                point_links,
-                template_mesh,
-                materials["connector"],
-                force_rebuild=force_rebuild,
-            )
+        main_connector_meshes, connector_cache_hit = _incremental_main_connector_meshes(
+            case,
+            point_links,
+            template_mesh,
+            materials["connector"],
+            force_rebuild=force_rebuild,
         )
         press_surface_data = (
             prepare_local_aligned_surface(template_mesh)
@@ -1204,10 +1222,8 @@ def build_guide_from_links(
         sleeve_point_markers, template_point_markers = _create_link_point_markers(
             point_links, materials
         )
-        anchor_trajectory_meshes, press_beam_trajectory_meshes = (
-            _create_stage_trajectory_meshes(
-                point_links, materials["template_point"]
-            )
+        anchor_trajectory_meshes, press_beam_trajectory_meshes = _create_stage_trajectory_meshes(
+            point_links, materials["template_point"]
         )
     cut_template_cache_hit = False
     static_cut_template_cache_hit = False
@@ -1250,9 +1266,11 @@ def build_guide_from_links(
                 )
                 if cut_template_mesh is None:
                     cut_template_mesh = subtract_cutters(
-                        duplicate_mesh_object(
+                        _prepare_template_for_boolean_cutting(
                             template_mesh,
                             "profile_cut_template_for_build",
+                            fusion_voxel_size_mm,
+                            materials["template"],
                         ),
                         profile_window_cutters,
                     )
@@ -1273,16 +1291,19 @@ def build_guide_from_links(
                 )
         else:
             cut_template_mesh = subtract_cutters(
-                duplicate_mesh_object(template_mesh, "cut_template_for_build"),
+                _prepare_template_for_boolean_cutting(
+                    template_mesh,
+                    "cut_template_for_build",
+                    fusion_voxel_size_mm,
+                    materials["template"],
+                ),
                 (*channel_cutters, *window_cutters),
             )
         if preview:
             _write_mesh_checkpoint(cut_template_cache_path, cut_template_mesh)
     else:
         cut_template_cache_hit = True
-    entity_report_path = (
-        output_directory / ".cache" / "entity-preview" / "last-build.json"
-    )
+    entity_report_path = output_directory / ".cache" / "entity-preview" / "last-build.json"
     entity_report_path.parent.mkdir(parents=True, exist_ok=True)
     entity_report_path.write_text(
         json.dumps(
