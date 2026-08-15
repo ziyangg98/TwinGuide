@@ -162,7 +162,7 @@ class GeometryParameters:
     fusion_voxel_size_mm: float
     connector_dental_clearance_mm: float = 0.20
     sleeve_stop_clearance_mm: float = 2.0
-    sleeve_stop_front_avoidance_mm: float = 0.0
+    sleeve_stop_front_avoidance_mm: float = 4.0
     connection_blocks: ConnectionBlockParameters = field(default_factory=ConnectionBlockParameters)
     connector_guide_endpoint: PressBeamGuideEndpointParameters = PressBeamGuideEndpointParameters()
 
@@ -302,11 +302,12 @@ class ObservationWindowOverride:
 
 @dataclass(frozen=True, slots=True)
 class ConnectorAvoidanceOverride:
-    """一根导柱高位连接线的独立止停台避让节点。"""
+    """一根导柱高位连接线单侧的止停台避让节点。"""
 
     guide_index: int
     path_fraction: float
     downward_offset_mm: float
+    side: str
 
     def __post_init__(self) -> None:
         """校验导柱编号、沿线比例和下移量。"""
@@ -316,6 +317,8 @@ class ConnectorAvoidanceOverride:
             raise ValueError("连接节点沿线比例必须位于 [0, 1]")
         if self.downward_offset_mm < 0.0:
             raise ValueError("连接节点下移量不得为负")
+        if self.side not in {"left", "right"}:
+            raise ValueError("连接节点 side 必须为 left 或 right")
 
 
 @dataclass(frozen=True, slots=True)
@@ -362,10 +365,19 @@ class EditorOverrides:
             None,
         )
 
-    def connector_for(self, guide_index: int) -> ConnectorAvoidanceOverride | None:
-        """按导柱编号查找避让节点。"""
+    def connector_for(
+        self,
+        guide_index: int,
+        side: str,
+    ) -> ConnectorAvoidanceOverride | None:
+        """按导柱和侧别查找避让节点。"""
+
         return next(
-            (item for item in self.connector_avoidance if item.guide_index == guide_index),
+            (
+                item
+                for item in self.connector_avoidance
+                if item.guide_index == guide_index and item.side == side
+            ),
             None,
         )
 

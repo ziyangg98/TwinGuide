@@ -60,6 +60,7 @@ def editor_overrides_data(overrides: EditorOverrides) -> dict[str, object]:
         result["connector_avoidance"] = [
             {
                 "guide_index": item.guide_index,
+                "side": item.side,
                 "path_fraction": item.path_fraction,
                 "downward_offset_mm": item.downward_offset_mm,
             }

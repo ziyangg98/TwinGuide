@@ -18,7 +18,7 @@ from twin_guide.geometry import Vec3
 class EditorPlanTests(unittest.TestCase):
     def test_snapshot_requires_matching_schema_revision_and_geometry(self):
         value = {
-            "schema_version": "twin-guide.ui-editor-snapshot/3.0",
+            "schema_version": "twin-guide.ui-editor-snapshot/4.0",
             "revision": 4,
             "geometry_fingerprint": "geometry-4",
         }
@@ -70,7 +70,11 @@ class EditorPlanTests(unittest.TestCase):
                 inputs,
                 root / "ui-plan",
                 1.0,
-                EditorOverrides(connector_avoidance=(ConnectorAvoidanceOverride(1, 0.6, 2.0),)),
+                EditorOverrides(
+                    connector_avoidance=(
+                        ConnectorAvoidanceOverride(1, 0.6, 2.0, "left"),
+                    )
+                ),
             )
 
             first_value = editor_plan_fingerprint(first, config_path)
@@ -130,6 +134,13 @@ class EditorPlanTests(unittest.TestCase):
                 purpose: str = "operation"
 
             @dataclass(frozen=True)
+            class Route:
+                guide_index: int
+                side: str
+                tube_contact: Vec3
+                route_endpoint: Vec3
+
+            @dataclass(frozen=True)
             class Link:
                 guide_index: int
                 sleeve_label: str
@@ -137,6 +148,7 @@ class EditorPlanTests(unittest.TestCase):
                 tube_contact: Vec3
                 end: Vec3
                 centerline: tuple[Vec3, ...]
+                platform_avoidance_routes: tuple[Route, ...]
 
             @dataclass(frozen=True)
             class Anchor:
@@ -194,6 +206,20 @@ class EditorPlanTests(unittest.TestCase):
                             Vec3(0.0, 0.0, 0.0),
                             Vec3(1.0, 0.0, 0.0),
                             (Vec3(-1.0, 0.0, 0.0), Vec3(1.0, 0.0, 0.0)),
+                            (
+                                Route(
+                                    1,
+                                    "left",
+                                    Vec3(0.0, 0.0, 0.0),
+                                    Vec3(-1.0, 0.0, 0.0),
+                                ),
+                                Route(
+                                    1,
+                                    "right",
+                                    Vec3(0.0, 0.0, 0.0),
+                                    Vec3(1.0, 0.0, 0.0),
+                                ),
+                            ),
                         ),
                     )
                 ),
@@ -221,7 +247,8 @@ class EditorPlanTests(unittest.TestCase):
                 {
                     "sleeve:site_1",
                     "operation_window:1",
-                    "connector:guide_1",
+                    "connector:guide_1:left",
+                    "connector:guide_1:right",
                     "press_anchor:1",
                     "press_junction",
                 },

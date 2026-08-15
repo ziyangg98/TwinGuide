@@ -7,7 +7,8 @@ from time import perf_counter
 
 from twin_guide.case_analysis import analyze_case
 from twin_guide.clearance_adjustment import adjust_clearance
-from twin_guide.config import CaseConfig, PressBeamMode
+from twin_guide.config import CaseConfig, Jaw, PressBeamMode
+from twin_guide.geometry import Vec3
 from twin_guide.guide_component_bridge import select_guide_component_bridge
 from twin_guide.guide_terminal_u_extension import select_guide_terminal_u_extension
 from twin_guide.point_linking import (
@@ -101,6 +102,14 @@ STAGES = (
 
 _LAST_PROCESS: GenerationProcessResult | None = None
 _LAST_PROCESS_KEY: tuple[str, bool, bool, bool] | None = None
+
+
+def _jaw_downward_direction(jaw: Jaw, template_normal: Vec3) -> Vec3:
+    """返回随上下颌变化、朝龈方的固定下移方向。"""
+
+    direction = template_normal.normalized()
+    canonical = Vec3(0.0, 0.0, -jaw.occlusal_axis_sign)
+    return direction if direction.dot(canonical) >= 0.0 else direction * -1.0
 
 
 def _reuse_numerically_unchanged_links(
@@ -352,7 +361,10 @@ def run_generation_process(
         context.press_beam_points,
         context.guide_component_bridge,
         context.guide_terminal_u_extension,
-        context.sleeve_generation.template_frame.normal * -1.0,
+        _jaw_downward_direction(
+            config.jaw,
+            context.sleeve_generation.template_frame.normal,
+        ),
     )
     context.point_linking = _reuse_numerically_unchanged_links(
         context.point_linking,

@@ -582,7 +582,7 @@ def _parse_geometry(raw: dict[str, object]) -> GeometryParameters:
             "geometry.sleeve_stop_clearance_mm",
         ),
         sleeve_stop_front_avoidance_mm=_number(
-            raw.get("sleeve_stop_front_avoidance_mm", 0.0),
+            raw.get("sleeve_stop_front_avoidance_mm", 4.0),
             "geometry.sleeve_stop_front_avoidance_mm",
         ),
         connection_blocks=_parse_connection_blocks(raw.get("connection_blocks")),
@@ -874,6 +874,15 @@ def _editor_items(raw: dict[str, object], key: str) -> list[object]:
     return value
 
 
+def _connector_side(value: object, name: str) -> str:
+    """解析必填的连接柱左右侧标识。"""
+
+    side = _optional_text(value, name)
+    if side not in {"left", "right"}:
+        raise ConfigurationError(f"{name} 必须为 left 或 right")
+    return side
+
+
 def _parse_editor_overrides(
     raw_value: object,
     guide_posts: tuple[GuidePostParameters, ...],
@@ -1092,7 +1101,7 @@ def _parse_editor_overrides(
         item = _mapping(value, f"editor_overrides.connector_avoidance[{index}]")
         _reject_unknown(
             item,
-            {"guide_index", "path_fraction", "downward_offset_mm"},
+            {"guide_index", "path_fraction", "downward_offset_mm", "side"},
             f"editor_overrides.connector_avoidance[{index}]",
         )
         connectors.append(
@@ -1108,6 +1117,10 @@ def _parse_editor_overrides(
                 downward_offset_mm=_number(
                     _required(item, "downward_offset_mm"),
                     f"editor_overrides.connector_avoidance[{index}].downward_offset_mm",
+                ),
+                side=_connector_side(
+                    _required(item, "side"),
+                    f"editor_overrides.connector_avoidance[{index}].side",
                 ),
             )
         )
@@ -1141,14 +1154,14 @@ def _parse_editor_overrides(
                 ),
             )
         )
-    for name, values, key in (
-        ("导柱种植位", sleeve_sites, "ring_index"),
-        ("操作窗口", operation_windows, "site_index"),
-        ("观察窗口", observation_windows, "window_id"),
-        ("连接节点", connectors, "guide_index"),
-        ("表面锚点", anchors, "anchor_id"),
+    for name, values, identifier in (
+        ("导柱种植位", sleeve_sites, lambda item: item.ring_index),
+        ("操作窗口", operation_windows, lambda item: item.site_index),
+        ("观察窗口", observation_windows, lambda item: item.window_id),
+        ("连接节点", connectors, lambda item: (item.guide_index, item.side)),
+        ("表面锚点", anchors, lambda item: item.anchor_id),
     ):
-        identifiers = [getattr(item, key) for item in values]
+        identifiers = [identifier(item) for item in values]
         if len(set(identifiers)) != len(identifiers):
             raise ConfigurationError(f"editor_overrides.{name} 编号不得重复")
     return EditorOverrides(

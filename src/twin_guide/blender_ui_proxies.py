@@ -79,7 +79,7 @@ def _feature_id(kind: str, properties: dict[str, object]) -> str:
     if kind.startswith("window_"):
         return f"operation_window:{properties['site_index']}"
     if kind == "connector_node":
-        return f"connector:guide_{properties['guide_index']}"
+        return f"connector:guide_{properties['guide_index']}:{properties['side']}"
     if kind == "surface_anchor":
         index = str(properties["anchor_id"]).rsplit("_", 1)[-1]
         return f"press_anchor:{index}"
@@ -282,7 +282,8 @@ def create_curve(
         object_.color = (0.15, 0.9, 0.45, 1.0)
     elif name.startswith("Connector_"):
         object_["tg_group"] = "CONNECTOR"
-        object_["tg_feature_id"] = f"connector:guide_{name.rsplit('_', 1)[-1]}"
+        parts = name.removeprefix("Connector_").split("_")
+        object_["tg_feature_id"] = f"connector:guide_{parts[0]}"
         object_.color = (1.0, 0.68, 0.05, 1.0)
     elif name.startswith("Observation_"):
         object_["tg_group"] = "OBSERVATION"

@@ -51,8 +51,8 @@ def changed_feature_ids(
     compare(
         previous.connector_avoidance,
         current.connector_avoidance,
-        lambda item: item.guide_index,
-        lambda index: f"connector:guide_{index}",
+        lambda item: (item.guide_index, item.side),
+        lambda key: f"connector:guide_{key[0]}",
     )
     compare(
         previous.surface_anchors,

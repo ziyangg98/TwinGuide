@@ -18,7 +18,9 @@ class EditorStorageTests(unittest.TestCase):
             path.write_text(original, encoding="utf-8")
             overrides = EditorOverrides(
                 sleeve_sites=(SleeveSiteOverride(1, 16.0, 9.0, 4.0),),
-                connector_avoidance=(ConnectorAvoidanceOverride(1, 0.4, 2.5),),
+                connector_avoidance=(
+                    ConnectorAvoidanceOverride(1, 0.4, 2.5, "left"),
+                ),
             )
 
             backup = save_editor_overrides(path, overrides)
@@ -33,6 +35,7 @@ class EditorStorageTests(unittest.TestCase):
             self.assertIn("sleeve_sites:", first)
             self.assertIn("ring_index: 1", first)
             self.assertIn("path_fraction: 0.4", first)
+            self.assertIn("side: left", first)
             self.assertEqual(backup.read_text(encoding="utf-8"), original)
 
 

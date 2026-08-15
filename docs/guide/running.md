@@ -45,7 +45,7 @@ brew install --cask blender
 即可通过三维手柄或右侧输入框调整参数。
 
 操作窗边缘成对移动且中心移动不改变宽高；观察窗端点逐牙吸附有效 FDI；左右
-连接线的避让节点彼此独立；表面图钉通过鼠标射线沿导板或牙面移动；每个种植位置
+每根导柱左右两侧的连接线避让节点彼此独立，且不能拖入平台的自动禁入区；表面图钉通过鼠标射线沿导板或牙面移动；每个种植位置
 显示一组三个导柱高度控制环，沿该位置轴线移动时左右导柱同步更新，并在相邻高度前
 停止。拖动时按 `Shift` 以 0.1 mm（角度为
 1°）精调，`Esc` 取消当前拖动。
@@ -55,7 +55,7 @@ brew install --cask blender
 检查。
 
 编辑器启动一个病例专用后台 worker。热更新按结构编号复用牙位、窗口、已切导板和
-单根连接梁检查点；操作窗、单侧连接避让和支撑结构只重建其依赖项。快速预览保持
+单根连接梁检查点；操作窗、双侧连接避让和支撑结构只重建其依赖项。快速预览保持
 0.2 mm 体素精度，正式导出仍使用完整修复与检验流程。
 
 需要在生成后立即验收最终 STL 时，可使用：
@@ -100,8 +100,12 @@ Blender 后端与端到端测试、全部病例回归分别使用：
 
 ```bash
 ./scripts/blender.sh --background --python scripts/run_tests.py
-./scripts/blender.sh --background --python scripts/run_regression.py
+.venv/bin/python scripts/run_all_cases.py --force
 ```
+
+全病例脚本自动发现 `data/cases/case-*/case.yaml`，逐例生成并验证，单例失败不会
+阻断后续病例。结果写入 `output/all-cases/summary.json`，可视化汇总写入
+`output/all-cases/report.html`；缺少 `case.yaml` 的数据目录单独列为未配置，不计为生成失败。
 
 ## 新病例落地顺序
 

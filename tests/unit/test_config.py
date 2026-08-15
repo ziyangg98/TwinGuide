@@ -191,7 +191,7 @@ class CaseConfigTests(unittest.TestCase):
         self.assertEqual(config.windows.operation_front_axial_margin_mm, 5.0)
         self.assertEqual(config.windows.operation_rear_axial_margin_mm, 5.0)
         self.assertEqual(config.geometry.sleeve_stop_clearance_mm, 2.0)
-        self.assertEqual(config.geometry.sleeve_stop_front_avoidance_mm, 0.0)
+        self.assertEqual(config.geometry.sleeve_stop_front_avoidance_mm, 4.0)
         self.assertTrue(config.geometry.connection_blocks.lower_main)
         self.assertEqual(config.inputs.template, (self.case_directory / "template.stl").resolve())
         self.assertEqual(
@@ -1351,8 +1351,18 @@ design:
                 },
             ],
             "connector_avoidance": [
-                {"guide_index": 1, "path_fraction": 0.35, "downward_offset_mm": 2.0},
-                {"guide_index": 2, "path_fraction": 0.60, "downward_offset_mm": 3.0},
+                {
+                    "guide_index": 1,
+                    "side": "left",
+                    "path_fraction": 0.35,
+                    "downward_offset_mm": 2.0,
+                },
+                {
+                    "guide_index": 2,
+                    "side": "right",
+                    "path_fraction": 0.60,
+                    "downward_offset_mm": 3.0,
+                },
             ],
         }
         path.write_text(
@@ -1364,9 +1374,29 @@ design:
 
         self.assertEqual(config.editor_overrides.sleeve_for(1).height_mm, 16.0)
         self.assertEqual(
-            config.editor_overrides.connector_for(1).downward_offset_mm,
+            config.editor_overrides.connector_for(1, "left").downward_offset_mm,
             2.0,
         )
+
+    def test_connector_avoidance_requires_explicit_side(self):
+        path = self._write_config(self._valid_config_data())
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        raw["editor_overrides"] = {
+            "connector_avoidance": [
+                {
+                    "guide_index": 1,
+                    "path_fraction": 0.35,
+                    "downward_offset_mm": 2.0,
+                }
+            ]
+        }
+        path.write_text(
+            yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(ConfigurationError, "side"):
+            CaseConfig.from_yaml(path)
 
     def test_guide_post_sleeve_parameters_inherit_and_override_defaults(self):
         path = self._write_config(self._valid_config_data())

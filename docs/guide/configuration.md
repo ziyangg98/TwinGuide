@@ -123,7 +123,7 @@ $$
 | `fusion_voxel_size_mm` | 必填 | 网格融合/离散尺度，$>0$ |
 | `connector_dental_clearance_mm` | `0.20` | 连接梁与牙列的净距，$\geq0$ |
 | `sleeve_stop_clearance_mm` | `2.0` | 高位连接梁外缘到止停台侧稳定外壁边缘的净距，$\geq0$ |
-| `sleeve_stop_front_avoidance_mm` | `0.0` | 高位主连接线在正视平面下拉、避开止停台投影的距离，$\geq0$ |
+| `sleeve_stop_front_avoidance_mm` | `4.0` | 避让控制点相对导柱接触点的固定龈向总位移，$\geq0$；下颌向下、上颌向上，不与原路径落差叠加，也不参与搜索或优化 |
 | `connection_blocks` | 全部启用 | 分别控制 `lower_main`、`upper_main` 和 `press_beam` |
 | `connector_guide_endpoint` | 见下表 | 连接梁在导板端的渐粗、根部球和贴合脚参数 |
 
@@ -454,8 +454,11 @@ editor_overrides:
 保留两位小数后的结果完全一致时迁移为 `sleeve_sites`；迁移直接采用该共同显示值，
 编辑器再次保存时写出新格式。
 
-`connector_avoidance.path_fraction` 保持旧字段兼容，其含义是从止停台接触点到
-所选侧路线端点的比例；`downward_offset_mm` 是正视方向的下拉偏移。
+高位连接柱会按给定参数分别生成每根导柱的左右两侧路径，生成过程中不搜索、优化或
+按投影净距否决给定的下移量。病例级记录必须显式
+填写 `side: left` 或 `side: right`；`path_fraction` 是从导柱接触点到该侧路线端点的
+比例，`downward_offset_mm` 是该侧控制点相对导柱接触点的固定龈向总位移。未写病例级记录时使用全局
+`sleeve_stop_front_avoidance_mm` 和固定比例 0.35。投影净距仅写入阶段产物供复核，不参与生成决策。
 
 ## 审核状态
 

@@ -255,6 +255,18 @@ def _connector_result(
         metrics[f"{metric_prefix}_tube_contact_distance_mm"] = tube_contact_distance
         metrics[f"{metric_prefix}_left_anchor_distance_mm"] = left_anchor_distance
         metrics[f"{metric_prefix}_right_anchor_distance_mm"] = right_anchor_distance
+        if connector.sleeve_label == "upper":
+            expected_route_count = 2 * len(guide_indices)
+            metrics[f"{metric_prefix}_platform_avoidance_side_count"] = len(
+                connector.platform_avoidance_routes
+            )
+            passed &= len(connector.platform_avoidance_routes) == expected_route_count
+        for route in connector.platform_avoidance_routes:
+            route_prefix = f"guide_{route.guide_index}_upper_{route.side}"
+            metrics[f"{route_prefix}_platform_offset_mm"] = route.actual_offset_mm
+            metrics[f"{route_prefix}_platform_clearance_mm"] = (
+                route.minimum_clearance_mm
+            )
         passed &= (
             inside_fraction >= CONNECTOR_INSIDE_FRACTION_MINIMUM
             and tube_contact_distance <= connector_radius_mm + 0.4

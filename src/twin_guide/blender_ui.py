@@ -153,7 +153,7 @@ def _project_to_polyline(
 
 
 def _connector_base(object_: bpy.types.Object) -> tuple[Vector, Vector, float]:
-    """返回生成器语义中的接触点—选定侧端点基点。"""
+    """返回移除龈向分量后的沿线路径基点。"""
 
     start = Vector(object_["tg_route_start"])
     end = Vector(object_["tg_route_end"])
@@ -161,7 +161,9 @@ def _connector_base(object_: bpy.types.Object) -> tuple[Vector, Vector, float]:
     length = max(1e-9, segment.length)
     distance = min(length, max(0.0, float(object_.get("tg_path_distance", 0.0))))
     tangent = segment.normalized()
-    base = start + tangent * distance
+    down = Vector(object_["tg_down"]).normalized()
+    span = tangent * distance
+    base = start + span - down * span.dot(down)
     return base, tangent, length
 
 
@@ -461,21 +463,27 @@ def _create_operation_controls() -> None:
         )
 
 
-def _upper_link_by_guide() -> dict[int, dict[str, object]]:
-    """按导柱编号取得统一编辑计划中的高位连接线。"""
+def _connector_route_features() -> tuple[dict[str, object], ...]:
+    """取得统一编辑计划中的逐导柱、逐侧高位连接路线。"""
 
-    result = {}
+    result = []
     for feature in _plan_features("connector"):
         geometry = feature.get("geometry")
         if isinstance(geometry, dict):
-            result[int(geometry["guide_index"])] = geometry
-    return result
+            result.append(geometry)
+    return tuple(result)
 
 
 def _create_connector_controls() -> None:
-    """为每根导柱建立独立正视避让节点。"""
+    """为每根导柱的左右侧分别建立正视避让节点。"""
     assert _CONFIG is not None
-    for index, raw in _upper_link_by_guide().items():
+    touched_guides = set()
+    for raw in _connector_route_features():
+        index = int(raw["guide_index"])
+        route_raw = raw.get("avoidance_route")
+        if not isinstance(route_raw, dict):
+            continue
+        side = str(route_raw["side"])
         raw_centerline = raw.get("centerline")
         centerline = (
             [_vec(point) for point in raw_centerline]
@@ -484,52 +492,44 @@ def _create_connector_controls() -> None:
         )
         start = centerline[0]
         end = centerline[-1]
-        route_start = _vec(raw["tube_contact"])
-        route_end_value = raw.get("avoidance_route_endpoint")
-        route_end = end if route_end_value is None else _vec(route_end_value)
+        route_start = _vec(route_raw["tube_contact"])
+        route_end = _vec(route_raw["route_endpoint"])
         route = route_end - route_start
         path_length = max(1e-9, route.length)
         tangent = route.normalized()
-        down_value = raw.get("avoidance_direction")
-        local_down = (
-            Vector((0.0, 0.0, 1.0 if _CONFIG.jaw.value == "upper" else -1.0))
-            if down_value is None
-            else _vec(down_value)
-        ).normalized()
-        override = _working_overrides().connector_for(index)
-        fraction = 0.35 if override is None else override.path_fraction
-        offset = (
-            _CONFIG.geometry.sleeve_stop_front_avoidance_mm
-            if override is None
-            else override.downward_offset_mm
-        )
+        local_down = _vec(route_raw["avoidance_direction"]).normalized()
+        fraction = float(route_raw["path_fraction"])
+        offset = float(route_raw["actual_offset_mm"])
         distance = path_length * fraction
-        base = route_start + tangent * distance
-        local_down = (local_down - tangent * local_down.dot(tangent)).normalized()
+        span = tangent * distance
+        base = route_start + span - local_down * span.dot(local_down)
         location = base + local_down * offset
         _control(
-            f"Connector_{index}",
+            f"Connector_{index}_{side}",
             location,
             "connector_node",
             guide_index=index,
+            side=side,
             start=list(start),
             end=list(end),
             route_start=list(route_start),
             route_end=list(route_end),
-            route_side=str(raw.get("avoidance_route_side", "right")),
             tangent=list(tangent),
             down=list(local_down),
             path_distance=distance,
+            minimum_offset=float(route_raw["actual_offset_mm"]),
         )
-        _update_connector_overlay(index)
+        touched_guides.add(index)
         _hint_label(
-            f"Connector_{index}",
-            f"连接线 {index}",
+            f"Connector_{index}_{side}",
+            f"连接线 {index} {'左侧' if side == 'left' else '右侧'}",
             location + local_down * 1.4,
             "CONNECTOR",
-            f"connector:guide_{index}",
+            f"connector:guide_{index}:{side}",
             (1.0, 0.68, 0.05, 1.0),
         )
+    for index in touched_guides:
+        _update_connector_overlay(index)
 
 
 def _create_press_controls() -> None:
@@ -823,7 +823,8 @@ def _feature_label(feature_id: str) -> tuple[str, str]:
     if feature_id.startswith("observation_window:"):
         return "观察窗", _observation_display_name(feature_id.split(":", 1)[1])
     if feature_id.startswith("connector:guide_"):
-        return "连接线", f"连接线 {feature_id.rsplit('_', 1)[-1]}"
+        guide, side = feature_id.removeprefix("connector:guide_").split(":", 1)
+        return "连接线", f"连接线 {guide} {'左侧' if side == 'left' else '右侧'}"
     if feature_id.startswith("press_anchor:"):
         return "支撑结构", f"支撑点 {feature_id.rsplit(':', 1)[-1]}"
     if feature_id == "press_junction":
@@ -1053,10 +1054,13 @@ def _feature_values_updated(
         length = max(1e-9, route.length)
         distance = min(length, max(0.0, state.feature_value_1 * length))
         tangent = route.normalized()
-        base = route_start + tangent * distance
         control["tg_path_distance"] = distance
         control["tg_tangent"] = list(tangent)
-        control.location = base + Vector(control["tg_down"]) * max(0.0, state.feature_value_2)
+        base, _tangent, _length = _connector_base(control)
+        control.location = base + Vector(control["tg_down"]) * max(
+            float(control.get("tg_minimum_offset", 0.0)),
+            state.feature_value_2,
+        )
         _update_connector_overlay(int(control["tg_guide_index"]))
     elif feature_id.startswith("sleeve:"):
         _move_on_axes(controls["closed"], (state.feature_value_1,))
@@ -1152,23 +1156,22 @@ def _surface_role_updated(
 
 
 def _update_connector_overlay(index: int) -> None:
-    """按生成器的局部 route_fraction 语义刷新单根连接线。"""
-    node = _find_control("connector_node", guide_index=index)
-    if node is None:
+    """按左右两个避让节点刷新一根导柱的高位连接线。"""
+    left = _find_control("connector_node", guide_index=index, side="left")
+    right = _find_control("connector_node", guide_index=index, side="right")
+    if left is None or right is None:
         return
-    start = Vector(node["tg_start"])
-    contact = Vector(node["tg_route_start"])
-    end = Vector(node["tg_end"])
-    path = (
-        [start, node.location.copy(), contact, end]
-        if str(node.get("tg_route_side", "right")) == "left"
-        else [start, contact, node.location.copy(), end]
-    )
+    start = Vector(left["tg_start"])
+    contact = Vector(left["tg_route_start"])
+    end = Vector(right["tg_end"])
+    path = [start, left.location.copy(), contact, right.location.copy(), end]
     _update_curve(f"Connector_{index}", path)
-    _move_hint_label(
-        f"Connector_{index}",
-        node.location + Vector(node["tg_down"]) * 1.4,
-    )
+    for node in (left, right):
+        side = str(node["tg_side"])
+        _move_hint_label(
+            f"Connector_{index}_{side}",
+            node.location + Vector(node["tg_down"]) * 1.4,
+        )
 
 
 def _update_press_overlay() -> None:
@@ -1373,7 +1376,10 @@ def _constrain_control(object_: bpy.types.Object) -> None:
         distance = min(length, max(0.0, (object_.location - route_start).dot(tangent)))
         base = route_start + tangent * distance
         down = Vector(object_["tg_down"])
-        lowered = max(0.0, (object_.location - base).dot(down))
+        lowered = max(
+            float(object_.get("tg_minimum_offset", 0.0)),
+            (object_.location - base).dot(down),
+        )
         object_["tg_path_distance"] = distance
         object_["tg_tangent"] = list(tangent)
         object_.location = base + down * lowered
@@ -1486,6 +1492,7 @@ def _feature_adapter_value(feature_id: str) -> EditorOverrides:
             int(control["tg_guide_index"]),
             min(1.0, max(0.0, float(control["tg_path_distance"]) / length)),
             max(0.0, (control.location - base).dot(Vector(control["tg_down"]))),
+            str(control["tg_side"]),
         )
         return with_connector(current, value)
     if feature_id.startswith("operation_window:"):
@@ -1947,16 +1954,20 @@ def _gizmo_set_value(axis_index: int, value: float) -> None:
         tangent = route.normalized()
         current_base, _current_tangent, _current_length = _connector_base(object_)
         down = Vector(object_["tg_down"]).normalized()
-        current_offset = max(0.0, (object_.location - current_base).dot(down))
+        minimum_offset = float(object_.get("tg_minimum_offset", 0.0))
+        current_offset = max(
+            minimum_offset,
+            (object_.location - current_base).dot(down),
+        )
         if axis_index == 0:
             distance = min(path_length, max(0.0, value))
             offset = current_offset
         else:
             distance = float(object_.get("tg_path_distance", 0.0))
-            offset = max(0.0, value)
-        base = route_start + tangent * distance
+            offset = max(minimum_offset, value)
         object_["tg_path_distance"] = distance
         object_["tg_tangent"] = list(tangent)
+        base, _base_tangent, _base_length = _connector_base(object_)
         object_.location = base + down * offset
         _update_connector_overlay(int(object_["tg_guide_index"]))
         _preview_feature_edit(str(object_["tg_feature_id"]))

@@ -1,8 +1,11 @@
 import unittest
 from dataclasses import replace
 
-from twin_guide.config import ConnectorAvoidanceOverride
-from twin_guide.generation_process import _reuse_numerically_unchanged_links
+from twin_guide.config import ConnectorAvoidanceOverride, Jaw
+from twin_guide.generation_process import (
+    _jaw_downward_direction,
+    _reuse_numerically_unchanged_links,
+)
 from twin_guide.geometry import Vec3
 from twin_guide.models import GuideSleeve, TemplateFrame
 from twin_guide.point_linking import (
@@ -54,6 +57,13 @@ def _sleeve(index: int, x: float) -> GuideSleeve:
 
 
 class PointLinkingTests(unittest.TestCase):
+    def test_fixed_platform_shift_follows_upper_and_lower_gingival_direction(self):
+        """同一模板法向应按上下颌统一到各自的龈向下移侧。"""
+
+        tilted_up = Vec3(0.2, 0.0, 0.98).normalized()
+        self.assertEqual(_jaw_downward_direction(Jaw.LOWER, tilted_up), tilted_up * -1.0)
+        self.assertEqual(_jaw_downward_direction(Jaw.UPPER, tilted_up), tilted_up)
+
     def test_template_span_follows_connector_radius(self):
         """牙科导板左右点跨度应使用论文给出的半径公式。"""
 
@@ -102,6 +112,66 @@ class PointLinkingTests(unittest.TestCase):
         self.assertEqual(plan.curve_resolution, 30)
         self.assertFalse(plan.press_beam_links_included)
         self.assertEqual(plan.connection_type, "continuous_sleeve_frame")
+        default_routes = tuple(
+            route
+            for link in plan.links
+            for route in link.platform_avoidance_routes
+        )
+        self.assertEqual(
+            {(route.guide_index, route.side) for route in default_routes},
+            {(1, "left"), (1, "right"), (2, "left"), (2, "right")},
+        )
+        self.assertTrue(all(route.actual_offset_mm == 4.0 for route in default_routes))
+        for route in default_routes:
+            self.assertAlmostEqual(
+                (route.routing_point - route.tube_contact).dot(
+                    route.avoidance_direction
+                ),
+                4.0,
+            )
+        crowded_sleeves = tuple(
+            replace(
+                sleeve,
+                parameters=replace(sleeve.parameters, platform_height=14.0),
+            )
+            for sleeve in sleeves
+        )
+        crowded_sleeve_plan = select_sleeve_anchors(
+            SimpleNamespace(guide_sleeves=crowded_sleeves),
+            SleeveGenerationResult(crowded_sleeves, frame),
+            SleeveAnchorSelectionConfig(connector_radius_mm=1.2),
+        )
+        crowded_points = TemplateLinkPointPlan(
+            crowded_sleeve_plan,
+            TemplatePointPlan(template_selections),
+        )
+        crowded_default = link_selected_points(crowded_points, config)
+        self.assertTrue(
+            all(
+                route.actual_offset_mm == 4.0
+                for link in crowded_default.links
+                for route in link.platform_avoidance_routes
+            )
+        )
+        crowded_config = replace(
+            config,
+            stop_platform_overrides=tuple(
+                ConnectorAvoidanceOverride(guide_index, 0.35, 2.7, side)
+                for guide_index in (1, 2)
+                for side in ("left", "right")
+            ),
+        )
+        crowded = link_selected_points(
+            crowded_points,
+            crowded_config,
+        )
+        crowded_routes = tuple(
+            route
+            for link in crowded.links
+            for route in link.platform_avoidance_routes
+        )
+        self.assertEqual(len(crowded_routes), 4)
+        self.assertTrue(all(route.actual_offset_mm > 0.0 for route in crowded_routes))
         for link in plan.links:
             self.assertEqual(link.centerline[0], link.start)
             self.assertEqual(link.centerline[-1], link.end)
@@ -154,15 +224,27 @@ class PointLinkingTests(unittest.TestCase):
                 and link.sleeve_label == "upper"
             )
             candidate_routing_points = (
-                selection.upper.position
-                + (upper_link.start - selection.upper.position) * 0.35
-                + Vec3(0.0, 0.0, -2.0),
-                selection.upper.position
-                + (upper_link.end - selection.upper.position) * 0.35
-                + Vec3(0.0, 0.0, -2.0),
+                Vec3(
+                    selection.upper.position.x
+                    + (upper_link.start.x - selection.upper.position.x) * 0.35,
+                    selection.upper.position.y
+                    + (upper_link.start.y - selection.upper.position.y) * 0.35,
+                    selection.upper.position.z - 2.0,
+                ),
+                Vec3(
+                    selection.upper.position.x
+                    + (upper_link.end.x - selection.upper.position.x) * 0.35,
+                    selection.upper.position.y
+                    + (upper_link.end.y - selection.upper.position.y) * 0.35,
+                    selection.upper.position.z - 2.0,
+                ),
             )
             self.assertTrue(
                 any(point in upper_link.centerline for point in candidate_routing_points)
+            )
+            self.assertEqual(
+                {route.side for route in upper_link.platform_avoidance_routes},
+                {"left", "right"},
             )
             self.assertEqual(
                 upper_link.centerline[upper_link.contact_index],
@@ -175,7 +257,7 @@ class PointLinkingTests(unittest.TestCase):
                 radius_mm=1.2,
                 curve_resolution=30,
                 stop_platform_overrides=(
-                    ConnectorAvoidanceOverride(1, 0.6, 3.0),
+                    ConnectorAvoidanceOverride(1, 0.6, 3.0, "left"),
                 ),
             ),
             stop_platform_avoidance_direction=Vec3(0.0, 0.0, -1.0),
@@ -185,30 +267,14 @@ class PointLinkingTests(unittest.TestCase):
             for link in independent.links
             if link.guide_index == 1 and link.sleeve_label == "upper"
         )
-        second_upper = next(
-            link
-            for link in independent.links
-            if link.guide_index == 2 and link.sleeve_label == "upper"
+        first_routes = {route.side: route for route in first_upper.platform_avoidance_routes}
+        self.assertAlmostEqual(first_routes["left"].path_fraction, 0.6)
+        self.assertGreaterEqual(first_routes["left"].actual_offset_mm, 3.0)
+        self.assertEqual(
+            first_routes["left"].avoidance_direction,
+            Vec3(0.0, 0.0, -1.0),
         )
-        first_selection = sleeve_plan.selections[0]
-        expected_candidates = (
-            first_selection.upper.position
-            + (first_upper.start - first_selection.upper.position) * 0.6
-            + Vec3(0.0, 0.0, -3.0),
-            first_selection.upper.position
-            + (first_upper.end - first_selection.upper.position) * 0.6
-            + Vec3(0.0, 0.0, -3.0),
-        )
-        self.assertTrue(
-            any(point in first_upper.centerline for point in expected_candidates)
-        )
-        self.assertIn(first_upper.avoidance_route_side, {"left", "right"})
-        self.assertIn(first_upper.avoidance_route_endpoint, {first_upper.start, first_upper.end})
-        self.assertIn(first_upper.avoidance_routing_point, expected_candidates)
-        self.assertEqual(first_upper.avoidance_direction, Vec3(0.0, 0.0, -1.0))
-        self.assertFalse(
-            any(point.z < -2.0 for point in second_upper.centerline)
-        )
+        self.assertAlmostEqual(first_routes["right"].path_fraction, 0.35)
 
     def test_terminal_missing_tooth_links_share_one_distal_node(self):
         """末端缺牙模式应使两导管的上下四梁共享远中节点。"""
@@ -372,6 +438,25 @@ class PointLinkingTests(unittest.TestCase):
         )
         self.assertTrue(
             all(link.right_source is ConnectorEndpointSource.DISTAL_COMMON_NODE for link in plan.links)
+        )
+        multi_routes = tuple(
+            route
+            for link in plan.links
+            for route in link.platform_avoidance_routes
+        )
+        self.assertEqual(len(multi_routes), 8)
+        self.assertEqual(
+            {(route.guide_index, route.side) for route in multi_routes},
+            {
+                (1, "left"),
+                (1, "right"),
+                (2, "left"),
+                (2, "right"),
+                (3, "left"),
+                (3, "right"),
+                (4, "left"),
+                (4, "right"),
+            },
         )
 
     def test_sleeve_contacts_use_edge_clearance_and_q_to_p_offsets(self):

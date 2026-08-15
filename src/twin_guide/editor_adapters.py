@@ -83,7 +83,7 @@ def with_connector(
         connector_avoidance=_upsert(
             overrides.connector_avoidance,
             value,
-            lambda item: item.guide_index,
+            lambda item: (item.guide_index, item.side),
         ),
     )
 

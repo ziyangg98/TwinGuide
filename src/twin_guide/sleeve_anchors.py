@@ -70,6 +70,22 @@ class SleeveAnchorPoint:
 
 
 @dataclass(frozen=True, slots=True)
+class SleevePlatformEnvelope:
+    """导柱平台用于正视投影避让的参数化包络。"""
+
+    origin: Vec3
+    axis: Vec3
+    opening_direction: Vec3
+    across_direction: Vec3
+    axial_min_mm: float
+    axial_max_mm: float
+    opening_min_mm: float
+    opening_max_mm: float
+    across_min_mm: float
+    across_max_mm: float
+
+
+@dataclass(frozen=True, slots=True)
 class SleeveAnchorSelection:
     """一个导管的成对向外方向及上下 Q/P 点。"""
 
@@ -77,6 +93,7 @@ class SleeveAnchorSelection:
     radial_direction: Vec3
     lower: SleeveAnchorPoint
     upper: SleeveAnchorPoint
+    platform: SleevePlatformEnvelope
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +191,20 @@ def _select_for_guide(
         radial_direction=direction,
         lower=_contact_position(guide, "lower", t_lower, direction, config),
         upper=_contact_position(guide, "upper", t_upper, direction, config),
+        platform=SleevePlatformEnvelope(
+            origin=guide.center,
+            axis=guide.axis.normalized(),
+            opening_direction=(-direction).normalized(),
+            across_direction=(guide.axis.normalized().cross(-direction)).normalized(),
+            axial_min_mm=guide.parameters.height - guide.parameters.platform_height,
+            axial_max_mm=guide.parameters.height,
+            opening_min_mm=0.0,
+            opening_max_mm=(
+                guide.parameters.outer_radius + guide.parameters.platform_overhang
+            ),
+            across_min_mm=-guide.parameters.outer_radius,
+            across_max_mm=guide.parameters.outer_radius,
+        ),
     )
 
 

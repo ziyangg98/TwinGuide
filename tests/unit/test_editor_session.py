@@ -10,7 +10,9 @@ from twin_guide.editor_session import EditorSession, changed_feature_ids
 
 
 def _overrides(offset: float) -> EditorOverrides:
-    return EditorOverrides(connector_avoidance=(ConnectorAvoidanceOverride(1, 0.4, offset),))
+    return EditorOverrides(
+        connector_avoidance=(ConnectorAvoidanceOverride(1, 0.4, offset, "left"),)
+    )
 
 
 class EditorSessionTests(unittest.TestCase):
@@ -49,7 +51,7 @@ class EditorSessionTests(unittest.TestCase):
     def test_changed_feature_ids_uses_stable_semantic_ids(self):
         previous = _overrides(1.0)
         current = EditorOverrides(
-            connector_avoidance=(ConnectorAvoidanceOverride(1, 0.4, 2.0),),
+            connector_avoidance=(ConnectorAvoidanceOverride(1, 0.4, 2.0, "left"),),
             operation_windows=(OperationWindowOverride(1, 1.0, 1.0, 1.0, 1.0),),
         )
 

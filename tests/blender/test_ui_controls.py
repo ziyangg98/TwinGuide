@@ -69,6 +69,7 @@ class BlenderUiControlTests(unittest.TestCase):
             self._control(
                 "connector_node",
                 guide_index=1,
+                side="left",
                 route_start=[0.0, 0.0, 0.0],
                 route_end=[4.0, 0.0, 0.0],
                 path_distance=2.0,

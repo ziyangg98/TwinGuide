@@ -24,18 +24,23 @@ class EditorAdapterTests(unittest.TestCase):
             sleeve_sites=(SleeveSiteOverride(1, 12.0, 6.0, 4.0),),
             operation_windows=(OperationWindowOverride(1, 0.8, 0.6, 1.0, 0.5),),
             connector_avoidance=(
-                ConnectorAvoidanceOverride(1, 0.35, 1.0),
-                ConnectorAvoidanceOverride(2, 0.40, 1.5),
+                ConnectorAvoidanceOverride(1, 0.35, 1.0, "left"),
+                ConnectorAvoidanceOverride(2, 0.40, 1.5, "left"),
             ),
         )
 
         changed = with_connector(
             original,
-            ConnectorAvoidanceOverride(1, 0.6, 3.0),
+            ConnectorAvoidanceOverride(1, 0.6, 3.0, "left"),
         )
 
-        self.assertEqual(changed.connector_for(1), ConnectorAvoidanceOverride(1, 0.6, 3.0))
-        self.assertEqual(changed.connector_for(2), original.connector_for(2))
+        self.assertEqual(
+            changed.connector_for(1, "left"),
+            ConnectorAvoidanceOverride(1, 0.6, 3.0, "left"),
+        )
+        self.assertEqual(
+            changed.connector_for(2, "left"), original.connector_for(2, "left")
+        )
         self.assertEqual(changed.operation_windows, original.operation_windows)
         self.assertEqual(changed.sleeve_sites, original.sleeve_sites)
 
@@ -85,7 +90,10 @@ class EditorAdapterTests(unittest.TestCase):
             ),
             (
                 "connector:guide_1",
-                with_connector(original, ConnectorAvoidanceOverride(1, 0.5, 1.0)),
+                with_connector(
+                    original,
+                    ConnectorAvoidanceOverride(1, 0.5, 1.0, "left"),
+                ),
             ),
             (
                 "press_anchor:1",

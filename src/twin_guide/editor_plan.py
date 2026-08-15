@@ -16,8 +16,8 @@ from twin_guide.ui_jobs import write_manifest
 if TYPE_CHECKING:
     from twin_guide.types import GenerationContext
 
-EDITOR_PLAN_SCHEMA = "twin-guide.ui-editor-plan/3.0"
-EDITOR_SNAPSHOT_SCHEMA = "twin-guide.ui-editor-snapshot/3.0"
+EDITOR_PLAN_SCHEMA = "twin-guide.ui-editor-plan/4.0"
+EDITOR_SNAPSHOT_SCHEMA = "twin-guide.ui-editor-snapshot/4.0"
 
 
 def _json_value(value: object) -> object:
@@ -273,15 +273,24 @@ def build_editor_plan(
         for link in context.point_linking.links:
             if link.sleeve_label != "upper":
                 continue
-            features.append(
-                {
-                    "id": f"connector:guide_{link.guide_index}",
-                    "kind": "connector",
-                    "group": "CONNECTOR",
-                    "label": f"连接线 {link.guide_index}",
-                    "geometry": _json_value(link),
-                }
-            )
+            link_geometry = _json_value(link)
+            for route in link.platform_avoidance_routes:
+                features.append(
+                    {
+                        "id": f"connector:guide_{route.guide_index}:{route.side}",
+                        "kind": "connector",
+                        "group": "CONNECTOR",
+                        "label": (
+                            f"连接线 {route.guide_index}"
+                            f" {'左侧' if route.side == 'left' else '右侧'}"
+                        ),
+                        "geometry": {
+                            **link_geometry,
+                            "guide_index": route.guide_index,
+                            "avoidance_route": _json_value(route),
+                        },
+                    }
+                )
     if context.press_beam_points is not None:
         plan = context.press_beam_points
         for index, anchor in enumerate(plan.guide_anchors, start=1):

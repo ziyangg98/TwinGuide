@@ -29,7 +29,7 @@ runtime:
     fusion_voxel_size_mm: 0.2
     connector_dental_clearance_mm: 0.2
     sleeve_stop_clearance_mm: 2.0
-    sleeve_stop_front_avoidance_mm: 0.0
+    sleeve_stop_front_avoidance_mm: 4.0
     connection_blocks:
       lower_main: true
       upper_main: true

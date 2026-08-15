@@ -175,12 +175,35 @@ def _stage_metrics(stage: StageResult) -> dict[str, object]:
             "beam_diameter_mm": round(2.0 * output.radius_mm, 3),
         }
     if number == 6:
+        avoidance_routes = tuple(
+            route
+            for link in output.links
+            for route in link.platform_avoidance_routes
+        )
         return {
             "main_link_count": len(output.links),
             "press_beam_link_count": len(output.press_beam_links),
             "connector_diameter_mm": round(2.0 * output.radius_mm, 3),
             "recut_sleeve_bore": output.recut_sleeve_bore,
             "trim_against_dentition": output.trim_against_dentition,
+            "platform_avoidance_side_count": len(avoidance_routes),
+            "minimum_platform_projection_clearance_mm": (
+                round(
+                    min(route.minimum_clearance_mm for route in avoidance_routes),
+                    3,
+                )
+                if avoidance_routes
+                else None
+            ),
+            "platform_avoidance_offsets_mm": [
+                {
+                    "guide_index": route.guide_index,
+                    "side": route.side,
+                    "offset_mm": round(route.actual_offset_mm, 3),
+                    "clearance_mm": round(route.minimum_clearance_mm, 3),
+                }
+                for route in avoidance_routes
+            ],
         }
     plans = output
     return {
