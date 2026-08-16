@@ -9,11 +9,13 @@ arch intervals for observation-window mapping.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 from scipy.interpolate import PchipInterpolator
 from scipy.optimize import minimize_scalar
 from scipy.spatial import cKDTree
+
 
 EPS = 1e-9
 
@@ -40,8 +42,8 @@ class MeasuredArchCurve:
     ap: np.ndarray
     s: np.ndarray
     apex_index: int
-    s_to_lr: PchipInterpolator
-    s_to_ap: PchipInterpolator
+    s_to_lr: Any
+    s_to_ap: Any
 
     def at_s(self, values: np.ndarray | float) -> np.ndarray:
         """内部算法说明。"""
@@ -140,10 +142,7 @@ def fit_measured_contour_arch(
     )
 
 
-def project_point_to_arch(
-    curve: MeasuredArchCurve,
-    point_lr_ap: np.ndarray,
-) -> tuple[float, np.ndarray, float]:
+def project_point_to_arch(curve: Any, point_lr_ap: np.ndarray) -> tuple[float, np.ndarray, float]:
     """内部算法说明。\n\nReturn the nearest directed-arch coordinate to one LR/AP point."""
 
     point = np.asarray(point_lr_ap, dtype=float)
@@ -171,10 +170,7 @@ def project_point_to_arch(
     return s_mm, projected, distance
 
 
-def contour_arch_interval(
-    curve: MeasuredArchCurve,
-    contour_lr_ap: np.ndarray,
-) -> tuple[float, float]:
+def contour_arch_interval(curve: Any, contour_lr_ap: np.ndarray) -> tuple[float, float]:
     """内部算法说明。\n\nProject a measured contour to a conservative directed-arch interval."""
 
     contour = np.asarray(contour_lr_ap, dtype=float)
@@ -272,5 +268,46 @@ def locate_contact_teeth(
             crown_point_global_mm=tuple(float(value) for value in global_point),
             lift_method=lift_method,
             lift_distance_mm=lift_distance,
+        ))
+    return output
+
+def locate_reported_teeth(
+    *,
+    region_records: list[dict[str, object]],
+    frame: dict[str, object],
+) -> list[ContactToothLocation]:
+    """把通过 QA 的 fdi_new 区域转换为导板映射牙位。
+
+    Unlike :func:`locate_contact_teeth`, crown height is not resampled from a
+    legacy projection archive.  The fdi_new mapper has already selected the
+    highest measured triangle at each component-local crown region, so its
+    reported global crown point remains authoritative downstream.
+    """
+
+    curve = frame["curve"]
+    output: list[ContactToothLocation] = []
+    for record in region_records:
+        fdi = int(record["fdi"])
+        centroid = np.asarray(record["area_centroid_lr_ap_mm"], dtype=float)
+        contour = np.asarray(record["contour_lr_ap_mm"], dtype=float)
+        crown_point = np.asarray(record["crown_point_global_mm"], dtype=float)
+        if centroid.shape != (2,) or crown_point.shape != (3,):
+            raise RuntimeError(
+                f"fdi_new region {fdi} has invalid centroid or crown point"
+            )
+        if not np.all(np.isfinite(centroid)) or not np.all(np.isfinite(crown_point)):
+            raise RuntimeError(f"fdi_new region {fdi} contains non-finite geometry")
+        s_mm, arch_point, _ = project_point_to_arch(curve, centroid)
+        interval = contour_arch_interval(curve, contour)
+        output.append(ContactToothLocation(
+            fdi=fdi,
+            centroid_lr_ap_mm=(float(centroid[0]), float(centroid[1])),
+            arch_s_mm=s_mm,
+            arch_lr_ap_mm=(float(arch_point[0]), float(arch_point[1])),
+            contour_interval_s_mm=interval,
+            crown_height_mm=float(record["crown_height_mm"]),
+            crown_point_global_mm=tuple(float(value) for value in crown_point),
+            lift_method="authoritative_v2_component_crown_point",
+            lift_distance_mm=0.0,
         ))
     return output

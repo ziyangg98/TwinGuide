@@ -64,6 +64,7 @@ from twin_guide.config.types import (
     SurfaceAnchorOverride,
     TerminalDistalCommonNodeParameters,
     ToothAnchorStation,
+    ToothIdentificationBackend,
     ToothIdentificationInputs,
     WindowParameters,
 )
@@ -131,6 +132,7 @@ class CaseConfig:
                 "geometry",
                 "windows",
                 "handpiece_avoidance",
+                "tooth_identification",
                 "press_beam",
                 "render",
             },
@@ -152,7 +154,10 @@ class CaseConfig:
             "design",
         )
         yaml_planning = _mapping(root.get("planning", {}), "planning")
-        tooth_identification = ToothIdentificationInputs(path)
+        tooth_identification = ToothIdentificationInputs(
+            path,
+            _parse_tooth_identification_backend(runtime.get("tooth_identification")),
+        )
         guide_anchor_raw = _merge_case_design_section(
             None,
             yaml_design.get("guide_anchors"),
@@ -271,6 +276,27 @@ def _parse_case_objects(raw: dict[str, object], base_directory: Path) -> InputMe
             _required(dental, "path"), base_directory, "objects.dental.path"
         ),
     )
+
+
+def _parse_tooth_identification_backend(value: object) -> ToothIdentificationBackend:
+    """读取可选牙位识别后端。"""
+
+    if value is None:
+        return ToothIdentificationBackend.FDI_NEW
+    raw = _mapping(value, "runtime.tooth_identification")
+    _reject_unknown(
+        raw,
+        {"backend", "case_yaml"},
+        "runtime.tooth_identification",
+    )
+    try:
+        return ToothIdentificationBackend(
+            str(raw.get("backend", ToothIdentificationBackend.FDI_NEW))
+        )
+    except ValueError as error:
+        raise ConfigurationError(
+            "runtime.tooth_identification.backend 必须为 standard 或 fdi_new"
+        ) from error
 
 
 def _parse_sleeve(raw: dict[str, object]) -> SleeveParameters:

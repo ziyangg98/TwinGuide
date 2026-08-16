@@ -36,6 +36,7 @@ from twin_guide.config.types import (
     SurfaceAnchorOverride,
     TerminalDistalCommonNodeParameters,
     ToothAnchorStation,
+    ToothIdentificationBackend,
     ToothIdentificationInputs,
     WindowParameters,
 )
@@ -83,6 +84,7 @@ __all__ = [
     "SurfaceAnchorOverride",
     "TerminalDistalCommonNodeParameters",
     "ToothAnchorStation",
+    "ToothIdentificationBackend",
     "ToothIdentificationInputs",
     "WindowParameters",
     "case_occlusal_axis",

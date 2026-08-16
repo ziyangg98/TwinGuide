@@ -211,6 +211,18 @@ planning:
 `0 < closed_bore_height_mm < platform_height_mm < height_mm`。其余导柱字段出现在
 种植位 `sleeve` 中会作为配置错误拒绝。
 
+### 牙位识别后端
+
+```yaml
+runtime:
+  tooth_identification:
+    backend: fdi_new  # 兼容回退：standard
+```
+
+`fdi_new` 是默认牙位识别流程，启用多尺度牙冠核心、单调 FDI 序列对齐、局部
+三维分隔证据和缺牙语义锚点，并继续复用线上导板物理覆盖映射、阶段缓存和 UI。
+`standard` 仅作为旧病例的显式兼容回退；两种后端的缓存指纹互不复用。
+
 ### `design.observation_windows`
 
 每个元素定义一个 FDI 范围的轴扫观察窗。

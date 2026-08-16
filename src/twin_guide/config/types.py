@@ -30,6 +30,13 @@ class Jaw(StrEnum):
         return -1.0 if self is Jaw.UPPER else 1.0
 
 
+class ToothIdentificationBackend(StrEnum):
+    """第 2 阶段可选的牙位识别实现。"""
+
+    STANDARD = "standard"
+    FDI_NEW = "fdi_new"
+
+
 @dataclass(frozen=True, slots=True)
 class InputMeshPaths:
     """病例的牙科导板和患者牙列网格路径。"""
@@ -401,6 +408,7 @@ class ToothIdentificationInputs:
     """统一牙位识别与导板映射所需的病例定义。"""
 
     case_yaml: Path
+    backend: ToothIdentificationBackend = ToothIdentificationBackend.FDI_NEW
 
 
 @dataclass(frozen=True, slots=True)
@@ -655,6 +663,7 @@ __all__ = [
     "SurfaceAnchorOverride",
     "TerminalDistalCommonNodeParameters",
     "ToothAnchorStation",
+    "ToothIdentificationBackend",
     "ToothIdentificationInputs",
     "WindowParameters",
 ]

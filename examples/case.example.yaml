@@ -10,6 +10,8 @@ objects:
   guide: {path: input/dental-guide.stl}
 
 runtime:
+  tooth_identification:
+    backend: fdi_new  # 兼容回退：standard
   sleeve:
     inner_diameter_mm: 2.05
     outer_diameter_mm: 5.10

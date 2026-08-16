@@ -5,15 +5,25 @@ from __future__ import annotations
 import json
 from argparse import Namespace
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from twin_guide.tooth_fdi_mapping_new.models import (
+    TOOTH_FDI_MAPPING_NEW_PROFILE_ID,
+    ToothFdiMappingNewResult,
+)
+from twin_guide.tooth_fdi_mapping_new.recognition import (
+    TOOTH_FDI_MAPPING_NEW_SCHEMA_VERSION,
+)
+
 from .map_contact_chord_teeth_to_guide import run as _map_to_guide
+
 from .tooth_recognition import (
     ToothRecognitionResult,
     load_tooth_recognition_result,
 )
+
 
 LOCKED_GUIDE_MAPPING_PARAMETERS = {
     "maximum_crown_height_fallback_mm": 1.5,
@@ -34,7 +44,7 @@ class GuideMappingError(RuntimeError):
 class GuideMappingProfile:
     """内部算法说明。\n\nVersion identifier for the current fixed guide-mapping policy."""
 
-    profile_id: str = "contact_chord_guide_mapping_v2_physical_coverage"
+    profile_id: str = "fdi_new_guide_mapping_v4_physical_coverage"
 
     def __post_init__(self) -> None:
         """内部算法说明。"""
@@ -46,16 +56,22 @@ class GuideMappingProfile:
 class GuideMappingRequest:
     """内部算法说明。\n\nMap one approved recognition result to its configured guide."""
 
-    recognition: ToothRecognitionResult | Path
+    recognition: ToothRecognitionResult | ToothFdiMappingNewResult | Path
     output_dir: Path
     case_yaml: Path | None = None
     profile: GuideMappingProfile = field(default_factory=GuideMappingProfile)
+    allow_unsafe_recognition: bool = False
     write_diagnostics: bool = False
     overview_path: Path | None = None
 
-    def resolved_recognition(self) -> ToothRecognitionResult:
+    def resolved_recognition(
+        self,
+    ) -> ToothRecognitionResult | ToothFdiMappingNewResult:
         """内部算法说明。"""
-        if isinstance(self.recognition, ToothRecognitionResult):
+        if isinstance(
+            self.recognition,
+            (ToothRecognitionResult, ToothFdiMappingNewResult),
+        ):
             return self.recognition
         return load_tooth_recognition_result(Path(self.recognition))
 
@@ -70,6 +86,7 @@ class GuideMappingResult:
     recognition_manifest_path: Path
     mapping_report: dict[str, Any]
     manifest_path: Path
+    allow_unsafe_recognition: bool = False
 
     @property
     def status(self) -> str:
@@ -93,26 +110,27 @@ class GuideMappingResult:
 
     def manifest(self) -> dict[str, Any]:
         """内部算法说明。"""
-        outputs = {
-            "guide_mapping_report": str(self.report_path),
-            "workflow_manifest": str(self.manifest_path),
-        }
-        for key in ("overview_png", "preview_png", "context_glb"):
-            value = self.mapping_report["outputs"].get(key)
-            if value is not None:
-                outputs[key] = value
         return {
-            "schema_version": "1.0-guide-mapping-workflow",
+            "schema_version": "2.1-fdi-new-guide-mapping-workflow",
             "created_at": self.created_at,
             "status": self.status,
             "complete": self.complete,
+            "unsafe_recognition_override": self.allow_unsafe_recognition,
             "case_yaml": str(self.case_yaml),
             "profile": asdict(self.profile),
             "locked_implementation_parameters": dict(
                 LOCKED_GUIDE_MAPPING_PARAMETERS
             ),
             "recognition_manifest": str(self.recognition_manifest_path),
-            "outputs": outputs,
+            "outputs": {
+                "guide_mapping_report": str(self.report_path),
+                **{
+                    key: value
+                    for key in ("preview_png", "context_glb", "overview_png")
+                    if (value := self.mapping_report["outputs"].get(key)) is not None
+                },
+                "workflow_manifest": str(self.manifest_path),
+            },
         }
 
 
@@ -122,11 +140,39 @@ def map_recognized_teeth_to_guide(
     """内部算法说明。\n\nMap an approved recognition result into guide coordinates."""
 
     recognition = request.resolved_recognition()
-    if not recognition.safe_for_guide_mapping:
-        raise GuideMappingError(
-            "tooth recognition has not passed all downstream safety gates: "
-            f"{recognition.manifest_path}"
-        )
+    if isinstance(recognition, ToothFdiMappingNewResult):
+        recognition_schema = str(recognition.report.get("schema_version", ""))
+        if recognition_schema != TOOTH_FDI_MAPPING_NEW_SCHEMA_VERSION:
+            raise GuideMappingError(
+                "guide mapping requires tooth FDI schema "
+                f"{TOOTH_FDI_MAPPING_NEW_SCHEMA_VERSION!r}, got "
+                f"{recognition_schema!r}"
+            )
+        if recognition.profile.profile_id != TOOTH_FDI_MAPPING_NEW_PROFILE_ID:
+            raise GuideMappingError(
+                "guide mapping requires tooth FDI profile "
+                f"{TOOTH_FDI_MAPPING_NEW_PROFILE_ID!r}, got "
+                f"{recognition.profile.profile_id!r}"
+            )
+        if (
+            not recognition.safe_for_downstream_use
+            and not request.allow_unsafe_recognition
+        ):
+            raise GuideMappingError(
+                "fdi_new mapping has not passed all downstream safety gates"
+            )
+        if recognition.report_path is None or not recognition.report_path.is_file():
+            raise GuideMappingError(
+                "fdi_new mapping must persist its report before guide mapping"
+            )
+        recognition_reference_path = recognition.report_path.resolve()
+    else:
+        if not recognition.safe_for_guide_mapping:
+            raise GuideMappingError(
+                "tooth recognition has not passed all downstream safety gates: "
+                f"{recognition.manifest_path}"
+            )
+        recognition_reference_path = recognition.manifest_path.resolve()
     case_yaml = (
         Path(request.case_yaml).resolve()
         if request.case_yaml is not None
@@ -136,28 +182,40 @@ def map_recognized_teeth_to_guide(
         raise GuideMappingError(f"case YAML does not exist: {case_yaml}")
     output_dir = Path(request.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    mapping_report = _map_to_guide(Namespace(
-        case=case_yaml,
-        contact_report=recognition.contact_report_path,
-        base_mapping_report=recognition.base_mapping_path,
-        enhanced_maps=recognition.enhanced_maps_path,
-        output_dir=output_dir,
-        write_diagnostics=request.write_diagnostics,
-        overview_path=(
-            None
-            if request.overview_path is None
-            else Path(request.overview_path).resolve()
-        ),
-    ))
+    if isinstance(recognition, ToothFdiMappingNewResult):
+        mapping_arguments = Namespace(
+            case=case_yaml,
+            fdi_mapping_report=recognition.report_path,
+            contact_report=None,
+            base_mapping_report=None,
+            enhanced_maps=None,
+            output_dir=output_dir,
+            allow_unsafe_recognition=request.allow_unsafe_recognition,
+            write_diagnostics=request.write_diagnostics,
+            overview_path=request.overview_path,
+        )
+    else:
+        mapping_arguments = Namespace(
+            case=case_yaml,
+            fdi_mapping_report=None,
+            contact_report=recognition.contact_report_path,
+            base_mapping_report=recognition.base_mapping_path,
+            enhanced_maps=recognition.enhanced_maps_path,
+            output_dir=output_dir,
+            write_diagnostics=request.write_diagnostics,
+            overview_path=request.overview_path,
+        )
+    mapping_report = _map_to_guide(mapping_arguments)
     manifest_path = output_dir / "guide_mapping_result.json"
     result = GuideMappingResult(
         case_yaml=case_yaml,
         output_dir=output_dir,
         profile=request.profile,
-        created_at=datetime.now(UTC).isoformat(),
-        recognition_manifest_path=recognition.manifest_path,
+        created_at=datetime.now(timezone.utc).isoformat(),
+        recognition_manifest_path=recognition_reference_path,
         mapping_report=mapping_report,
         manifest_path=manifest_path,
+        allow_unsafe_recognition=request.allow_unsafe_recognition,
     )
     manifest_path.write_text(
         json.dumps(result.manifest(), ensure_ascii=False, indent=2),
@@ -167,8 +225,8 @@ def map_recognized_teeth_to_guide(
 
 
 __all__ = [
-    "LOCKED_GUIDE_MAPPING_PARAMETERS",
     "GuideMappingError",
+    "LOCKED_GUIDE_MAPPING_PARAMETERS",
     "GuideMappingProfile",
     "GuideMappingRequest",
     "GuideMappingResult",

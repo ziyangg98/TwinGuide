@@ -9,7 +9,6 @@ from all geometric fitting and is assigned by the caller afterwards.
 
 from __future__ import annotations
 
-import itertools
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -20,9 +19,9 @@ from scipy.ndimage import (
     map_coordinates,
     maximum_filter,
 )
-from skimage.measure import find_contours
-from skimage.measure import label as connected_components
+from skimage.measure import find_contours, label as connected_components
 from skimage.morphology import closing, disk, remove_small_holes, remove_small_objects
+
 
 EPS = 1e-9
 MAX_ADJACENT_CORE_MERGE_MM = 5.75
@@ -49,6 +48,11 @@ class ContactChord:
     normal_jump: float | None = None
     endpoint_edge_support: float | None = None
     endpoint_concavity_support: float | None = None
+    paired_concavity_facing_support: float | None = None
+    paired_concavity_axial_alignment: float | None = None
+    paired_concavity_crown_support: float | None = None
+    paired_concavity_score: float | None = None
+    paired_concavity_level: str | None = None
     selection_method: str | None = None
 
 
@@ -89,7 +93,7 @@ def select_crown_core_candidates(
     resolution = float(enhanced_maps["resolution_mm"])
     mask = np.asarray(enhanced_maps["silhouette"], dtype=bool)
     depth = distance_transform_edt(mask) * resolution
-    peak_window = max(5, round(2.4 / resolution))
+    peak_window = max(5, int(round(2.4 / resolution)))
     if peak_window % 2 == 0:
         peak_window += 1
     raw_peaks = (
@@ -144,7 +148,7 @@ def select_crown_core_candidates(
         for point_index, point in enumerate(points_array):
             options: list[tuple[float, float]] = []
             for segment_index, (start, vector, length) in enumerate(zip(
-                reference[:-1], vectors, lengths, strict=False
+                reference[:-1], vectors, lengths
             )):
                 if length <= EPS:
                     continue
@@ -204,7 +208,7 @@ def select_crown_core_candidates(
                 np.asarray(second.center_lr_ap_mm)
                 - np.asarray(first.center_lr_ap_mm)
             ))
-            for first, second in itertools.pairwise(grouped)
+            for first, second in zip(grouped, grouped[1:])
         ]
         if not adjacent_distances:
             break
@@ -438,7 +442,7 @@ def refine_crown_core_seeds(
             instance_id=int(item.instance_id),
             center_lr_ap_mm=(float(centre[0]), float(centre[1])),
             initial_center_lr_ap_mm=(float(initial_center[0]), float(initial_center[1])),
-            core_pixel_count=len(rows),
+            core_pixel_count=int(len(rows)),
             refinement_distance_mm=float(np.linalg.norm(centre - initial_center)),
         ))
     return seeds
@@ -455,8 +459,8 @@ def build_continuous_projection_mask(
     mask = support >= 0.16
     mask |= occupied
     mask = closing(mask, footprint=disk(1))
-    minimum_object = max(8, round(0.40 / resolution**2))
-    maximum_hole = max(12, round(0.65 / resolution**2))
+    minimum_object = max(8, int(round(0.40 / resolution**2)))
+    maximum_hole = max(12, int(round(0.65 / resolution**2)))
     mask = remove_small_objects(mask, max_size=minimum_object - 1)
     mask = remove_small_holes(mask, max_size=maximum_hole - 1)
     return np.asarray(mask, dtype=bool)
@@ -514,7 +518,7 @@ def find_contact_chords(
     origin_index = int(np.argmin(np.abs(sample_q)))
     chords: list[ContactChord] = []
 
-    for pair_index, (first, second) in enumerate(itertools.pairwise(ordered_instances)):
+    for pair_index, (first, second) in enumerate(zip(ordered_instances, ordered_instances[1:])):
         first_center = np.asarray(first.center_lr_ap_mm, dtype=float)
         second_center = np.asarray(second.center_lr_ap_mm, dtype=float)
         delta = second_center - first_center
@@ -626,7 +630,7 @@ def find_multichannel_contact_chords(
         """内部算法说明。"""
         return _sample_grid(values, points, lr_centres, ap_centres, resolution, order)
 
-    for pair_index, (first, second) in enumerate(itertools.pairwise(ordered_instances)):
+    for pair_index, (first, second) in enumerate(zip(ordered_instances, ordered_instances[1:])):
         first_center = np.asarray(first.center_lr_ap_mm, dtype=float)
         second_center = np.asarray(second.center_lr_ap_mm, dtype=float)
         delta = second_center - first_center
@@ -666,7 +670,7 @@ def find_multichannel_contact_chords(
                 signed_grid = (grid_points - line_point) @ line_normal
                 first_area = int(np.count_nonzero(local_roi & (signed_grid * signed_first >= 0.0)))
                 second_area = int(np.count_nonzero(local_roi & (signed_grid * signed_second >= 0.0)))
-                if min(first_area, second_area) < max(60, round(4.0 / resolution**2)):
+                if min(first_area, second_area) < max(60, int(round(4.0 / resolution**2))):
                     continue
 
                 chord_points = points[low:high + 1]
@@ -803,12 +807,12 @@ def _outer_concavity_candidates(
     ap_centres: np.ndarray,
     resolution: float,
     span_mm_values: tuple[float, ...] = (0.55,),
-) -> tuple[np.ndarray, np.ndarray]:
-    """内部算法说明。\n\nReturn smoothed outer-contour points and orientation-free notch scores."""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """返回轮廓点、凹点分数和指向凹口内部的方向。"""
 
     contours = find_contours(component_mask.astype(float), 0.5)
     if not contours:
-        return np.empty((0, 2)), np.empty(0)
+        return np.empty((0, 2)), np.empty(0), np.empty((0, 2))
 
     def physical(raw: np.ndarray) -> np.ndarray:
         """内部算法说明。"""
@@ -827,7 +831,7 @@ def _outer_concavity_candidates(
     ]
     points = physical_contours[int(np.argmax(areas))]
     if len(points) < 12:
-        return points, np.zeros(len(points))
+        return points, np.zeros(len(points)), np.zeros((len(points), 2))
     sigma = max(1.0, 0.20 / resolution)
     smooth = np.column_stack([
         gaussian_filter1d(points[:, 0], sigma=sigma, mode="wrap"),
@@ -845,9 +849,10 @@ def _outer_concavity_candidates(
     # The test that the neighbouring-boundary chord traverses the exterior is
     # kept at every scale, so convex cusps and pixel staircases remain rejected.
     score = np.zeros(len(smooth), dtype=float)
+    notch_direction = np.zeros((len(smooth), 2), dtype=float)
     fractions = np.linspace(0.12, 0.88, 9)
     for span_mm in span_mm_values:
-        span = max(3, round(span_mm / resolution))
+        span = max(3, int(round(span_mm / resolution)))
         previous = np.roll(smooth, span, axis=0)
         following = np.roll(smooth, -span, axis=0)
         incoming = smooth - previous
@@ -869,16 +874,84 @@ def _outer_concavity_candidates(
             ) >= 0.5
             notch_fraction[index] = 1.0 - float(np.mean(inside))
         scale_score = concavity * np.clip(notch_fraction / 0.30, 0.0, 1.0)
-        score = np.maximum(score, scale_score)
+        # The vector from the local notch mouth towards the indentation point
+        # points into the crown union.  Opposing buccal/palatal contact notches
+        # should therefore point towards one another along their joining chord.
+        direction = smooth - 0.5 * (previous + following)
+        direction /= np.maximum(
+            np.linalg.norm(direction, axis=1, keepdims=True), EPS
+        )
+        stronger = scale_score > score
+        score[stronger] = scale_score[stronger]
+        notch_direction[stronger] = direction[stronger]
 
     # Keep local peaks only; closely spaced staircase points represent one
     # anatomical notch and must not produce artificial ultra-short chords.
-    peak_window = max(2, round(0.45 / resolution))
+    peak_window = max(2, int(round(0.45 / resolution)))
     peaks = np.zeros(len(score), dtype=bool)
     for shift in range(-peak_window, peak_window + 1):
         peaks |= score < np.roll(score, shift)
     score[peaks] = 0.0
-    return smooth, score
+    notch_direction[peaks] = 0.0
+    return smooth, score, notch_direction
+
+
+def _paired_concavity_metrics(
+    *,
+    endpoint_1: np.ndarray,
+    endpoint_2: np.ndarray,
+    notch_direction_1: np.ndarray,
+    notch_direction_2: np.ndarray,
+    concavity_1: float,
+    concavity_2: float,
+    inter_seed_axis: np.ndarray,
+    centre_distance: float,
+    endpoint_crown_support: float,
+) -> dict[str, float | str]:
+    """评价两个轮廓凹点是否构成相向的邻牙接触对。"""
+
+    segment = np.asarray(endpoint_2, dtype=float) - np.asarray(
+        endpoint_1, dtype=float
+    )
+    length = float(np.linalg.norm(segment))
+    chord_direction = segment / max(length, EPS)
+    first_faces_second = max(
+        0.0, float(np.asarray(notch_direction_1) @ chord_direction)
+    )
+    second_faces_first = max(
+        0.0, float(np.asarray(notch_direction_2) @ -chord_direction)
+    )
+    facing = float(np.sqrt(first_faces_second * second_faces_first))
+    axial_mismatch = abs(float(segment @ np.asarray(inter_seed_axis, dtype=float)))
+    axial_alignment = float(np.exp(-(
+        axial_mismatch / max(0.22 * centre_distance, 0.60)
+    ) ** 2))
+    paired_concavity = float(np.sqrt(
+        max(float(concavity_1), 0.0) * max(float(concavity_2), 0.0)
+    ))
+    concavity_score = float(np.clip(paired_concavity / 0.35, 0.0, 1.0))
+    crown_support = float(np.clip(endpoint_crown_support, 0.0, 1.0))
+    score = float(
+        0.30 * concavity_score
+        + 0.30 * facing
+        + 0.18 * axial_alignment
+        + 0.22 * crown_support
+    )
+    strong = bool(
+        score >= 0.68
+        and facing >= 0.55
+        and axial_alignment >= 0.55
+        and crown_support >= 0.18
+    )
+    level = "strong" if strong else "moderate" if score >= 0.38 else "weak"
+    return {
+        "paired_concavity": paired_concavity,
+        "facing": facing,
+        "axial_alignment": axial_alignment,
+        "crown_support": crown_support,
+        "score": score,
+        "level": level,
+    }
 
 
 def _segments_cross(first: np.ndarray, second: np.ndarray) -> bool:
@@ -937,10 +1010,17 @@ def find_shortest_concavity_chords(
     height = np.asarray(enhanced_maps["top_height_mm"], dtype=float)
     height_filled = np.where(np.isfinite(height), height, 0.0)
     normals = np.asarray(enhanced_maps["top_normal_lr_ap_occ"], dtype=float)
+    relief_score = np.asarray(
+        enhanced_maps.get(
+            "relative_crown_relief_score",
+            np.ones(mask.shape, dtype=float),
+        ),
+        dtype=float,
+    )
     components = connected_components(mask, connectivity=2)
     lr_grid, ap_grid = np.meshgrid(lr_centres, ap_centres, indexing="ij")
     grid_points = np.column_stack([lr_grid.ravel(), ap_grid.ravel()])
-    contour_cache: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+    contour_cache: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
     accepted_segments: list[np.ndarray] = []
     chords: list[ContactChord] = []
     forced_gaps = set() if forced_gap_pair_indices is None else set(forced_gap_pair_indices)
@@ -949,13 +1029,7 @@ def find_shortest_concavity_chords(
         """内部算法说明。"""
         return _sample_grid(values, points, lr_centres, ap_centres, resolution, order)
 
-    def gap(
-        pair_index: int,
-        first: CrownSeed,
-        second: CrownSeed,
-        midpoint: np.ndarray,
-        perpendicular: np.ndarray,
-    ) -> ContactChord:
+    def gap(pair_index: int, first, second, midpoint: np.ndarray, perpendicular: np.ndarray) -> ContactChord:
         """内部算法说明。"""
         return ContactChord(
             pair_index=pair_index,
@@ -973,7 +1047,7 @@ def find_shortest_concavity_chords(
             selection_method="disconnected_component_gap",
         )
 
-    for pair_index, (first, second) in enumerate(itertools.pairwise(ordered_seeds)):
+    for pair_index, (first, second) in enumerate(zip(ordered_seeds, ordered_seeds[1:])):
         first_center = np.asarray(first.center_lr_ap_mm, dtype=float)
         second_center = np.asarray(second.center_lr_ap_mm, dtype=float)
         delta = second_center - first_center
@@ -1002,11 +1076,12 @@ def find_shortest_concavity_chords(
             contour_cache[first_component] = _outer_concavity_candidates(
                 components == first_component, lr_centres, ap_centres, resolution
             )
-        contour, concavity = contour_cache[first_component]
+        contour, concavity, notch_direction = contour_cache[first_component]
 
         def build_candidates(
             contour_points: np.ndarray,
             concavity_scores: np.ndarray,
+            notch_directions: np.ndarray,
             *,
             local_neck: bool = False,
         ) -> list[dict]:
@@ -1078,7 +1153,7 @@ def find_shortest_concavity_chords(
                     second_area = int(np.count_nonzero(
                         local_roi & (signed_grid * signed_second >= 0.0)
                     ))
-                    if min(first_area, second_area) < max(60, round(4.0 / resolution**2)):
+                    if min(first_area, second_area) < max(60, int(round(4.0 / resolution**2))):
                         continue
                     candidate_segment = np.vstack([endpoint_1, endpoint_2])
                     if any(_segments_cross(candidate_segment, prior) for prior in accepted_segments):
@@ -1087,6 +1162,43 @@ def find_shortest_concavity_chords(
                     endpoint_edge = float(np.mean(sample(
                         fused_edge, candidate_segment, order=1
                     )))
+                    def crown_support(endpoint: np.ndarray) -> float:
+                        """评价凹点端点是否同时得到两侧牙冠内部支撑。"""
+
+                        side_support = []
+                        for center in (first_center, second_center):
+                            inward = center - endpoint
+                            inward /= max(float(np.linalg.norm(inward)), EPS)
+                            support_points = endpoint + np.asarray([
+                                0.45, 0.90, 1.35,
+                            ])[:, None] * inward
+                            values = sample(
+                                relief_score, support_points, order=1
+                            )
+                            values = values[np.isfinite(values)]
+                            side_support.append(
+                                float(np.max(values)) if len(values) else 0.0
+                            )
+                        # Both neighbouring crown interiors must support the
+                        # same contour endpoint.  A gingival notch close to
+                        # only one crown therefore remains weak evidence.
+                        return min(side_support)
+
+                    endpoint_crown_support = min(
+                        crown_support(endpoint_1),
+                        crown_support(endpoint_2),
+                    )
+                    paired = _paired_concavity_metrics(
+                        endpoint_1=endpoint_1,
+                        endpoint_2=endpoint_2,
+                        notch_direction_1=notch_directions[first_index],
+                        notch_direction_2=notch_directions[second_index],
+                        concavity_1=float(concavity_scores[first_index]),
+                        concavity_2=float(concavity_scores[second_index]),
+                        inter_seed_axis=axis,
+                        centre_distance=centre_distance,
+                        endpoint_crown_support=endpoint_crown_support,
+                    )
                     line_edge = float(np.mean(sample(fused_edge, samples, order=1)))
                     shift = 0.60 * line_normal
                     minus = samples - shift
@@ -1119,12 +1231,18 @@ def find_shortest_concavity_chords(
                     concavity_support = float(np.mean([
                         concavity_scores[first_index], concavity_scores[second_index]
                     ]))
-                    evidence = (
+                    base_evidence = (
                         0.42 * np.clip(concavity_support / 0.35, 0.0, 1.0)
                         + 0.24 * endpoint_edge
                         + 0.15 * line_edge
                         + 0.10 * np.clip(abs(height_valley) / 0.8, 0.0, 1.0)
                         + 0.09 * np.clip(normal_jump, 0.0, 1.0)
+                    )
+                    # Paired-notch geometry is deliberately soft evidence.  It
+                    # changes ranking and confidence without making a standard
+                    # two-notch shape mandatory for every tooth contact.
+                    evidence = 0.84 * base_evidence + 0.16 * float(
+                        paired["score"]
                     )
                     angle = float(np.degrees(np.arctan2(
                         direction @ axis, direction @ perpendicular
@@ -1143,24 +1261,29 @@ def find_shortest_concavity_chords(
                         "height_valley": height_valley,
                         "normal_jump": normal_jump,
                         "concavity": concavity_support,
+                        "paired": paired,
                         "evidence": float(evidence),
                     })
             return result
 
-        candidates = build_candidates(contour, concavity)
+        candidates = build_candidates(contour, concavity, notch_direction)
         selection_method = "shortest_valid_concavity_pair"
         if not candidates:
             # Some posterior contacts form a broad, shallow embrasure.  Only
             # when the sharp-scale search fails, retry at molar-scale turning
             # windows so already-valid sharp contact chords remain unchanged.
-            broad_contour, broad_concavity = _outer_concavity_candidates(
+            broad_contour, broad_concavity, broad_direction = (
+                _outer_concavity_candidates(
                 components == first_component,
                 lr_centres,
                 ap_centres,
                 resolution,
                 span_mm_values=(0.90, 1.35),
+                )
             )
-            candidates = build_candidates(broad_contour, broad_concavity)
+            candidates = build_candidates(
+                broad_contour, broad_concavity, broad_direction
+            )
             if candidates:
                 selection_method = "shortest_valid_broad_concavity_pair"
 
@@ -1173,6 +1296,7 @@ def find_shortest_concavity_chords(
             candidates = build_candidates(
                 contour,
                 np.zeros(len(contour), dtype=float),
+                np.zeros((len(contour), 2), dtype=float),
                 local_neck=True,
             )
             if candidates:
@@ -1238,6 +1362,15 @@ def find_shortest_concavity_chords(
             normal_jump=float(best["normal_jump"]),
             endpoint_edge_support=float(best["endpoint_edge"]),
             endpoint_concavity_support=float(best["concavity"]),
+            paired_concavity_facing_support=float(best["paired"]["facing"]),
+            paired_concavity_axial_alignment=float(
+                best["paired"]["axial_alignment"]
+            ),
+            paired_concavity_crown_support=float(
+                best["paired"]["crown_support"]
+            ),
+            paired_concavity_score=float(best["paired"]["score"]),
+            paired_concavity_level=str(best["paired"]["level"]),
             selection_method=selection_method,
         ))
     return chords
@@ -1345,7 +1478,7 @@ def split_projection_by_chords(
                 float(interior_center[0]), float(interior_center[1])
             ),
             maximum_interior_radius_mm=maximum_radius,
-            pixel_count=len(rows),
+            pixel_count=int(len(rows)),
             contour_lr_ap_mm=contour,
         ))
     return results, label_grid

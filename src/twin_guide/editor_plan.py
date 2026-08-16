@@ -9,7 +9,7 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from twin_guide.config import CaseConfig
+from twin_guide.config import CaseConfig, ToothIdentificationBackend
 from twin_guide.config.loading import load_case_yaml
 from twin_guide.ui_jobs import write_manifest
 
@@ -65,7 +65,12 @@ def _semantic_config(config: CaseConfig, *, include_overrides: bool) -> bytes:
         value = asdict(config)
         value.pop("output_directory", None)
         value["tooth_identification"] = {
-            "enabled": getattr(config, "tooth_identification", None) is not None
+            "enabled": getattr(config, "tooth_identification", None) is not None,
+            "backend": getattr(
+                getattr(config, "tooth_identification", None),
+                "backend",
+                ToothIdentificationBackend.FDI_NEW,
+            ).value,
         }
         if not include_overrides:
             value.pop("editor_overrides", None)

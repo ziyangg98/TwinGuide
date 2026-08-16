@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
-"""内部算法说明。\n\nMap approved contact-chord teeth and configured windows onto a guide."""
+"""把通过 QA 的 fdi_new 区域或旧接触轮廓映射到导板。"""
 
 from __future__ import annotations
 
 import argparse
 import json
-from datetime import UTC, datetime
+import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
 import yaml
 from scipy.spatial import cKDTree
 
+from twin_guide.case_schema import normalize_case_definition
+
 from .contact_guide_mapping import (
     fit_measured_contour_arch,
     locate_contact_teeth,
+    locate_reported_teeth,
 )
 from .fdi import validate_anatomy
 from .pipeline import (
@@ -53,27 +57,83 @@ def configured_anchor_station_fdis(config: dict[str, object]) -> set[int]:
             if station.get("fdi") is not None:
                 required.add(int(station["fdi"]))
             required.update(int(value) for value in station.get("fdis", []) or [])
+        for anchor in section.get("anchors", []) or []:
+            if not isinstance(anchor, dict):
+                continue
+            station = anchor.get("station", {})
+            if not isinstance(station, dict):
+                continue
+            if station.get("fdi") is not None:
+                required.add(int(station["fdi"]))
+            required.update(int(value) for value in station.get("fdis", []) or [])
     return required
+
+
+def configured_surgical_references(
+    config: dict[str, object], case_dir: Path
+) -> list[str]:
+    """返回病例定义中声明的手术参考体路径。"""
+
+    objects = config.get("objects", {})
+    if not isinstance(objects, dict):
+        return []
+    sleeve = objects.get("sleeve", {})
+    paths: list[Path] = []
+    if isinstance(sleeve, dict) and sleeve.get("path"):
+        paths.append(Path(str(sleeve["path"])))
+    records = sleeve.get("files", []) if isinstance(sleeve, dict) else []
+    if not records:
+        records = objects.get("guide_sleeves", []) or []
+    for item in records:
+        if isinstance(item, dict) and item.get("path"):
+            paths.append(Path(str(item["path"])))
+    return [
+        str(path.resolve() if path.is_absolute() else (case_dir / path).resolve())
+        for path in paths
+    ]
+
+
+def _v2_contour_records(
+    region_records: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """把 fdi_new 组件局部区域适配为共享的实测牙弓结构。"""
+
+    return [
+        {
+            "FDI": int(item["fdi"]),
+            "area_centroid_LR_AP_mm": item["area_centroid_lr_ap_mm"],
+            "contour_LR_AP_mm": item["contour_lr_ap_mm"],
+        }
+        for item in region_records
+    ]
 
 
 def run(args: argparse.Namespace) -> dict[str, object]:
     """内部算法说明。"""
     case_yaml = args.case.resolve()
     case_dir = case_yaml.parent
-    config = yaml.safe_load(case_yaml.read_text(encoding="utf-8"))
+    config = normalize_case_definition(
+        yaml.safe_load(case_yaml.read_text(encoding="utf-8"))
+    )
+    fdi_mapping_value = getattr(args, "fdi_mapping_report", None)
+    fdi_mapping_path = (
+        Path(fdi_mapping_value).resolve()
+        if fdi_mapping_value is not None
+        else None
+    )
     contact_path = (
         args.contact_report.resolve()
-        if args.contact_report
+        if getattr(args, "contact_report", None)
         else case_dir / "输出/contact_chord_contours_v18_semantic_segment_selection/contact_chord_report.json"
     )
     base_path = (
         args.base_mapping_report.resolve()
-        if args.base_mapping_report
+        if getattr(args, "base_mapping_report", None)
         else case_dir / "输出/tooth_guide_mapping/tooth_guide_mapping.json"
     )
     enhanced_path = (
         args.enhanced_maps.resolve()
-        if args.enhanced_maps
+        if getattr(args, "enhanced_maps", None)
         else case_dir / "输出/enhanced_crown_projection_v2/enhanced_projection_maps.npz"
     )
     output_dir = (
@@ -83,23 +143,70 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     )
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    contact = load_json(contact_path)
-    if contact.get("status") != "complete" or not contact.get("safe_for_downstream_use"):
-        raise RuntimeError("contact-chord tooth report is not approved for downstream use")
-    if not all(contact.get("QA", {}).values()):
-        raise RuntimeError("contact-chord tooth report has failed QA gates")
     base = None
-    coordinate = contact.get("coordinate_system")
-    parameters = contact.get("source_mapping_parameters")
-    if coordinate is None or parameters is None:
-        # Reports written before schema 1.2 did not persist their frame.  The
-        # deterministic base mapper is rebuilt only as a coordinate reference;
-        # none of its tooth centres are accepted as final locations.
-        if not base_path.exists():
-            run_case_mapping(case_yaml)
-        base = load_json(base_path)
-        coordinate = base["coordinate_system"]
-        parameters = base["mapping_parameters"]
+    region_records: list[dict[str, object]] | None = None
+    if fdi_mapping_path is not None:
+        recognition_source = load_json(fdi_mapping_path)
+        allow_unsafe_recognition = bool(
+            getattr(args, "allow_unsafe_recognition", False)
+        )
+        if not allow_unsafe_recognition and (
+            recognition_source.get("status") != "complete"
+            or not recognition_source.get("safe_for_downstream_use")
+        ):
+            raise RuntimeError(
+                "fdi_new mapping report is not approved for downstream use"
+            )
+        if (
+            not allow_unsafe_recognition
+            and not all(recognition_source.get("QA", {}).values())
+        ):
+            raise RuntimeError("fdi_new mapping report has failed QA gates")
+        coordinate = recognition_source.get("coordinate_system")
+        profile = recognition_source.get("profile", {})
+        projection = recognition_source.get("projection", {})
+        if not isinstance(coordinate, dict):
+            raise RuntimeError("fdi_new mapping report has no coordinate system")
+        if not isinstance(profile, dict) or not isinstance(projection, dict):
+            raise RuntimeError("fdi_new mapping report has invalid profile metadata")
+        parameters = {
+            "crown_height_quantile": float(
+                projection["selected_partition_quantile"]
+            ),
+            "minimum_crown_normal_dot": float(profile["minimum_normal_dot"]),
+        }
+        raw_regions = recognition_source.get("regions")
+        if not isinstance(raw_regions, list) or not all(
+            isinstance(item, dict) for item in raw_regions
+        ):
+            raise RuntimeError("fdi_new mapping report has invalid regions")
+        region_records = list(raw_regions)
+        contour_records = _v2_contour_records(region_records)
+        recognition_source_kind = "tooth_fdi_mapping_new"
+    else:
+        recognition_source = load_json(contact_path)
+        if (
+            recognition_source.get("status") != "complete"
+            or not recognition_source.get("safe_for_downstream_use")
+        ):
+            raise RuntimeError(
+                "contact-chord tooth report is not approved for downstream use"
+            )
+        if not all(recognition_source.get("QA", {}).values()):
+            raise RuntimeError("contact-chord tooth report has failed QA gates")
+        coordinate = recognition_source.get("coordinate_system")
+        parameters = recognition_source.get("source_mapping_parameters")
+        if coordinate is None or parameters is None:
+            # Reports written before schema 1.2 did not persist their frame.
+            # Rebuild the deterministic base mapper only as a coordinate
+            # reference; none of its tooth centres are accepted as final.
+            if not base_path.exists():
+                run_case_mapping(case_yaml)
+            base = load_json(base_path)
+            coordinate = base["coordinate_system"]
+            parameters = base["mapping_parameters"]
+        contour_records = list(recognition_source["contours"])
+        recognition_source_kind = "legacy_contact_chord"
 
     anatomy = dict(config["anatomy"])
     anatomy["orientation"] = {
@@ -112,25 +219,28 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         label for label in semantics.fdi_order if label in semantics.present_teeth
     )
     forbidden = set(semantics.missing_teeth | semantics.excluded_teeth)
-    contour_records = list(contact["contours"])
     contour_order = tuple(int(item["FDI"]) for item in contour_records)
     if contour_order != present_order:
         raise RuntimeError(
-            "contact contours must equal configured present FDI in canonical order; "
+            "recognized contours must equal configured present FDI in canonical order; "
             f"expected {list(present_order)}, got {list(contour_order)}"
         )
     if set(contour_order) & forbidden:
-        raise RuntimeError("contact contours contain missing or excluded FDI")
+        raise RuntimeError("recognized contours contain missing or excluded FDI")
 
     dental_path = resolve_case_path(case_dir, config["objects"]["dental"], "dental")
     guide_path = resolve_case_path(case_dir, config["objects"]["guide"], "guide")
     dental = load_mesh(dental_path)
     guide = load_mesh(guide_path)
-    with np.load(enhanced_path) as archive:
-        enhanced = {key: archive[key] for key in archive.files}
-    projection_height_quantile = float(
-        enhanced.get("height_quantile", parameters["crown_height_quantile"])
-    )
+    enhanced = None
+    if region_records is None:
+        with np.load(enhanced_path) as archive:
+            enhanced = {key: archive[key] for key in archive.files}
+        projection_height_quantile = float(
+            enhanced.get("height_quantile", parameters["crown_height_quantile"])
+        )
+    else:
+        projection_height_quantile = float(parameters["crown_height_quantile"])
     frame = estimate_frame_and_arch(
         dental,
         guide,
@@ -149,10 +259,14 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         "e_occ_dot": float(np.dot(frame["e_occ"], coordinate["e_occ"])),
     }
     frame["curve"] = fit_measured_contour_arch(contour_records)
-    locations = locate_contact_teeth(
-        contour_records=contour_records,
-        frame=frame,
-        enhanced_maps=enhanced,
+    locations = (
+        locate_reported_teeth(region_records=region_records, frame=frame)
+        if region_records is not None
+        else locate_contact_teeth(
+            contour_records=contour_records,
+            frame=frame,
+            enhanced_maps=enhanced,
+        )
     )
     centres = {item.fdi: item.arch_s_mm for item in locations}
     intervals = {item.fdi: item.contour_interval_s_mm for item in locations}
@@ -268,8 +382,8 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     )
     qa = {
         "FDI_classification_is_complete_exclusive_and_jaw_valid": True,
-        "contact_chord_source_status_complete": True,
-        "contact_chord_source_QA_passed": True,
+        "recognition_source_status_complete": True,
+        "recognition_source_QA_passed": True,
         "approved_anatomical_axes_reproduced": all(
             value >= 0.999 for value in axis_agreement.values()
         ),
@@ -317,9 +431,9 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         "guide_was_not_modified": True,
     }
 
-    report_path = output_dir / "tooth_guide_mapping_contact_chord.json"
-    preview_path = output_dir / "tooth_guide_mapping_contact_chord_preview.png"
-    context_path = output_dir / "tooth_guide_mapping_contact_chord_context.glb"
+    report_path = output_dir / "tooth_guide_mapping.json"
+    preview_path = output_dir / "tooth_guide_mapping_preview.png"
+    context_path = output_dir / "tooth_guide_mapping_context.glb"
     preview_instances = []
     by_fdi = {int(item["FDI"]): item for item in contour_records}
     for item in locations:
@@ -334,41 +448,15 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         preview_instances.append({
             "FDI": item.fdi,
             "contour_s_n_mm": np.column_stack([contour_s, contour_n]).tolist(),
-            "contour_lr_ap_mm": contour.tolist(),
-            "area_centroid_lr_ap_mm": list(item.centroid_lr_ap_mm),
             "area_centroid_arch_s_mm": item.arch_s_mm,
             "area_centroid_normal_n_mm": float(item.centroid_lr_ap_mm[1] - centroid_arch_ap),
             "mesial_arch_s_mm": item.contour_interval_s_mm[0],
             "distal_arch_s_mm": item.contour_interval_s_mm[1],
         })
-    instance_analysis = {
-        "instances": preview_instances,
-        "contact_chords": list(contact.get("chords", [])),
-    }
-    preview_slots = list(slots)
-    contact_sources = contact.get("sources")
-    base_coordinate_path = (
-        contact_sources.get("base_coordinate_report")
-        if isinstance(contact_sources, dict)
-        else None
-    )
-    if isinstance(base_coordinate_path, str) and Path(base_coordinate_path).is_file():
-        base_preview = load_json(Path(base_coordinate_path))
-        missing_fdis = set(semantics.missing_teeth)
-        preview_slots.extend(
-            item
-            for item in base_preview.get("tooth_slots", [])
-            if isinstance(item, dict)
-            and item.get("status") == "missing_slot"
-            and int(item.get("FDI", -1)) in missing_fdis
-        )
-        order_index = {
-            int(fdi): index for index, fdi in enumerate(semantics.fdi_order)
-        }
-        preview_slots.sort(key=lambda item: order_index[int(item["FDI"])])
+    instance_analysis = {"instances": preview_instances, "assignment": {}, "candidates": []}
     report = {
-        "schema_version": "5.1-physical-guide-coverage",
-        "created_at": datetime.now(UTC).isoformat(),
+        "schema_version": "6.0-fdi-new-physical-guide-coverage",
+        "created_at": datetime.now(timezone.utc).isoformat(),
         "status": (
             "tooth_guide_mapping_complete"
             if all(qa.values())
@@ -378,12 +466,30 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         "sources": {
             "dental": str(dental_path),
             "guide": str(guide_path),
-            "surgical_reference": list(
-                contact.get("sources", {}).get("surgical_reference", []) or []
+            "surgical_reference": (
+                configured_surgical_references(config, case_dir)
+                if fdi_mapping_path is not None
+                else list(
+                    recognition_source.get("sources", {}).get(
+                        "surgical_reference", []
+                    ) or []
+                )
             ),
-            "contact_chord_report": str(contact_path),
-            "base_coordinate_report": str(base_path) if base_path.exists() else None,
-            "enhanced_projection_maps": str(enhanced_path),
+            "recognition_engine": recognition_source_kind,
+            "fdi_mapping_report": (
+                str(fdi_mapping_path) if fdi_mapping_path is not None else None
+            ),
+            "contact_chord_report": (
+                str(contact_path) if fdi_mapping_path is None else None
+            ),
+            "base_coordinate_report": (
+                str(base_path)
+                if fdi_mapping_path is None and base_path.exists()
+                else None
+            ),
+            "enhanced_projection_maps": (
+                str(enhanced_path) if fdi_mapping_path is None else None
+            ),
         },
         "semantics": {
             "jaw": semantics.jaw,
@@ -392,18 +498,36 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             "present_teeth": sorted(semantics.present_teeth),
             "missing_teeth_without_geometric_centres": sorted(semantics.missing_teeth),
             "excluded_teeth_without_geometric_centres": sorted(semantics.excluded_teeth),
-            "rule": "approved contact-chord contours are authoritative; only present FDI are mapped",
+            "rule": (
+                "approved fdi_new component-local FDI regions are authoritative; "
+                "only present FDI are guide-mapped"
+                if fdi_mapping_path is not None
+                else "approved contact-chord contours are authoritative; "
+                "only present FDI are mapped"
+            ),
         },
         "coordinate_system": coordinate,
         "mapping_parameters": {
             **parameters,
-            "tooth_center_source": "uniform area centroid of approved contact-chord contour",
-            "tooth_interval_source": "full measured contact-chord contour projected to directed arch",
+            "tooth_center_source": (
+                "uniform area centroid of approved fdi_new component-local region"
+                if fdi_mapping_path is not None
+                else "uniform area centroid of approved contact-chord contour"
+            ),
+            "tooth_interval_source": (
+                "full fdi_new component-local contour projected to directed arch"
+                if fdi_mapping_path is not None
+                else "full measured contact-chord contour projected to directed arch"
+            ),
             "directed_arch_source": (
                 "parametric PCHIP through measured present-tooth area centroids "
                 "with terminal contour-support extensions"
             ),
-            "crown_height_source": "enhanced continuous triangle Z-buffer",
+            "crown_height_source": (
+                "authoritative fdi_new component crown point"
+                if fdi_mapping_path is not None
+                else "enhanced continuous triangle Z-buffer"
+            ),
             "enhanced_projection_height_quantile": projection_height_quantile,
             "base_mapping_teeth_used_as_final_centres": False,
         },
@@ -430,32 +554,24 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             ),
         },
         "QA": qa,
-        "outputs": {"report_json": str(report_path)},
+        "outputs": {
+            "report_json": str(report_path),
+            "preview_png": str(preview_path),
+            "context_glb": str(context_path),
+        },
     }
-    overview_path = getattr(args, "overview_path", None)
-    if overview_path is not None:
-        overview_path = Path(overview_path).resolve()
+    overview_value = getattr(args, "overview_path", None)
+    if overview_value is not None:
+        overview_path = Path(overview_value).resolve()
         overview_path.parent.mkdir(parents=True, exist_ok=True)
-        render_preview(
-            overview_path,
-            frame,
-            preview_slots,
-            windows,
-            instance_analysis,
-        )
+        render_preview(overview_path, frame, slots, windows, instance_analysis)
         report["outputs"]["overview_png"] = str(overview_path)
     if getattr(args, "write_diagnostics", True):
-        if overview_path is None:
-            render_preview(
-                preview_path,
-                frame,
-                preview_slots,
-                windows,
-                instance_analysis,
-            )
-            report["outputs"]["preview_png"] = str(preview_path)
+        render_preview(preview_path, frame, slots, windows, instance_analysis)
         export_context(context_path, dental, guide, slots, windows)
-        report["outputs"]["context_glb"] = str(context_path)
+    else:
+        report["outputs"].pop("preview_png", None)
+        report["outputs"].pop("context_glb", None)
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     return report
 
@@ -464,6 +580,7 @@ def parse_args() -> argparse.Namespace:
     """内部算法说明。"""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", required=True, type=Path)
+    parser.add_argument("--fdi-mapping-report", type=Path)
     parser.add_argument("--contact-report", type=Path)
     parser.add_argument("--base-mapping-report", type=Path)
     parser.add_argument("--enhanced-maps", type=Path)

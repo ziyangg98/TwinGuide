@@ -8,6 +8,7 @@ import yaml
 from twin_guide.config import (
     CaseConfig,
     Jaw,
+    ToothIdentificationBackend,
     case_occlusal_axis,
     require_production_review,
 )
@@ -82,6 +83,7 @@ class CaseConfigTests(unittest.TestCase):
                 "handpiece_avoidance",
                 "press_beam",
                 "render",
+                "tooth_identification",
             )
             if key in config_data and config_data[key] is not None
         }
@@ -224,6 +226,23 @@ class CaseConfigTests(unittest.TestCase):
         self.assertEqual(
             config.windows.observation_local_failure_drop_targets_mm,
             (0.5, 1.0, 2.0),
+        )
+        self.assertIs(
+            config.tooth_identification.backend,
+            ToothIdentificationBackend.FDI_NEW,
+        )
+
+    def test_loads_explicit_standard_tooth_identification_fallback(self):
+        """旧病例仍可显式选择标准牙位识别后端。"""
+
+        config_data = self._valid_config_data()
+        config_data["tooth_identification"] = {"backend": "standard"}
+
+        config = CaseConfig.from_yaml(self._write_config(config_data))
+
+        self.assertIs(
+            config.tooth_identification.backend,
+            ToothIdentificationBackend.STANDARD,
         )
 
     def test_loads_meeting_adjustment_interfaces(self):

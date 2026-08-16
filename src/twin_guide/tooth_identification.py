@@ -8,7 +8,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from twin_guide.config import CaseConfig, Jaw
+from twin_guide.config import CaseConfig, Jaw, ToothIdentificationBackend
 from twin_guide.config.loading import load_case_yaml
 from twin_guide.errors import GeometryError
 from twin_guide.geometry import Vec3
@@ -217,7 +217,7 @@ def _window_mappings(
     return tuple(windows)
 
 
-WORKFLOW_SCHEMA_VERSION = "1.6-standard-stage-output"
+WORKFLOW_SCHEMA_VERSION = "2.3-fdi-new-default"
 STAGE_RESULT_SCHEMA = "twin-guide.stage-result/1.0"
 WORKFLOW_RESULT_NAME = "stage-02-tooth-mapping.json"
 WORKFLOW_OVERVIEW_NAME = "stage-02-tooth-mapping.png"
@@ -257,6 +257,11 @@ def _input_fingerprint(config: CaseConfig) -> dict[str, object]:
         "workflow_schema": WORKFLOW_SCHEMA_VERSION,
         "case_id": config.case_id,
         "jaw": config.jaw.value,
+        "backend": getattr(
+            inputs,
+            "backend",
+            ToothIdentificationBackend.FDI_NEW,
+        ).value,
         "case_semantic_sha256": case_semantic_sha256,
         "dental": str(config.inputs.patient_dentition.resolve()),
         "dental_sha256": _sha256(config.inputs.patient_dentition),
@@ -390,12 +395,23 @@ def _load_current_result(
     cache_root = config.output_directory / ".cache" / WORKFLOW_CACHE_NAME
     result_path = cache_root / WORKFLOW_CACHE_RESULT_NAME
     recognition_root = cache_root / "tooth-recognition"
-    required_cache_paths = (
-        recognition_root / "guide-surface-mapping",
-        recognition_root / "crown-projection",
-        recognition_root / "contact-contours",
-        cache_root / "guide-mapping",
+    identification_inputs = getattr(config, "tooth_identification", None)
+    backend = getattr(
+        identification_inputs,
+        "backend",
+        ToothIdentificationBackend.FDI_NEW,
     )
+    if backend is ToothIdentificationBackend.FDI_NEW:
+        required_cache_paths = (recognition_root, cache_root / "guide-mapping")
+        if write_overview and not (cache_root / "raw-overview.png").is_file():
+            return None
+    else:
+        required_cache_paths = (
+            recognition_root / "guide-surface-mapping",
+            recognition_root / "crown-projection",
+            recognition_root / "contact-contours",
+            cache_root / "guide-mapping",
+        )
     if not result_path.is_file() or not all(path.exists() for path in required_cache_paths):
         return None
     try:
@@ -436,19 +452,35 @@ def _run_unified_workflow(
             GuideMappingRequest,
             map_recognized_teeth_to_guide,
         )
-        from twin_guide.tooth_mapping.tooth_recognition import (
-            ToothRecognitionRequest,
-            recognize_teeth,
-        )
-
-        recognition = recognize_teeth(
-            ToothRecognitionRequest(
-                case_yaml=inputs.case_yaml,
-                output_dir=recognition_directory,
+        if inputs.backend is ToothIdentificationBackend.FDI_NEW:
+            from twin_guide.tooth_fdi_mapping_new import (
+                ToothFdiMappingNewRequest,
+                recognize_teeth_new,
             )
-        )
-        if not recognition.safe_for_guide_mapping:
-            raise GeometryError("本次牙位识别未通过导板映射安全门")
+
+            recognition = recognize_teeth_new(
+                ToothFdiMappingNewRequest(
+                    case_yaml=inputs.case_yaml,
+                    output_dir=recognition_directory,
+                    write_report_json=True,
+                )
+            )
+            if not recognition.safe_for_downstream_use:
+                raise GeometryError("FDI New 牙位识别未通过下游安全门")
+        else:
+            from twin_guide.tooth_mapping.tooth_recognition import (
+                ToothRecognitionRequest,
+                recognize_teeth,
+            )
+
+            recognition = recognize_teeth(
+                ToothRecognitionRequest(
+                    case_yaml=inputs.case_yaml,
+                    output_dir=recognition_directory,
+                )
+            )
+            if not recognition.safe_for_guide_mapping:
+                raise GeometryError("本次牙位识别未通过导板映射安全门")
         guide_mapping = map_recognized_teeth_to_guide(
             GuideMappingRequest(
                 recognition=recognition,
@@ -487,8 +519,13 @@ def _run_unified_workflow(
         },
         "parameters": {
             **_mapping(mapping.get("mapping_parameters"), "mapping_parameters"),
+            "recognition_backend": inputs.backend.value,
             "recognition_profile_id": recognition.profile.profile_id,
-            "core_grouping_policy": recognition.profile.core_grouping_policy,
+            "core_grouping_policy": getattr(
+                recognition.profile,
+                "core_grouping_policy",
+                "fdi_new_multiscale_component_local",
+            ),
         },
         "result": {
             "semantics": mapping.get("semantics"),
