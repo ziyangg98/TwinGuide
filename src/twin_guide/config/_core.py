@@ -9,6 +9,7 @@ from dataclasses import field as dataclass_field
 from pathlib import Path
 
 from twin_guide.config.loading import load_case_yaml
+from twin_guide.case_schema import normalize_case_definition
 from twin_guide.config.parsing import (
     CASE_ID_PATTERN,
     _boolean,
@@ -100,7 +101,7 @@ class CaseConfig:
         path = Path(config_file).resolve()
         if path.suffix.lower() not in {".yaml", ".yml"}:
             raise ConfigurationError("病例配置必须为 YAML 文件")
-        raw_value = load_case_yaml(path)
+        raw_value = normalize_case_definition(load_case_yaml(path))
         root = _mapping(raw_value, "configuration")
         _reject_unknown(
             root,
