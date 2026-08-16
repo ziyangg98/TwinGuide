@@ -54,10 +54,10 @@ class TwinGuideFeatureGizmoGroup(bpy.types.GizmoGroup):
         for index, color in enumerate(((0.1, 0.65, 1.0), (0.2, 0.9, 0.45))):
             gizmo = self.gizmos.new("GIZMO_GT_arrow_3d")
             gizmo.color = color
-            gizmo.alpha = 0.9
+            gizmo.alpha = 0.95
             gizmo.color_highlight = (1.0, 0.65, 0.1)
             gizmo.alpha_highlight = 1.0
-            gizmo.scale_basis = 1.2
+            gizmo.scale_basis = 1.4
             gizmo.use_draw_modal = True
             gizmo.use_draw_value = False
             operator = gizmo.target_set_operator("twinguide.drag_feature_handle")
@@ -68,7 +68,7 @@ class TwinGuideFeatureGizmoGroup(bpy.types.GizmoGroup):
         self.surface_gizmo.alpha = 0.85
         self.surface_gizmo.color_highlight = (1.0, 0.65, 0.1)
         self.surface_gizmo.alpha_highlight = 1.0
-        self.surface_gizmo.scale_basis = 0.9
+        self.surface_gizmo.scale_basis = 1.05
         self.surface_gizmo.target_set_operator("twinguide.drag_surface_anchor")
 
     def refresh(self, context: bpy.types.Context) -> None:

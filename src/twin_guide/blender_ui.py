@@ -71,6 +71,13 @@ from twin_guide.ui_jobs import (
 )
 
 PREVIEW_OBJECT_NAME = "TwinGuide_Model"
+MODEL_OVERVIEW_COLOR = (0.32, 0.40, 0.50, 1.0)
+MODEL_FOCUS_COLOR = (0.20, 0.25, 0.32, 1.0)
+SLEEVE_COLOR = (0.30, 0.64, 1.0, 1.0)
+OPERATION_COLOR = (0.18, 0.88, 0.68, 1.0)
+CONNECTOR_COLOR = (1.0, 0.66, 0.16, 1.0)
+PRESS_COLOR = (0.20, 0.76, 0.94, 1.0)
+OBSERVATION_COLOR = (0.72, 0.46, 1.0, 1.0)
 
 _CONFIG: CaseConfig | None = None
 _JOB: BackgroundJob | None = None
@@ -232,10 +239,15 @@ def _load_reference_surfaces(*, visible: bool = False) -> None:
         ("dentition", _CONFIG.inputs.patient_dentition),
     ):
         name = f"{SURFACE_PREFIX}{role}"
-        if bpy.data.objects.get(name) is not None:
-            continue
-        target = import_stl_mesh(path, name)
-        target.display_type = "WIRE"
+        target = bpy.data.objects.get(name)
+        if target is None:
+            target = import_stl_mesh(path, name)
+        target.display_type = "WIRE" if role == "template" else "SOLID"
+        target.color = (
+            (0.28, 0.52, 0.82, 1.0)
+            if role == "template"
+            else (0.78, 0.70, 0.56, 1.0)
+        )
         target.hide_render = True
         target.hide_select = True
         target.hide_set(not visible)
@@ -247,7 +259,7 @@ def _load_input_fallback() -> None:
     _load_reference_surfaces(visible=True)
 
 
-def _snap_to_surface(object_: bpy.types.Object) -> None:
+def _snap_to_surface(object_: bpy.types.Object, *, force: bool = False) -> None:
     """将锚点投影到指定导板或牙列表面。"""
     target = bpy.data.objects.get(f"{SURFACE_PREFIX}{object_['tg_surface_role']}")
     if target is None:
@@ -260,8 +272,8 @@ def _snap_to_surface(object_: bpy.types.Object) -> None:
         return
     world_location = target.matrix_world @ location
     distance = (world_location - object_.location).length
-    object_["tg_resnap_required"] = distance > 0.75
-    if distance > 0.75:
+    object_["tg_resnap_required"] = not force and distance > 0.75
+    if not force and distance > 0.75:
         object_.color = (1.0, 0.1, 0.1, 1.0)
         return
     object_.location = world_location
@@ -321,11 +333,11 @@ def _create_sleeve_controls() -> None:
             )
         _hint_label(
             f"Sleeve_Site_{ring_index}",
-            f"圆环 {ring_index} 双导柱",
+            f"种植位 {ring_index} · 双导柱",
             origin + axis * values["platform"] + Vector((0.0, 0.0, 1.8)),
             "SLEEVE",
             f"sleeve:site_{ring_index}",
-            (0.1, 0.65, 1.0, 1.0),
+            SLEEVE_COLOR,
         )
 
 
@@ -459,7 +471,7 @@ def _create_operation_controls() -> None:
             visible_center + normal * 2.0,
             "OPERATION",
             f"operation_window:{site_index}",
-            (0.15, 0.9, 0.45, 1.0),
+            OPERATION_COLOR,
         )
 
 
@@ -522,11 +534,11 @@ def _create_connector_controls() -> None:
         touched_guides.add(index)
         _hint_label(
             f"Connector_{index}_{side}",
-            f"连接线 {index} {'左侧' if side == 'left' else '右侧'}",
+            f"导柱 {index} · {'左避让' if side == 'left' else '右避让'}",
             location + local_down * 1.4,
             "CONNECTOR",
             f"connector:guide_{index}:{side}",
-            (1.0, 0.68, 0.05, 1.0),
+            CONNECTOR_COLOR,
         )
     for index in touched_guides:
         _update_connector_overlay(index)
@@ -559,11 +571,11 @@ def _create_press_controls() -> None:
             _snap_to_surface(control)
             _hint_label(
                 f"PressAnchor_{index}",
-                f"支撑点 {index}",
+                f"按压支点 {index}",
                 control.location + normal * 1.4,
                 "PRESS",
                 f"press_anchor:{index}",
-                (0.25, 0.9, 0.35, 1.0),
+                PRESS_COLOR,
             )
     junction_features = _plan_features("press_junction")
     if junction_features:
@@ -593,11 +605,11 @@ def _create_press_controls() -> None:
         )
         _hint_label(
             "PressJunction",
-            "Y 型汇合点",
+            "按压梁 · 汇合点",
             position + Vector((0.0, 0.0, 1.4)),
             "PRESS",
             "press_junction",
-            (0.15, 0.8, 0.95, 1.0),
+            PRESS_COLOR,
         )
     _update_press_overlay()
 
@@ -697,7 +709,7 @@ def _create_observation_controls() -> None:
             midpoint + Vector((0.0, 0.0, 1.6)),
             "OBSERVATION",
             f"observation_window:{window_id}",
-            (0.7, 0.3, 1.0, 1.0),
+            OBSERVATION_COLOR,
         )
 
 
@@ -771,14 +783,17 @@ def _show_model_view() -> None:
             object_.data.bevel_depth = 0.14
         if object_.get("tg_hint_label") and hasattr(object_.data, "size"):
             object_.data.size = 1.15
-    if _SESSION is not None:
-        _SESSION.select(None)
+        base_color = object_.get("tg_base_color")
+        if base_color is not None and not object_.get("tg_resnap_required"):
+            object_.color = tuple(base_color)
     model = bpy.data.objects.get(PREVIEW_OBJECT_NAME)
     if model is not None:
-        for selected in bpy.context.selected_objects:
-            selected.select_set(False)
-        model.select_set(True)
-        bpy.context.view_layer.objects.active = model
+        model.color = MODEL_OVERVIEW_COLOR
+    if _SESSION is not None:
+        _SESSION.select(None)
+    for selected in bpy.context.selected_objects:
+        selected.select_set(False)
+    bpy.context.view_layer.objects.active = None
 
 
 def _show_feature(feature_id: str) -> None:
@@ -804,6 +819,15 @@ def _show_feature(feature_id: str) -> None:
             object_.data.bevel_depth = 0.28 if current else 0.11
         if object_.get("tg_hint_label") and hasattr(object_.data, "size"):
             object_.data.size = 1.45 if current else 1.0
+        base_color = object_.get("tg_base_color")
+        if base_color is not None and not object_.get("tg_resnap_required"):
+            factor = 1.0 if current else 0.48
+            object_.color = (
+                float(base_color[0]) * factor,
+                float(base_color[1]) * factor,
+                float(base_color[2]) * factor,
+                float(base_color[3]),
+            )
         if current and object_.name.startswith(CONTROL_PREFIX) and selected is None:
             selected = object_
     if selected is not None:
@@ -811,6 +835,9 @@ def _show_feature(feature_id: str) -> None:
             object_.select_set(False)
         selected.select_set(True)
         bpy.context.view_layer.objects.active = selected
+    model = bpy.data.objects.get(PREVIEW_OBJECT_NAME)
+    if model is not None:
+        model.color = MODEL_FOCUS_COLOR
     if _SESSION is not None:
         _SESSION.select(feature_id)
 
@@ -824,12 +851,14 @@ def _feature_label(feature_id: str) -> tuple[str, str]:
         return "观察窗", _observation_display_name(feature_id.split(":", 1)[1])
     if feature_id.startswith("connector:guide_"):
         guide, side = feature_id.removeprefix("connector:guide_").split(":", 1)
-        return "连接线", f"连接线 {guide} {'左侧' if side == 'left' else '右侧'}"
+        return "连接避让", f"导柱 {guide} · {'左侧' if side == 'left' else '右侧'}"
     if feature_id.startswith("press_anchor:"):
-        return "支撑结构", f"支撑点 {feature_id.rsplit(':', 1)[-1]}"
+        return "按压梁", f"支点 {feature_id.rsplit(':', 1)[-1]}"
     if feature_id == "press_junction":
-        return "支撑结构", "Y 型汇合点"
-    return "导柱", f"导柱 {feature_id.rsplit('_', 1)[-1]}"
+        return "按压梁", "汇合点"
+    if feature_id.startswith("sleeve:site_"):
+        return "双导柱", f"种植位 {feature_id.rsplit('_', 1)[-1]}"
+    return "其他", feature_id
 
 
 def _observation_display_name(identifier: str) -> str:
@@ -1000,6 +1029,7 @@ def _sync_feature_values(feature_id: str) -> None:
     elif feature_id.startswith("press_anchor:"):
         control = next(iter(controls.values()))
         state.surface_role = str(control["tg_surface_role"])
+        state.feature_position = tuple(control.location)
     _FEATURE_VALUE_SYNC = False
 
 
@@ -1155,6 +1185,43 @@ def _surface_role_updated(
     bpy.context.scene.twin_guide_state.dirty = _SESSION.dirty
 
 
+def _surface_position_updated(
+    state: TwinGuideState,
+    _context: bpy.types.Context,
+) -> None:
+    """把精确位置参数投影到当前按压支点表面。"""
+
+    if _FEATURE_VALUE_SYNC or _SESSION is None or _SESSION.locked:
+        return
+    feature_id = _SESSION.selected_feature_id
+    if feature_id is None or not feature_id.startswith("press_anchor:"):
+        return
+    control = next(iter(_controls_for_feature(feature_id).values()))
+    _SESSION.begin_edit()
+    control.location = Vector(state.feature_position)
+    _snap_to_surface(control, force=True)
+    _update_press_overlay()
+    _preview_feature_edit(feature_id)
+    _SESSION.commit_edit()
+    state.dirty = _SESSION.dirty
+    _sync_feature_values(feature_id)
+
+
+def _reference_visibility_updated(
+    state: TwinGuideState,
+    _context: bpy.types.Context,
+) -> None:
+    """按面板开关显示或隐藏不可选的参考表面。"""
+
+    for role, visible in (
+        ("template", state.show_template_reference),
+        ("dentition", state.show_dentition_reference),
+    ):
+        target = bpy.data.objects.get(f"{SURFACE_PREFIX}{role}")
+        if target is not None:
+            target.hide_set(not visible)
+
+
 def _update_connector_overlay(index: int) -> None:
     """按左右两个避让节点刷新一根导柱的高位连接线。"""
     left = _find_control("connector_node", guide_index=index, side="left")
@@ -1255,7 +1322,7 @@ def _update_observation_overlay(
 
 
 def _update_window_overlay(index: int) -> None:
-    """刷新投影到当前模型表面的轻量操作窗轮廓。"""
+    """在窗口局部参数平面内刷新不变形的操作窗轮廓。"""
     center = _find_control("window_center", site_index=index)
     width = _find_control("window_size", site_index=index, role="width")
     height = _find_control("window_size", site_index=index, role="height")
@@ -1280,12 +1347,12 @@ def _update_window_overlay(index: int) -> None:
         half_width,
         half_height,
     )
-    points = []
-    for tangent_sign, bitangent_sign, angle_start in (
-        (1.0, 1.0, 0.0),
-        (-1.0, 1.0, 90.0),
-        (-1.0, -1.0, 180.0),
-        (1.0, -1.0, 270.0),
+    entries: list[tuple[Vector, str | None]] = []
+    for tangent_sign, bitangent_sign, angle_start, edge_role, edge_offset in (
+        (1.0, 1.0, 0.0, "height", bitangent * half_height),
+        (-1.0, 1.0, 90.0, "width_opposite", -tangent * half_width),
+        (-1.0, -1.0, 180.0, "height_opposite", -bitangent * half_height),
+        (1.0, -1.0, 270.0, "width", tangent * half_width),
     ):
         arc_center = (
             center.location
@@ -1294,18 +1361,31 @@ def _update_window_overlay(index: int) -> None:
         )
         for step in range(5):
             angle = math.radians(angle_start + step * 22.5)
-            points.append(
-                arc_center
-                + tangent * radius * math.cos(angle)
-                + bitangent * radius * math.sin(angle)
+            entries.append(
+                (
+                    arc_center
+                    + tangent * radius * math.cos(angle)
+                    + bitangent * radius * math.sin(angle),
+                    None,
+                )
             )
-    projected = [_surface_point("template", point) for point in points]
-    projection_failed = bpy.data.objects.get(f"{SURFACE_PREFIX}template") is None
-    _update_curve(f"Window_{index}", projected, True)
+        entries.append((center.location + edge_offset, edge_role))
+    points = []
+    for point, edge_role in entries:
+        points.append(point)
+        if edge_role is not None:
+            handle = _find_control(
+                "window_size",
+                site_index=index,
+                role=edge_role,
+            )
+            if handle is not None:
+                handle.location = point
+    _update_curve(f"Window_{index}", points, True)
     overlay = bpy.data.objects.get(f"{OVERLAY_PREFIX}Window_{index}")
     if overlay is not None:
-        overlay.color = (1.0, 0.15, 0.08, 1.0) if projection_failed else (0.15, 0.9, 0.45, 1.0)
-    center["tg_projection_failed"] = projection_failed
+        overlay.color = OPERATION_COLOR
+    center["tg_projection_failed"] = False
     _move_hint_label(
         f"Window_{index}",
         center.location + Vector(center["tg_normal"]) * 2.0,
@@ -1529,9 +1609,9 @@ def _feature_adapter_value(feature_id: str) -> EditorOverrides:
         ring_index = int(controls["platform"]["tg_ring_index"])
         value = SleeveSiteOverride(
             ring_index,
-            round(_axis_distance(controls["total"]), 2),
-            round(_axis_distance(controls["platform"]), 2),
-            round(_axis_distance(controls["closed"]), 2),
+            round(_axis_distance(controls["total"]), 3),
+            round(_axis_distance(controls["platform"]), 3),
+            round(_axis_distance(controls["closed"]), 3),
         )
         return with_sleeve(current, value)
     if feature_id.startswith("observation_window:"):
@@ -1599,6 +1679,8 @@ def _load_model(path: Path) -> None:
         bpy.data.objects.remove(previous, do_unlink=True)
     model.name = PREVIEW_OBJECT_NAME
     model.display_type = "SOLID"
+    model.color = MODEL_OVERVIEW_COLOR
+    model.hide_select = True
 
 
 def _matching_model_snapshot(
@@ -2086,14 +2168,22 @@ class TwinGuideState(bpy.types.PropertyGroup):
         default=-1,
         update=_feature_index_updated,
     )
-    feature_value_1: bpy.props.FloatProperty(precision=2, update=_feature_values_updated)
-    feature_value_2: bpy.props.FloatProperty(precision=2, update=_feature_values_updated)
-    feature_value_3: bpy.props.FloatProperty(precision=2, update=_feature_values_updated)
-    feature_value_4: bpy.props.FloatProperty(precision=2, update=_feature_values_updated)
-    feature_value_5: bpy.props.FloatProperty(precision=2, update=_feature_values_updated)
-    feature_value_6: bpy.props.FloatProperty(precision=2, update=_feature_values_updated)
+    feature_value_1: bpy.props.FloatProperty(precision=3, step=1, update=_feature_values_updated)
+    feature_value_2: bpy.props.FloatProperty(precision=3, step=1, update=_feature_values_updated)
+    feature_value_3: bpy.props.FloatProperty(precision=3, step=1, update=_feature_values_updated)
+    feature_value_4: bpy.props.FloatProperty(precision=3, step=1, update=_feature_values_updated)
+    feature_value_5: bpy.props.FloatProperty(precision=3, step=1, update=_feature_values_updated)
+    feature_value_6: bpy.props.FloatProperty(precision=3, step=1, update=_feature_values_updated)
     feature_fdi_start: bpy.props.IntProperty(min=11, max=48, update=_feature_fdi_updated)
     feature_fdi_end: bpy.props.IntProperty(min=11, max=48, update=_feature_fdi_updated)
+    feature_position: bpy.props.FloatVectorProperty(
+        name="表面位置",
+        size=3,
+        subtype="XYZ",
+        precision=3,
+        step=1,
+        update=_surface_position_updated,
+    )
     surface_role: bpy.props.EnumProperty(
         name="吸附表面",
         items=(
@@ -2103,6 +2193,16 @@ class TwinGuideState(bpy.types.PropertyGroup):
         update=_surface_role_updated,
     )
     show_advanced: bpy.props.BoolProperty(name="高级信息", default=False)
+    show_template_reference: bpy.props.BoolProperty(
+        name="原始导板",
+        default=False,
+        update=_reference_visibility_updated,
+    )
+    show_dentition_reference: bpy.props.BoolProperty(
+        name="患者牙列",
+        default=True,
+        update=_reference_visibility_updated,
+    )
 
 
 class TwinGuideModelViewOperator(bpy.types.Operator):
@@ -2143,6 +2243,17 @@ class TwinGuideHandleDragOperator(bpy.types.Operator):
     _mouse_origin: Vector | None = None
     _screen_axis: Vector | None = None
     _pixels_per_unit: float = 1.0
+
+    def _header_text(self, object_: bpy.types.Object) -> str:
+        """显示当前语义值以及精调快捷键。"""
+
+        values = _semantic_values(object_)
+        if self.axis_index < len(values):
+            label, value = values[self.axis_index]
+            current = f"{label}: {value:.3f}"
+        else:
+            current = "拖动调整"
+        return f"{current}  |  Shift 0.01  |  Ctrl 0.1  |  Esc 取消"
 
     @classmethod
     def poll(cls, context: bpy.types.Context) -> bool:
@@ -2196,7 +2307,7 @@ class TwinGuideHandleDragOperator(bpy.types.Operator):
         self._pixels_per_unit = pixels_per_unit
         _SESSION.begin_edit()
         context.window_manager.modal_handler_add(self)
-        context.area.header_text_set("拖动调整；Shift 精调；Esc 取消")
+        context.area.header_text_set(self._header_text(object_))
         return {"RUNNING_MODAL"}
 
     def modal(
@@ -2227,16 +2338,18 @@ class TwinGuideHandleDragOperator(bpy.types.Operator):
         current = Vector((event.mouse_region_x, event.mouse_region_y))
         delta = (current - self._mouse_origin).dot(self._screen_axis)
         value = self._initial_value + delta / max(self._pixels_per_unit, 1e-6)
-        if event.shift:
-            object_ = bpy.data.objects[self._object_name]
+        object_ = bpy.data.objects[self._object_name]
+        if event.shift or event.ctrl:
+            semantic_step = 0.01 if event.shift else 0.1
             step = (
-                1.0 / float(object_.get("tg_scale", 1.0))
+                semantic_step / float(object_.get("tg_scale", 1.0))
                 if object_.get("tg_kind") == "observation_scalar"
                 and object_.get("tg_role") == "sweep"
-                else 0.1
+                else semantic_step
             )
             value = round(value / step) * step
         _gizmo_set_value(self.axis_index, value)
+        context.area.header_text_set(self._header_text(object_))
         return {"RUNNING_MODAL"}
 
 
@@ -2603,6 +2716,8 @@ class _TwinGuidePanelRenderer:
     ) -> None:
         """绘制当前完整结构的临床参数输入框。"""
 
+        box.use_property_split = True
+        box.use_property_decorate = False
         if feature_id.startswith("operation_window:"):
             labels = (
                 "宽度 (mm)",
@@ -2638,6 +2753,7 @@ class _TwinGuidePanelRenderer:
             labels = ("工作平面 X (mm)", "工作平面 Y (mm)")
         elif feature_id.startswith("press_anchor:"):
             box.prop(state, "surface_role")
+            box.prop(state, "feature_position", text="位置 (mm)")
             box.operator("twinguide.drag_surface_anchor")
             labels = ()
         else:
@@ -2682,6 +2798,23 @@ class _TwinGuidePanelRenderer:
             return
         editor = layout.column()
         editor.enabled = not state.editing_locked
+        reference_box = editor.box()
+        reference_box.label(text="参考显示", icon="HIDE_OFF")
+        reference_row = reference_box.row(align=True)
+        reference_row.prop(
+            state,
+            "show_dentition_reference",
+            text="牙列",
+            icon="HIDE_OFF" if state.show_dentition_reference else "HIDE_ON",
+            toggle=True,
+        )
+        reference_row.prop(
+            state,
+            "show_template_reference",
+            text="原始导板",
+            icon="HIDE_OFF" if state.show_template_reference else "HIDE_ON",
+            toggle=True,
+        )
         selected = context.active_object
         if (
             selected is not None
@@ -2691,15 +2824,18 @@ class _TwinGuidePanelRenderer:
             box = editor.box()
             feature_id = str(selected.get("tg_feature_id", ""))
             _group, feature_name = _feature_label(feature_id)
-            box.label(text=feature_name, icon="EDITMODE_HLT")
+            title = box.row(align=True)
+            title.scale_y = 1.25
+            title.label(text=feature_name, icon="EDITMODE_HLT")
             handle_hint = str(selected.get("tg_hint", ""))
             if handle_hint:
                 box.label(text=f"手柄：{handle_hint}")
             hint = box.column(align=True)
             hint.enabled = False
             hint.label(text=self._feature_instruction(feature_id))
-            hint.label(text="Shift 精调，Esc 取消")
+            hint.label(text="Shift 0.01 精调，Ctrl 0.1 对齐，Esc 取消")
             box.separator()
+            box.label(text="精确参数", icon="DRIVER")
             self._draw_feature_values(box, state, feature_id)
             self._draw_advanced(box, state, selected)
             if feature_id.startswith("operation_window:"):
@@ -2834,6 +2970,9 @@ def launch_from_argv() -> None:
         else:
             state.preview_status = "模型尚未按当前参数更新"
     _load_reference_surfaces(visible=model_path is None)
+    state.show_dentition_reference = True
+    state.show_template_reference = model_path is None
+    _reference_visibility_updated(state, bpy.context)
     if model_path is None:
         _load_input_fallback()
     cached_plan = plan_directory(_CONFIG) / "ui-editor-plan.json"

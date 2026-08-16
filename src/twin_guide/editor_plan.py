@@ -42,6 +42,22 @@ def _json_value(value: object) -> object:
     raise TypeError(f"编辑计划包含不可序列化类型：{type(value).__name__}")
 
 
+def _coordinate_values(value: object) -> tuple[float, float, float]:
+    """读取 JSON 坐标对象或三元素数组。"""
+
+    if isinstance(value, dict):
+        try:
+            return tuple(float(value[axis]) for axis in ("x", "y", "z"))
+        except (KeyError, TypeError, ValueError) as error:
+            raise TypeError("三维坐标对象必须包含数值 x、y、z") from error
+    if isinstance(value, list) and len(value) == 3:
+        try:
+            return tuple(float(item) for item in value)
+        except (TypeError, ValueError) as error:
+            raise TypeError("三维坐标数组必须包含三个数值") from error
+    raise TypeError("三维坐标必须是包含 x、y、z 的对象或三元素数组")
+
+
 def _semantic_config(config: CaseConfig, *, include_overrides: bool) -> bytes:
     """返回用于结构或当前几何指纹的稳定配置表示。"""
 
@@ -249,8 +265,8 @@ def build_editor_plan(
             second = _json_value(pair[1])
             if not isinstance(second, dict) or not isinstance(second.get("parameters"), dict):
                 raise TypeError("第二根导柱编辑几何缺少 parameters")
-            first_origin = parameters["axis_origin"]
-            second_origin = second["parameters"]["axis_origin"]
+            first_origin = _coordinate_values(parameters["axis_origin"])
+            second_origin = _coordinate_values(second["parameters"]["axis_origin"])
             parameters["axis_origin"] = [
                 0.5 * (float(left) + float(right))
                 for left, right in zip(first_origin, second_origin, strict=True)

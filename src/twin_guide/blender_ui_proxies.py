@@ -25,15 +25,23 @@ GROUP_BY_KIND = {
 }
 
 _COLORS = {
-    "window_center": (0.1, 0.85, 0.75, 1.0),
-    "window_size": (0.15, 0.8, 0.45, 1.0),
-    "window_margin": (1.0, 0.5, 0.08, 1.0),
-    "connector_node": (1.0, 0.72, 0.08, 1.0),
-    "surface_anchor": (0.25, 0.9, 0.35, 1.0),
-    "junction": (0.15, 0.8, 0.95, 1.0),
-    "observation_endpoint": (0.75, 0.3, 1.0, 1.0),
-    "observation_scalar": (0.55, 0.4, 1.0, 1.0),
-    "sleeve_height": (0.1, 0.65, 1.0, 1.0),
+    "window_center": (0.18, 0.88, 0.68, 1.0),
+    "window_size": (0.24, 0.78, 0.52, 1.0),
+    "window_margin": (1.0, 0.46, 0.30, 1.0),
+    "connector_node": (1.0, 0.66, 0.16, 1.0),
+    "surface_anchor": (0.22, 0.82, 0.88, 1.0),
+    "junction": (0.20, 0.72, 0.96, 1.0),
+    "observation_endpoint": (0.76, 0.48, 1.0, 1.0),
+    "observation_scalar": (0.62, 0.42, 0.94, 1.0),
+    "sleeve_height": (0.30, 0.64, 1.0, 1.0),
+}
+
+_GROUP_COLORS = {
+    "OPERATION": (0.18, 0.88, 0.68, 1.0),
+    "CONNECTOR": (1.0, 0.66, 0.16, 1.0),
+    "PRESS": (0.20, 0.76, 0.94, 1.0),
+    "OBSERVATION": (0.72, 0.46, 1.0, 1.0),
+    "SLEEVE": (0.30, 0.64, 1.0, 1.0),
 }
 
 _HANDLE_HINTS = {
@@ -94,15 +102,33 @@ def _mesh_data(
     """返回一个结构手柄的本地网格。"""
 
     if kind == "sleeve_height":
+        major_segments = 32
+        minor_segments = 8
+        major_radius = 0.80
+        minor_radius = 0.22
         vertices = [
             (
-                0.72 * math.cos(index * math.tau / 24),
-                0.72 * math.sin(index * math.tau / 24),
-                0.0,
+                (major_radius + minor_radius * math.cos(minor * math.tau / minor_segments))
+                * math.cos(major * math.tau / major_segments),
+                (major_radius + minor_radius * math.cos(minor * math.tau / minor_segments))
+                * math.sin(major * math.tau / major_segments),
+                minor_radius * math.sin(minor * math.tau / minor_segments),
             )
-            for index in range(24)
+            for major in range(major_segments)
+            for minor in range(minor_segments)
         ]
-        return vertices, [(index, (index + 1) % 24) for index in range(24)], []
+        faces = [
+            (
+                major * minor_segments + minor,
+                ((major + 1) % major_segments) * minor_segments + minor,
+                ((major + 1) % major_segments) * minor_segments
+                + (minor + 1) % minor_segments,
+                major * minor_segments + (minor + 1) % minor_segments,
+            )
+            for major in range(major_segments)
+            for minor in range(minor_segments)
+        ]
+        return vertices, [], faces
     if kind == "surface_anchor":
         vertices = [(0.0, 0.0, -0.9), (0.0, 0.0, 0.35)] + [
             (
@@ -218,6 +244,8 @@ def create_control(
     object_.location = location
     object_.show_in_front = True
     object_.color = _COLORS[kind]
+    for polygon in mesh.polygons:
+        polygon.use_smooth = True
     object_["tg_kind"] = kind
     object_["tg_group"] = GROUP_BY_KIND[kind]
     object_["tg_feature_id"] = _feature_id(kind, properties)
@@ -239,13 +267,14 @@ def create_control(
         object_.rotation_mode = "QUATERNION"
         object_.rotation_quaternion = Vector(properties["axis"]).to_track_quat("Z", "Y")
         object_.color = {
-            "closed": (0.2, 0.9, 0.4, 1.0),
-            "platform": (1.0, 0.55, 0.1, 1.0),
-            "total": (0.1, 0.7, 1.0, 1.0),
+            "closed": (0.20, 0.82, 0.64, 1.0),
+            "platform": (1.0, 0.62, 0.18, 1.0),
+            "total": (0.28, 0.58, 1.0, 1.0),
         }[str(properties["role"])]
     elif kind == "surface_anchor":
         object_.rotation_mode = "QUATERNION"
         object_.rotation_quaternion = Vector(properties["normal"]).to_track_quat("Z", "Y")
+    object_["tg_base_color"] = list(object_.color)
     object_.hide_set(True)
     object_.lock_location = (True, True, True)
     object_.lock_rotation = (True, True, True)
@@ -263,7 +292,7 @@ def create_curve(
     data = bpy.data.curves.new(f"{OVERLAY_PREFIX}{name}", "CURVE")
     data.dimensions = "3D"
     data.bevel_depth = 0.12
-    data.bevel_resolution = 2
+    data.bevel_resolution = 4
     spline = data.splines.new("POLY")
     spline.points.add(len(points) - 1)
     for point, value in zip(spline.points, points, strict=True):
@@ -272,30 +301,31 @@ def create_curve(
     object_ = bpy.data.objects.new(f"{OVERLAY_PREFIX}{name}", data)
     bpy.context.collection.objects.link(object_)
     object_.show_in_front = True
-    object_.color = (0.1, 0.8, 1.0, 1.0)
+    object_.color = _GROUP_COLORS["SLEEVE"]
     object_.lock_location = (True, True, True)
     object_.lock_rotation = (True, True, True)
     object_.lock_scale = (True, True, True)
     if name.startswith("Window_"):
         object_["tg_group"] = "OPERATION"
         object_["tg_feature_id"] = f"operation_window:{name.rsplit('_', 1)[-1]}"
-        object_.color = (0.15, 0.9, 0.45, 1.0)
+        object_.color = _GROUP_COLORS["OPERATION"]
     elif name.startswith("Connector_"):
         object_["tg_group"] = "CONNECTOR"
         parts = name.removeprefix("Connector_").split("_")
         object_["tg_feature_id"] = f"connector:guide_{parts[0]}"
-        object_.color = (1.0, 0.68, 0.05, 1.0)
+        object_.color = _GROUP_COLORS["CONNECTOR"]
     elif name.startswith("Observation_"):
         object_["tg_group"] = "OBSERVATION"
         identifier = name.removeprefix("Observation_")
         object_["tg_feature_id"] = f"observation_window:{identifier}"
-        object_.color = (0.7, 0.3, 1.0, 1.0)
+        object_.color = _GROUP_COLORS["OBSERVATION"]
     elif name.startswith("Press_"):
         object_["tg_group"] = "PRESS"
         object_["tg_feature_id"] = "press_junction"
-        object_.color = (0.15, 0.8, 0.95, 1.0)
+        object_.color = _GROUP_COLORS["PRESS"]
     if "tg_group" in object_:
         object_["tg_overview_visible"] = True
+        object_["tg_base_color"] = list(object_.color)
         object_.hide_set(True)
     return object_
 
@@ -316,6 +346,7 @@ def create_fdi_label(
     bpy.context.collection.objects.link(object_)
     object_.location = location + Vector((0.0, 0.0, 1.0))
     object_.show_in_front = True
+    object_.color = _GROUP_COLORS["OBSERVATION"]
     object_["tg_group"] = "OBSERVATION"
     object_["tg_feature_id"] = f"observation_window:{window_id}"
     object_["tg_endpoint_role"] = role
@@ -339,6 +370,10 @@ def create_hint_label(
     data = bpy.data.curves.new(f"{LABEL_PREFIX}{name}", "FONT")
     data.body = text
     data.size = 1.15
+    data.extrude = 0.018
+    data.bevel_depth = 0.008
+    data.bevel_resolution = 2
+    data.space_character = 1.08
     data.align_x = "CENTER"
     data.align_y = "CENTER"
     object_ = bpy.data.objects.new(f"{LABEL_PREFIX}{name}", data)
@@ -350,6 +385,7 @@ def create_hint_label(
     object_["tg_feature_id"] = feature_id
     object_["tg_overview_visible"] = True
     object_["tg_hint_label"] = True
+    object_["tg_base_color"] = list(color)
     object_.hide_set(False)
     object_.lock_location = (True, True, True)
     object_.lock_rotation = (True, True, True)

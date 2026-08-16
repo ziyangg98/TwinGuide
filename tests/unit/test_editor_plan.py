@@ -162,7 +162,7 @@ class EditorPlanTests(unittest.TestCase):
                         Sleeve(
                             1,
                             {
-                                "axis_origin": [-2.0, 0.0, 0.0],
+                                "axis_origin": Vec3(-2.0, 0.0, 0.0),
                                 "axis": [0.0, 0.0, 1.0],
                                 "height": 15.5,
                                 "platform_height": 10.0,
@@ -172,7 +172,7 @@ class EditorPlanTests(unittest.TestCase):
                         Sleeve(
                             2,
                             {
-                                "axis_origin": [2.0, 0.0, 0.0],
+                                "axis_origin": Vec3(2.0, 0.0, 0.0),
                                 "axis": [0.0, 0.0, 1.0],
                                 "height": 15.5,
                                 "platform_height": 10.0,
@@ -235,8 +235,12 @@ class EditorPlanTests(unittest.TestCase):
             operation = next(
                 item for item in plan["features"] if item["id"] == "operation_window:1"
             )["geometry"]
+            sleeve = next(
+                item for item in plan["features"] if item["id"] == "sleeve:site_1"
+            )["geometry"]
 
             self.assertEqual(plan["schema_version"], EDITOR_PLAN_SCHEMA)
+            self.assertEqual(sleeve["parameters"]["axis_origin"], [0.0, 0.0, 0.0])
             self.assertAlmostEqual(operation["base_depth_mm"], 3.0)
             self.assertAlmostEqual(operation["base_width_mm"], 4.0)
             self.assertAlmostEqual(operation["base_height_mm"], 3.0)

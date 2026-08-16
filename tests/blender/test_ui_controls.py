@@ -158,6 +158,40 @@ class BlenderUiControlTests(unittest.TestCase):
                     )
                 self.assertEqual(self._properties(control), before)
 
+    def test_sleeve_height_control_has_pickable_ring_surface(self):
+        control = self._control(
+            "sleeve_height",
+            ring_index=1,
+            role="platform",
+            origin=[0.0, 0.0, 0.0],
+            axis=[0.0, 0.0, 1.0],
+        )
+
+        self.assertEqual(len(control.data.polygons), 256)
+        self.assertGreater(sum(polygon.area for polygon in control.data.polygons), 2.0)
+
+    def test_reference_visibility_toggles_template_and_dentition_independently(self):
+        for role in ("template", "dentition"):
+            mesh = bpy.data.meshes.new(f"{role}_mesh")
+            object_ = bpy.data.objects.new(
+                f"{blender_ui.SURFACE_PREFIX}{role}",
+                mesh,
+            )
+            bpy.context.collection.objects.link(object_)
+
+        state = SimpleNamespace(
+            show_template_reference=False,
+            show_dentition_reference=True,
+        )
+        blender_ui._reference_visibility_updated(state, SimpleNamespace())
+
+        self.assertTrue(
+            bpy.data.objects[f"{blender_ui.SURFACE_PREFIX}template"].hide_get()
+        )
+        self.assertFalse(
+            bpy.data.objects[f"{blender_ui.SURFACE_PREFIX}dentition"].hide_get()
+        )
+
     def test_every_axis_control_accepts_a_semantic_drag_value(self):
         with patch.object(blender_ui, "_preview_feature_edit"), patch.object(
             blender_ui, "_update_connector_overlay"
@@ -227,7 +261,7 @@ class BlenderUiControlTests(unittest.TestCase):
         create_controls.assert_not_called()
         self.assertEqual(state.task_status, "已复用现有预览")
 
-    def test_operation_size_handle_stays_on_its_local_plane(self):
+    def test_operation_size_handle_stays_on_parameter_plane(self):
         control = self._control(
             "window_size",
             site_index=1,
@@ -242,6 +276,7 @@ class BlenderUiControlTests(unittest.TestCase):
             blender_ui._constrain_control(control)
 
         surface_point.assert_not_called()
+        self.assertEqual(control["tg_value"], 2.0)
         self.assertEqual(tuple(control.location), (2.0, 0.0, 2.0))
 
 

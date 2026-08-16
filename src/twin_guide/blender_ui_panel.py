@@ -33,9 +33,9 @@ class TWINGUIDE_UL_feature_list(bpy.types.UIList):  # noqa: N801
         icon = {
             "操作窗": "MESH_PLANE",
             "观察窗": "HIDE_OFF",
-            "连接线": "CURVE_DATA",
-            "支撑结构": "PINNED",
-            "导柱": "MESH_CYLINDER",
+            "连接避让": "CURVE_DATA",
+            "按压梁": "PINNED",
+            "双导柱": "MESH_CYLINDER",
         }.get(item.group_label, "DOT")
         split = row.split(factor=0.72)
         split.label(text=item.label, icon=icon)
@@ -92,8 +92,8 @@ class TwinGuideStructurePanel(bpy.types.Panel):
         )
         legend = layout.column(align=True)
         legend.enabled = False
-        legend.label(text="绿 操作窗 · 紫 观察窗")
-        legend.label(text="橙 连接线 · 蓝 导柱 · 图钉 支撑")
+        legend.label(text="● 绿色  操作窗    ● 紫色  观察窗")
+        legend.label(text="● 橙色  连接避让  ● 蓝色  双导柱 / 按压梁")
 
 
 __all__ = [
