@@ -154,6 +154,9 @@ $$
 | `operation_corner_radius_mm` | $\min(1,\max(0.2,m_b))$ | 操作窗圆角半径，$\geq0$ |
 | `observation_axis_drop_mm` | `0.2` | FDI 轴扫观察窗公共轴相对高端牙冠顶的下沉量，$>0$ |
 | `observation_sweep_angle_degrees` | `90.0` | 默认扫角，$0<\theta\leq180$ |
+| `observation_adaptive_fallback_enabled` | `false` | 确定性求解失败后是否允许局部下沉 fallback |
+| `observation_local_failure_drop_targets_mm` | `[0.5, 1.0, 2.0]` | fallback 依次尝试的绝对下沉目标 |
+| `observation_local_failure_transition_rows` | `1` | 局部下沉区与正常区之间的平滑过渡行数 |
 
 `planning.operation_windows` 可以用病例语义名称覆盖四个操作窗数值：
 
@@ -226,6 +229,19 @@ runtime:
 ### `design.observation_windows`
 
 每个元素定义一个 FDI 范围的轴扫观察窗。
+
+紧凑格式推荐只保留牙位范围和可调参数：
+
+```yaml
+design:
+  observation_windows:
+    - {id: window_1, fdi: [14, 15], extent_mode: center_to_center,
+       axis_drop_mm: 0.5, sweep_angle_deg: 90.0}
+```
+
+导板锚点用独立字典表示每个侧别的牙位和角度；单个 FDI 表示牙中心，两个 FDI
+的数组表示连接中心。按压梁 `anchors` 使用相同的单牙/双牙规则。解析器会补齐
+运行时 `id`、`endpoint`、`station` 和默认几何字段，详细旧格式仍保持兼容。
 
 | 字段 | 必填/默认 | 含义与约束 |
 | --- | --- | --- |
@@ -422,17 +438,27 @@ sleeve_anchor_selection:
 ## 手机避让
 
 `runtime.handpiece_avoidance` 可写为单个对象或对象数组。每项独立构造当前装配深度下的
-左右摆动包络，并在第 7 阶段从完整模型中差集。
+手机旋转包络，并在第 7 阶段从完整模型中差集。新病例默认使用
+`buccal_outward + adaptive`；带有 `stop_report` 且未写模式的旧病例继续按
+`symmetric_lr + exact_uniform` 解析。
 
 | 字段 | 必填/默认 | 含义与约束 |
 | --- | --- | --- |
 | `id` | `handpiece_N` | 本避让区域唯一 ID，使用病例 ID 字符规则 |
 | `handpiece` | 必填 | 与病例同坐标系的手机 STL |
-| `stop_report` | 必填 | 与该手机配对的止挡 JSON |
-| `maximum_angle_degrees` | `5.0` | 左右最大摆角，$0<\theta\leq45$ |
-| `pose_samples` | `41` | 等角度姿态数；必须是不小于 3 的奇数，以包含 $0^\circ$ |
+| `stop_report` | 对称模式必填 | 与该手机配对的止挡 JSON；颊侧模式可由导管对推导旋转轴 |
+| `motion_mode` | `buccal_outward` | `buccal_outward` 或兼容旧流程的 `symmetric_lr` |
+| `sampling_mode` | 按运动模式 | 颊侧模式默认 `adaptive`；对称模式只支持 `exact_uniform` |
+| `maximum_angle_degrees` | `180.0`/`5.0` | 颊侧/对称模式最大摆角，分别不超过 $180^\circ$/$45^\circ$ |
+| `pose_samples` | `275`/`41` | 颊侧/对称模式的姿态数；对称模式必须为包含 $0^\circ$ 的奇数 |
 | `union_batch_size` | `7` | 包络布尔并集批量，$\geq2$ |
+| `collision_coarse_step_degrees` | `1.0` | 自适应碰撞搜索粗步长，$>0$ |
+| `collision_refinement_degrees` | `0.1` | 碰撞边界二分精度，$>0$ |
+| `envelope_step_degrees` | `0.5` | 最终包络采样步长，$>0$ |
+| `envelope_simplify_tolerance_mm` | `0.05` | 分层布尔并集后的受控简化容差 |
 | `extra_clearance_mm` | `0.0` | 对包络追加的净距，$\geq0$ |
+| `tooth_clearance_mm` | `0.0` | 牙冠保护面的附加净距 |
+| `connector_clearance_mm` | `0.20` | 背 U 侧连接梁保护净距 |
 
 ## 渲染与输出位置
 

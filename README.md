@@ -80,7 +80,9 @@ TwinGuide 是基于 Blender 的双导管牙科导板建模工具。程序从带�
 `output/<case_id>/`，不会覆盖病例目录中的参考输出。
 
 牙位识别默认使用 `fdi_new`；需要兼容旧病例时，可逐病例显式切换到 `standard`。
-两种后端的缓存指纹互不复用。
+两种后端的缓存指纹互不复用。观察窗优先使用确定性约束求解；只有显式启用时，
+局部自适应下沉才作为失败 fallback。手机避让支持颊侧自适应旋转和旧版左右对称
+旋转两种模式。
 
 [配置模板](https://github.com/ziyangg98/TwinGuide/blob/main/examples/case.example.yaml)展示完整结构，字段和约束见
 [病例配置](docs/guide/configuration.md)。

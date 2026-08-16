@@ -37,6 +37,20 @@ class ToothIdentificationBackend(StrEnum):
     FDI_NEW = "fdi_new"
 
 
+class HandpieceMotionMode(StrEnum):
+    """手机旋转方向策略。"""
+
+    SYMMETRIC_LR = "symmetric_lr"
+    BUCCAL_OUTWARD = "buccal_outward"
+
+
+class HandpieceSamplingMode(StrEnum):
+    """手机碰撞边界与包络的采样策略。"""
+
+    EXACT_UNIFORM = "exact_uniform"
+    ADAPTIVE = "adaptive"
+
+
 @dataclass(frozen=True, slots=True)
 class InputMeshPaths:
     """病例的牙科导板和患者牙列网格路径。"""
@@ -194,6 +208,7 @@ class WindowParameters:
     observation_sweep_angle_degrees: float
     observation_local_failure_drop_targets_mm: tuple[float, ...]
     observation_local_failure_transition_rows: int
+    observation_adaptive_fallback_enabled: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -413,15 +428,23 @@ class ToothIdentificationInputs:
 
 @dataclass(frozen=True, slots=True)
 class HandpieceAvoidanceParameters:
-    """当前装配深度下牙科手机左右摆动避障参数。"""
+    """当前装配深度下牙科手机旋转避障参数。"""
 
     avoidance_id: str
     handpiece: Path
-    stop_report: Path
-    maximum_angle_degrees: float = 5.0
-    pose_samples: int = 41
+    stop_report: Path | None
+    motion_mode: HandpieceMotionMode = HandpieceMotionMode.BUCCAL_OUTWARD
+    sampling_mode: HandpieceSamplingMode = HandpieceSamplingMode.ADAPTIVE
+    maximum_angle_degrees: float = 180.0
+    pose_samples: int = 275
     union_batch_size: int = 7
+    collision_coarse_step_degrees: float = 1.0
+    collision_refinement_degrees: float = 0.1
+    envelope_step_degrees: float = 0.5
+    envelope_simplify_tolerance_mm: float = 0.05
     extra_clearance_mm: float = 0.0
+    tooth_clearance_mm: float = 0.0
+    connector_clearance_mm: float = 0.20
 
 
 class GuideAnchorMode(StrEnum):
@@ -647,6 +670,8 @@ __all__ = [
     "GuideTerminalUExtensionMode",
     "GuideTerminalUExtensionParameters",
     "HandpieceAvoidanceParameters",
+    "HandpieceMotionMode",
+    "HandpieceSamplingMode",
     "InputMeshPaths",
     "Jaw",
     "ObservationWindowOverride",

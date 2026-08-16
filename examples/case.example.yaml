@@ -54,6 +54,8 @@ runtime:
     operation_corner_radius_mm: 1.0
     observation_axis_drop_mm: 0.2
     observation_sweep_angle_degrees: 90.0
+    # 确定性约束求解失败时才启用局部 0.5/1.0/2.0 mm 下沉 fallback。
+    observation_adaptive_fallback_enabled: false
   press_beam:
     diameter_mm: 4.6
     guide_overlap_mm: 0.3
@@ -70,9 +72,26 @@ anatomy:
   review_status: unreviewed
 
 design:
-  observation_windows: []
-  guide_anchors: {mode: nearest}
-  press_beam: {mode: disabled}
+  observation_windows:
+    - {id: window_1, fdi: [14, 15], extent_mode: center_to_center,
+       axis_drop_mm: 0.5, sweep_angle_deg: 90.0}
+  guide_anchors:
+    mode: tooth_section_trajectory
+    # mode: nearest
+    # mode: adjacent_two_implant_continuous_paths
+    # mode: terminal_distal_common_node
+    # mode: adjacent_two_implant_terminal_distal_node_paths
+    anchors:
+      - {endpoint: station_1, side: u_side, fdi: 14, angle: 70.0}
+      - {endpoint: station_1, side: back_u_side, fdi: 14, angle: 90.0}
+      - {endpoint: station_2, side: u_side, fdi: [15, 16], angle: 70.0}
+      - {endpoint: station_2, side: back_u_side, fdi: [15, 16], angle: 90.0}
+  press_beam:
+    mode: disabled
+    # mode: inner_sleeve_upper_y
+    # mode: three_tooth_anchors_y
+    # mode: terminal_u_extension_anchor_y
+    anchors: []
 
 planning:
   # 每个已识别圆环分别输入钻针长度和植体长度；钻针位于手机内部的长度固定为 12 mm。

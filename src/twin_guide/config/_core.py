@@ -48,6 +48,8 @@ from twin_guide.config.types import (
     GuideTerminalUExtensionMode,
     GuideTerminalUExtensionParameters,
     HandpieceAvoidanceParameters,
+    HandpieceMotionMode,
+    HandpieceSamplingMode,
     InputMeshPaths,
     Jaw,
     ObservationWindowOverride,
@@ -638,6 +640,7 @@ def _parse_windows(
         "observation_sweep_angle_degrees",
         "observation_local_failure_drop_targets_mm",
         "observation_local_failure_transition_rows",
+        "observation_adaptive_fallback_enabled",
     }
     _reject_unknown(raw, fields, "windows")
     axis_drop_mm = _number(
@@ -717,6 +720,10 @@ def _parse_windows(
         observation_sweep_angle_degrees=sweep_angle_degrees,
         observation_local_failure_drop_targets_mm=targets,
         observation_local_failure_transition_rows=transition_rows_value,
+        observation_adaptive_fallback_enabled=_boolean(
+            raw.get("observation_adaptive_fallback_enabled", False),
+            "windows.observation_adaptive_fallback_enabled",
+        ),
     )
 
 
@@ -735,30 +742,91 @@ def _parse_single_handpiece_avoidance(
             "id",
             "handpiece",
             "stop_report",
+            "motion_mode",
+            "sampling_mode",
             "maximum_angle_degrees",
             "pose_samples",
             "union_batch_size",
+            "collision_coarse_step_degrees",
+            "collision_refinement_degrees",
+            "envelope_step_degrees",
+            "envelope_simplify_tolerance_mm",
             "extra_clearance_mm",
+            "tooth_clearance_mm",
+            "connector_clearance_mm",
         },
         section,
     )
     raw_id = raw.get("id", f"handpiece_{index + 1}")
     avoidance_id = _case_id(raw_id)
+    default_motion_mode = (
+        HandpieceMotionMode.SYMMETRIC_LR
+        if raw.get("stop_report") is not None and "motion_mode" not in raw
+        else HandpieceMotionMode.BUCCAL_OUTWARD
+    )
+    try:
+        motion_mode = HandpieceMotionMode(
+            raw.get("motion_mode", default_motion_mode.value)
+        )
+    except ValueError as error:
+        raise ConfigurationError(
+            "handpiece_avoidance.motion_mode 必须为 symmetric_lr 或 buccal_outward"
+        ) from error
+    default_sampling = (
+        HandpieceSamplingMode.ADAPTIVE
+        if motion_mode is HandpieceMotionMode.BUCCAL_OUTWARD
+        else HandpieceSamplingMode.EXACT_UNIFORM
+    )
+    try:
+        sampling_mode = HandpieceSamplingMode(
+            raw.get("sampling_mode", default_sampling.value)
+        )
+    except ValueError as error:
+        raise ConfigurationError(
+            "handpiece_avoidance.sampling_mode 必须为 exact_uniform 或 adaptive"
+        ) from error
+    if (
+        motion_mode is HandpieceMotionMode.SYMMETRIC_LR
+        and sampling_mode is HandpieceSamplingMode.ADAPTIVE
+    ):
+        raise ConfigurationError("symmetric_lr 当前只支持 exact_uniform 采样")
     maximum_angle_degrees = _number(
-        raw.get("maximum_angle_degrees", 5.0),
+        raw.get(
+            "maximum_angle_degrees",
+            180.0 if motion_mode is HandpieceMotionMode.BUCCAL_OUTWARD else 5.0,
+        ),
         "handpiece_avoidance.maximum_angle_degrees",
         positive=True,
     )
-    if maximum_angle_degrees > 45.0:
-        raise ConfigurationError("handpiece_avoidance.maximum_angle_degrees 必须小于或等于 45")
+    maximum_allowed = (
+        45.0 if motion_mode is HandpieceMotionMode.SYMMETRIC_LR else 180.0
+    )
+    if maximum_angle_degrees > maximum_allowed:
+        raise ConfigurationError(
+            f"{motion_mode.value} 的 maximum_angle_degrees 必须小于或等于 "
+            f"{maximum_allowed:g}"
+        )
     pose_samples = _positive_integer(
-        raw.get("pose_samples", 41),
+        raw.get(
+            "pose_samples",
+            275 if motion_mode is HandpieceMotionMode.BUCCAL_OUTWARD else 41,
+        ),
         "handpiece_avoidance.pose_samples",
     )
-    if pose_samples < 3 or pose_samples % 2 == 0:
+    if (
+        motion_mode is HandpieceMotionMode.SYMMETRIC_LR
+        and (pose_samples < 3 or pose_samples % 2 == 0)
+    ):
         raise ConfigurationError(
             "handpiece_avoidance.pose_samples 必须为不小于 3 的奇数，以包含 0° 姿态"
         )
+    if motion_mode is HandpieceMotionMode.BUCCAL_OUTWARD and pose_samples < 2:
+        raise ConfigurationError("buccal_outward 的 pose_samples 必须不小于 2")
+    if (
+        motion_mode is HandpieceMotionMode.SYMMETRIC_LR
+        and raw.get("stop_report") is None
+    ):
+        raise ConfigurationError("symmetric_lr 的 stop_report 为必填项")
     union_batch_size = _positive_integer(
         raw.get("union_batch_size", 7),
         "handpiece_avoidance.union_batch_size",
@@ -772,17 +840,50 @@ def _parse_single_handpiece_avoidance(
             base_directory,
             "handpiece_avoidance.handpiece",
         ),
-        stop_report=_json_path(
-            _required(raw, "stop_report"),
-            base_directory,
-            "handpiece_avoidance.stop_report",
+        stop_report=(
+            _json_path(
+                raw["stop_report"],
+                base_directory,
+                "handpiece_avoidance.stop_report",
+            )
+            if raw.get("stop_report") is not None
+            else None
         ),
+        motion_mode=motion_mode,
+        sampling_mode=sampling_mode,
         maximum_angle_degrees=maximum_angle_degrees,
         pose_samples=pose_samples,
         union_batch_size=union_batch_size,
+        collision_coarse_step_degrees=_number(
+            raw.get("collision_coarse_step_degrees", 1.0),
+            "handpiece_avoidance.collision_coarse_step_degrees",
+            positive=True,
+        ),
+        collision_refinement_degrees=_number(
+            raw.get("collision_refinement_degrees", 0.1),
+            "handpiece_avoidance.collision_refinement_degrees",
+            positive=True,
+        ),
+        envelope_step_degrees=_number(
+            raw.get("envelope_step_degrees", 0.5),
+            "handpiece_avoidance.envelope_step_degrees",
+            positive=True,
+        ),
+        envelope_simplify_tolerance_mm=_number(
+            raw.get("envelope_simplify_tolerance_mm", 0.05),
+            "handpiece_avoidance.envelope_simplify_tolerance_mm",
+        ),
         extra_clearance_mm=_number(
             raw.get("extra_clearance_mm", 0.0),
             "handpiece_avoidance.extra_clearance_mm",
+        ),
+        tooth_clearance_mm=_number(
+            raw.get("tooth_clearance_mm", 0.0),
+            "handpiece_avoidance.tooth_clearance_mm",
+        ),
+        connector_clearance_mm=_number(
+            raw.get("connector_clearance_mm", 0.20),
+            "handpiece_avoidance.connector_clearance_mm",
         ),
     )
 

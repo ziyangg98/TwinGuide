@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 from copy import deepcopy
@@ -15,7 +16,7 @@ from twin_guide.tooth_identification import ToothIdentificationResult
 
 INTEGRATION_REPORT_NAME = "manifest.json"
 OBSERVATION_OPENING_ALGORITHM_VERSION = (
-    "axis_sweep_dental_constrained_direct_v4"
+    "axis_sweep_direct_v4_with_controlled_adaptive_fallback_v1"
 )
 
 
@@ -161,6 +162,17 @@ def _fingerprint(config: CaseConfig, mapping: dict[str, object]) -> dict[str, ob
         "dental_mtime_ns": dental_stat.st_mtime_ns,
         "axis_drop_mm": config.windows.observation_axis_drop_mm,
         "sweep_angle_degrees": config.windows.observation_sweep_angle_degrees,
+        "adaptive_fallback_drop_targets_mm": list(
+            config.windows.observation_local_failure_drop_targets_mm
+        ),
+        "adaptive_fallback_transition_rows": (
+            config.windows.observation_local_failure_transition_rows
+        ),
+        "adaptive_fallback_enabled": getattr(
+            config.windows,
+            "observation_adaptive_fallback_enabled",
+            False,
+        ),
     }
 
 
@@ -183,10 +195,69 @@ def _axis_points(definition: dict[str, object]) -> tuple[Vec3, ...]:
         raise GeometryError("开口报告的 axis_sweep 坐标或截面数无效")
     start = Vec3(*(float(value) for value in start_values))
     end = Vec3(*(float(value) for value in end_values))
+    raw_additions = definition.get("local_axis_drop_additions_mm")
+    if raw_additions is None:
+        additions = [0.0] * count
+    elif not isinstance(raw_additions, list) or len(raw_additions) != count:
+        raise GeometryError("开口报告的局部高度修正数组长度无效")
+    else:
+        additions = [float(value) for value in raw_additions]
+    zero_values = definition.get("zero_degree_occlusal_direction_global")
+    zero = (
+        Vec3(*(float(value) for value in zero_values)).normalized()
+        if isinstance(zero_values, list) and len(zero_values) == 3
+        else Vec3(0.0, 0.0, 0.0)
+    )
     return tuple(
         start
         + (end - start) * (index / (count - 1))
+        - zero * additions[index]
         for index in range(count)
+    )
+
+
+def _run_adaptive_fallback(
+    config: CaseConfig,
+    mapping_path: Path,
+    output_root: Path,
+) -> dict[str, object]:
+    """仅在确定性求解失败时运行本地逐行下沉修正。"""
+
+    from twin_guide.observation_window_engine_adaptive import run
+
+    return run(
+        argparse.Namespace(
+            case=mapping_path,
+            mapping_report=mapping_path,
+            source=config.inputs.template,
+            output_dir=output_root / "adaptive-fallback",
+            window_id=None,
+            top_extension_mm=0.4,
+            side_extension_mm=0.4,
+            outward_margin_mm=0.4,
+            wall_overcut_mm=0.4,
+            window_wall_overcut_mm=None,
+            maximum_wall_thickness_mm=5.0,
+            ray_entry_tolerance_mm=0.65,
+            following_wall_safety_mm=0.10,
+            axis_core_overcut_mm=0.30,
+            minimum_axis_visibility_row_fraction=0.50,
+            minimum_axis_clear_corridor_fraction=0.95,
+            union_batch_size=16,
+            fragment_volume_tolerance_mm3=2.0,
+            minimum_removed_volume_mm3=1.0,
+            residual_volume_tolerance_mm3=1.0e-4,
+            volume_identity_tolerance_mm3=5.0e-3,
+            volume_identity_relative_tolerance=1.0e-4,
+            write_failed_qa_artifacts=True,
+            local_failure_drop_increment_mm=0.0,
+            local_failure_drop_target_mm=list(
+                config.windows.observation_local_failure_drop_targets_mm
+            ),
+            local_failure_transition_rows=(
+                config.windows.observation_local_failure_transition_rows
+            ),
+        )
     )
 
 
@@ -307,6 +378,7 @@ def build_observation_window_opening(
         volume_identity_tolerance_mm3=5e-2,
         volume_identity_relative_tolerance=1e-4,
     )
+    deterministic_error: Exception | None = None
     try:
         report = (
             build_preview(request, force_rebuild=regenerate)
@@ -314,7 +386,44 @@ def build_observation_window_opening(
             else run(request)
         )
     except Exception as error:
-        raise GeometryError(f"轴扫掠观察窗生成失败：{error}") from error
+        deterministic_error = error
+        fallback_enabled = bool(
+            getattr(
+                config.windows,
+                "observation_adaptive_fallback_enabled",
+                False,
+            )
+        )
+        if fast_preview or not fallback_enabled:
+            raise GeometryError(f"轴扫掠观察窗生成失败：{error}") from error
+        report = {}
+    deterministic_qa = report.get("QA")
+    deterministic_passed = bool(
+        isinstance(deterministic_qa, dict)
+        and deterministic_qa
+        and all(deterministic_qa.values())
+    )
+    solver_mode = "deterministic_constraint"
+    fallback_enabled = bool(
+        getattr(
+            config.windows,
+            "observation_adaptive_fallback_enabled",
+            False,
+        )
+    )
+    if require_qa and not fast_preview and fallback_enabled and not deterministic_passed:
+        try:
+            report = _run_adaptive_fallback(config, mapping_path, output_root)
+            solver_mode = "adaptive_local_drop_fallback"
+        except Exception as fallback_error:
+            detail = (
+                f"确定性求解异常：{deterministic_error}；"
+                if deterministic_error is not None
+                else "确定性求解未通过 QA；"
+            )
+            raise GeometryError(
+                f"轴扫掠观察窗生成失败：{detail}自适应 fallback 失败：{fallback_error}"
+            ) from fallback_error
     qa_passed = bool(report["QA"]) and all(report["QA"].values())
     if require_qa and not qa_passed:
         failed_checks = [name for name, passed in report["QA"].items() if not passed]
@@ -329,7 +438,9 @@ def build_observation_window_opening(
         "final_report": str(final_report),
         "final_cutter": str(report["outputs"]["combined_cutter_ply"]),
         "QA": report["QA"],
+        "solver_mode": solver_mode,
         "constraint_solution": report.get("constraint_solution"),
+        "local_failure_adaptation": report.get("local_failure_adaptation"),
     }
     integration_path.write_text(
         json.dumps(integration, ensure_ascii=False, indent=2), encoding="utf-8"

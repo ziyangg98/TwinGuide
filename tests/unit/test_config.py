@@ -227,6 +227,7 @@ class CaseConfigTests(unittest.TestCase):
             config.windows.observation_local_failure_drop_targets_mm,
             (0.5, 1.0, 2.0),
         )
+        self.assertFalse(config.windows.observation_adaptive_fallback_enabled)
         self.assertIs(
             config.tooth_identification.backend,
             ToothIdentificationBackend.FDI_NEW,
@@ -244,6 +245,28 @@ class CaseConfigTests(unittest.TestCase):
             config.tooth_identification.backend,
             ToothIdentificationBackend.STANDARD,
         )
+
+    def test_loads_explicit_buccal_outward_handpiece_v5(self):
+        """v5 单向颊侧避让不强制依赖止挡报告。"""
+
+        config_data = self._valid_config_data()
+        config_data["handpiece_avoidance"] = {
+            "id": "phone_v5",
+            "handpiece": "handpiece.stl",
+            "motion_mode": "buccal_outward",
+            "sampling_mode": "adaptive",
+            "maximum_angle_degrees": 120.0,
+            "collision_refinement_degrees": 0.1,
+            "envelope_step_degrees": 0.5,
+        }
+
+        config = CaseConfig.from_yaml(self._write_config(config_data))
+        parameters = config.handpiece_avoidance[0]
+
+        self.assertEqual(parameters.motion_mode.value, "buccal_outward")
+        self.assertEqual(parameters.sampling_mode.value, "adaptive")
+        self.assertIsNone(parameters.stop_report)
+        self.assertEqual(parameters.maximum_angle_degrees, 120.0)
 
     def test_loads_meeting_adjustment_interfaces(self):
         config_data = self._valid_config_data()
