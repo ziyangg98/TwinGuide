@@ -90,9 +90,7 @@ class ToothRecognitionRequest:
 
     case_yaml: Path
     output_dir: Path
-    profile: ToothRecognitionProfile = field(
-        default_factory=ToothRecognitionProfile
-    )
+    profile: ToothRecognitionProfile = field(default_factory=ToothRecognitionProfile)
     write_diagnostics: bool = False
 
     def resolved(self) -> ToothRecognitionRequest:
@@ -158,9 +156,7 @@ class ToothRecognitionResult:
             "safe_for_guide_mapping": self.safe_for_guide_mapping,
             "case_yaml": str(self.case_yaml),
             "profile": asdict(self.profile),
-            "locked_implementation_parameters": dict(
-                LOCKED_RECOGNITION_PARAMETERS
-            ),
+            "locked_implementation_parameters": dict(LOCKED_RECOGNITION_PARAMETERS),
             "stages": {
                 "base_mapping_status": self.base_mapping_report.get("status"),
                 "projection_selection_succeeded": self.projection_report.get(
@@ -170,9 +166,7 @@ class ToothRecognitionResult:
             },
             "outputs": {
                 "base_mapping_report": str(self.base_mapping_path),
-                "enhanced_projection_report": str(
-                    self.projection_report["outputs"]["report"]
-                ),
+                "enhanced_projection_report": str(self.projection_report["outputs"]["report"]),
                 "enhanced_projection_maps": str(self.enhanced_maps_path),
                 "contact_chord_report": str(self.contact_report_path),
                 "workflow_manifest": str(self.manifest_path),
@@ -193,9 +187,7 @@ def load_tooth_recognition_result(path: Path) -> ToothRecognitionResult:
         manifest_path = manifest_path / "tooth_recognition_result.json"
     manifest = _read_json(manifest_path)
     if manifest.get("schema_version") != "1.0-tooth-recognition-workflow":
-        raise ToothRecognitionError(
-            f"unsupported tooth-recognition manifest: {manifest_path}"
-        )
+        raise ToothRecognitionError(f"unsupported tooth-recognition manifest: {manifest_path}")
     outputs = manifest["outputs"]
     profile_values = dict(manifest["profile"])
     # Manifests produced before the arch-progress integration did not record a
@@ -232,25 +224,29 @@ def recognize_teeth(request: ToothRecognitionRequest) -> ToothRecognitionResult:
         write_diagnostics=request.write_diagnostics,
     )
     base_path = Path(base_report["outputs"]["report_json"])
-    projection_report = _render_projection(Namespace(
-        case=request.case_yaml,
-        output_dir=projection_dir,
-        mapping_report=base_path,
-        resolution_mm=profile.projection_resolution_mm,
-        height_quantile=profile.height_quantile_override,
-        core_grouping_policy=profile.core_grouping_policy,
-        write_diagnostics=request.write_diagnostics,
-    ))
-    contour_report = _extract_contours(Namespace(
-        case=request.case_yaml,
-        output_dir=contour_dir,
-        resolution_mm=profile.contour_resolution_mm,
-        random_state=profile.random_state,
-        enhanced_maps=Path(projection_report["outputs"]["arrays"]),
-        mapping_report=base_path,
-        core_grouping_policy=profile.core_grouping_policy,
-        write_diagnostics=request.write_diagnostics,
-    ))
+    projection_report = _render_projection(
+        Namespace(
+            case=request.case_yaml,
+            output_dir=projection_dir,
+            mapping_report=base_path,
+            resolution_mm=profile.projection_resolution_mm,
+            height_quantile=profile.height_quantile_override,
+            core_grouping_policy=profile.core_grouping_policy,
+            write_diagnostics=request.write_diagnostics,
+        )
+    )
+    contour_report = _extract_contours(
+        Namespace(
+            case=request.case_yaml,
+            output_dir=contour_dir,
+            resolution_mm=profile.contour_resolution_mm,
+            random_state=profile.random_state,
+            enhanced_maps=Path(projection_report["outputs"]["arrays"]),
+            mapping_report=base_path,
+            core_grouping_policy=profile.core_grouping_policy,
+            write_diagnostics=request.write_diagnostics,
+        )
+    )
     manifest_path = request.output_dir / "tooth_recognition_result.json"
     result = ToothRecognitionResult(
         case_yaml=request.case_yaml,

@@ -23,6 +23,8 @@ class ClearanceAdjustmentCacheTests(unittest.TestCase):
                             "pivot_global_mm": [1.0, 2.0, 3.0],
                             "matched_stop_patch_ids": ["left", "right"],
                             "angle_samples_degrees": [-5.0, 0.0, 5.0],
+                            "axial_depth_samples_mm": [0.0],
+                            "automatic_interpolation_clearance_mm": 0.1,
                         },
                         "envelope": {"is_closed_volume": True},
                     }
@@ -30,9 +32,7 @@ class ClearanceAdjustmentCacheTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch(
-                "twin_guide.clearance_adjustment._load_mesh"
-            ) as load_mesh:
+            with patch("twin_guide.clearance_adjustment._load_mesh") as load_mesh:
                 cached = _cached_plan(
                     envelope,
                     report,
@@ -43,7 +43,9 @@ class ClearanceAdjustmentCacheTests(unittest.TestCase):
                 )
 
             self.assertIsNotNone(cached)
+            assert cached is not None
             self.assertTrue(cached.cache_reused)
+            self.assertAlmostEqual(cached.effective_clearance_mm, 0.1)
             load_mesh.assert_not_called()
 
 

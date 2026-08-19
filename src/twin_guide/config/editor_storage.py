@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import tempfile
+from dataclasses import fields, is_dataclass
 from pathlib import Path
 
 import yaml
@@ -18,66 +19,34 @@ END_MARKER = "# END TWIN_GUIDE_EDITOR_OVERRIDES"
 _TOP_LEVEL_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*:\s*(?:#.*)?$")
 
 
+def _plain_yaml_value(value: object) -> object:
+    """把微调数据类型转成 safe_dump 可直接写入的纯 YAML 值。"""
+
+    if is_dataclass(value) and not isinstance(value, type):
+        return {
+            field.name: _plain_yaml_value(getattr(value, field.name)) for field in fields(value)
+        }
+    if isinstance(value, tuple | list):
+        return [_plain_yaml_value(item) for item in value]
+    return value
+
+
 def editor_overrides_data(overrides: EditorOverrides) -> dict[str, object]:
     """把类型化覆盖值转换为稳定、无 Python 标签的 YAML 数据。"""
 
     result: dict[str, object] = {}
-    if overrides.sleeve_sites:
-        result["sleeve_sites"] = [
-            {
-                "ring_index": item.ring_index,
-                "height_mm": item.height_mm,
-                "platform_height_mm": item.platform_height_mm,
-                "closed_bore_height_mm": item.closed_bore_height_mm,
-            }
-            for item in overrides.sleeve_sites
-        ]
-    if overrides.operation_windows:
-        result["operation_windows"] = [
-            {
-                "site_index": item.site_index,
-                "tangent_margin_mm": item.tangent_margin_mm,
-                "bitangent_margin_mm": item.bitangent_margin_mm,
-                "front_axial_margin_mm": item.front_axial_margin_mm,
-                "rear_axial_margin_mm": item.rear_axial_margin_mm,
-                "center_offset_mm": list(item.center_offset_mm),
-            }
-            for item in overrides.operation_windows
-        ]
-    if overrides.observation_windows:
-        result["observation_windows"] = [
-            {
-                "window_id": item.window_id,
-                "start_fdi": item.start_fdi,
-                "end_fdi": item.end_fdi,
-                "axis_drop_mm": item.axis_drop_mm,
-                "height_mm": item.height_mm,
-                "sweep_angle_degrees": item.sweep_angle_degrees,
-            }
-            for item in overrides.observation_windows
-        ]
-    if overrides.connector_avoidance:
-        result["connector_avoidance"] = [
-            {
-                "guide_index": item.guide_index,
-                "side": item.side,
-                "path_fraction": item.path_fraction,
-                "downward_offset_mm": item.downward_offset_mm,
-            }
-            for item in overrides.connector_avoidance
-        ]
-    if overrides.surface_anchors:
-        result["surface_anchors"] = [
-            {
-                "anchor_id": item.anchor_id,
-                "surface_role": item.surface_role,
-                "position_mm": list(item.position_mm),
-                "normal": list(item.normal),
-            }
-            for item in overrides.surface_anchors
-        ]
+    for group in (
+        "sleeve_sites",
+        "operation_windows",
+        "observation_windows",
+        "connector_avoidance",
+        "surface_anchors",
+    ):
+        values = getattr(overrides, group)
+        if values:
+            result[group] = _plain_yaml_value(values)
     if overrides.press_junction_mm is not None:
-        result["press_junction_mm"] = list(overrides.press_junction_mm)
+        result["press_junction_mm"] = _plain_yaml_value(overrides.press_junction_mm)
     return result
 
 

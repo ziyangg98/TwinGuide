@@ -26,8 +26,10 @@ from .pipeline import estimate_frame_and_arch, load_mesh, resolve_case_path
 def _extent(maps):
     """内部算法说明。"""
     return [
-        float(maps["lr_centres"][0]), float(maps["lr_centres"][-1]),
-        float(maps["ap_centres"][0]), float(maps["ap_centres"][-1]),
+        float(maps["lr_centres"][0]),
+        float(maps["lr_centres"][-1]),
+        float(maps["ap_centres"][0]),
+        float(maps["ap_centres"][-1]),
     ]
 
 
@@ -70,8 +72,13 @@ def _save_edge(path, maps, case_label):
     """内部算法说明。"""
     figure, axis = plt.subplots(figsize=(10, 8), constrained_layout=True)
     edge = _image(
-        axis, maps["fused_edge"], maps,
-        f"{case_label} — 增强牙冠边界投影", "magma", 0, 1,
+        axis,
+        maps["fused_edge"],
+        maps,
+        f"{case_label} — 增强牙冠边界投影",
+        "magma",
+        0,
+        1,
     )
     axis.set_ylabel("前 → 后（mm）")
     figure.colorbar(edge, ax=axis, shrink=0.78, label="边界证据")
@@ -103,9 +110,7 @@ def _physical_core_diagnostics(
     transverse_distance, _ = cKDTree(curve_points).query(grid_points, k=1)
     candidate_maps = dict(maps)
     corridor = (transverse_distance <= 11.5).reshape(lr_grid.shape)
-    candidate_maps["silhouette"] = (
-        np.asarray(maps["silhouette"], dtype=bool) & corridor
-    )
+    candidate_maps["silhouette"] = np.asarray(maps["silhouette"], dtype=bool) & corridor
     candidates, groups = select_crown_core_candidates(
         enhanced_maps=candidate_maps,
         ordered_instances=ordered_instances,
@@ -114,9 +119,7 @@ def _physical_core_diagnostics(
     return {
         "candidate_peak_count": len(candidates),
         "physical_core_count": len(groups),
-        "physical_core_centres_LR_AP_mm": [
-            list(group.center_lr_ap_mm) for group in groups
-        ],
+        "physical_core_centres_LR_AP_mm": [list(group.center_lr_ap_mm) for group in groups],
     }
 
 
@@ -148,23 +151,30 @@ def run(args):
         DEFAULT_POLICY,
     )
     frame = estimate_frame_and_arch(
-        dental, guide, anatomy, semantics,
+        dental,
+        guide,
+        anatomy,
+        semantics,
         float(parameters["crown_height_quantile"]),
         float(parameters["minimum_crown_normal_dot"]),
     )
     vertices = np.asarray(dental.vertices, dtype=float)
     delta = vertices - np.asarray(frame["origin"])
-    transformed = np.column_stack([
-        delta @ np.asarray(frame["e_lr"]),
-        delta @ np.asarray(frame["e_ap"]),
-        delta @ np.asarray(frame["e_occ"]),
-    ])
+    transformed = np.column_stack(
+        [
+            delta @ np.asarray(frame["e_lr"]),
+            delta @ np.asarray(frame["e_ap"]),
+            delta @ np.asarray(frame["e_occ"]),
+        ]
+    )
     vertex_normals = np.asarray(dental.vertex_normals, dtype=float)
-    transformed_normals = np.column_stack([
-        vertex_normals @ np.asarray(frame["e_lr"]),
-        vertex_normals @ np.asarray(frame["e_ap"]),
-        vertex_normals @ np.asarray(frame["e_occ"]),
-    ])
+    transformed_normals = np.column_stack(
+        [
+            vertex_normals @ np.asarray(frame["e_lr"]),
+            vertex_normals @ np.asarray(frame["e_ap"]),
+            vertex_normals @ np.asarray(frame["e_occ"]),
+        ]
+    )
     height_quantile = (
         float(args.height_quantile)
         if args.height_quantile is not None
@@ -181,17 +191,13 @@ def run(args):
     ordered_instances = [
         SimpleNamespace(
             instance_id=int(label),
-            center_lr_ap_mm=tuple(
-                float(value) for value in slot_by_fdi[label]["arch_LR_AP_mm"]
-            ),
+            center_lr_ap_mm=tuple(float(value) for value in slot_by_fdi[label]["arch_LR_AP_mm"]),
         )
         for label in numbered_order
     ]
     expected_core_count = len(ordered_instances)
     trial_quantiles = (
-        [height_quantile]
-        if args.height_quantile is not None
-        else _quantile_trials(height_quantile)
+        [height_quantile] if args.height_quantile is not None else _quantile_trials(height_quantile)
     )
     trials = []
     selected_trial = None
@@ -218,10 +224,8 @@ def run(args):
             **core_diagnostics,
         }
         trials.append(trial)
-        if (
-            best_trial is None
-            or abs(trial["physical_core_count"] - expected_core_count)
-            < abs(best_trial["physical_core_count"] - expected_core_count)
+        if best_trial is None or abs(trial["physical_core_count"] - expected_core_count) < abs(
+            best_trial["physical_core_count"] - expected_core_count
         ):
             best_trial = trial
         if trial["physical_core_count"] == expected_core_count:
@@ -240,10 +244,12 @@ def run(args):
         "report": output_dir / "enhanced_projection_report.json",
     }
     if getattr(args, "write_diagnostics", True):
-        paths.update({
-            "comparison": output_dir / "01_multichannel_projection_comparison.png",
-            "enhanced_edge": output_dir / "02_enhanced_crown_edge.png",
-        })
+        paths.update(
+            {
+                "comparison": output_dir / "01_multichannel_projection_comparison.png",
+                "enhanced_edge": output_dir / "02_enhanced_crown_edge.png",
+            }
+        )
         _save_comparison(paths["comparison"], maps, case_label)
         _save_edge(paths["enhanced_edge"], maps, case_label)
     np.savez_compressed(
@@ -259,9 +265,7 @@ def run(args):
         fused_edge=maps["fused_edge"],
         height_quantile=np.asarray(height_quantile, dtype=float),
         height_floor_mm=np.asarray(height_floor, dtype=float),
-        expected_physical_core_count=np.asarray(
-            expected_core_count, dtype=int
-        ),
+        expected_physical_core_count=np.asarray(expected_core_count, dtype=int),
         core_grouping_policy=np.asarray(core_grouping_policy),
     )
     report = {
@@ -277,28 +281,19 @@ def run(args):
                 if args.height_quantile is not None
                 else "automatic_highest_quantile_with_expected_physical_core_count"
             ),
-            "configured_height_quantile": float(
-                parameters["crown_height_quantile"]
-            ),
+            "configured_height_quantile": float(parameters["crown_height_quantile"]),
             "selected_height_quantile": height_quantile,
             "adapted_for_short_crowns": bool(
                 args.height_quantile is None
-                and height_quantile
-                < float(parameters["crown_height_quantile"]) - 1.0e-9
+                and height_quantile < float(parameters["crown_height_quantile"]) - 1.0e-9
             ),
             "expected_physical_core_count": expected_core_count,
-            "selected_physical_core_count": int(
-                selected_trial["physical_core_count"]
-            ),
+            "selected_physical_core_count": int(selected_trial["physical_core_count"]),
             "selection_succeeded": bool(
                 selected_trial["physical_core_count"] == expected_core_count
             ),
             "trials": [
-                {
-                    key: value for key, value in trial.items()
-                    if key != "maps"
-                }
-                for trial in trials
+                {key: value for key, value in trial.items() if key != "maps"} for trial in trials
             ],
         },
         "source_mapping_report": str(mapping_path),
@@ -322,8 +317,7 @@ def parse_args():
         choices=CORE_GROUPING_POLICIES,
         default=DEFAULT_POLICY,
         help=(
-            "crown-core merge order; arch_progress is the current TwinGuide "
-            "and TwinGuide default"
+            "crown-core merge order; arch_progress is the current TwinGuide and TwinGuide default"
         ),
     )
     parser.add_argument(

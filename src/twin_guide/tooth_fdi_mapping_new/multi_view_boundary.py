@@ -11,18 +11,18 @@ segmentation boundary.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import itertools
 import math
+from dataclasses import dataclass
 
 import numpy as np
-from scipy.ndimage import binary_erosion, gaussian_filter
 from scipy.interpolate import RegularGridInterpolator
+from scipy.ndimage import binary_erosion, gaussian_filter
 from skimage.draw import polygon
 from skimage.filters import scharr
 
 from .models import AlignmentPath, ArchFrame
 from .surface_valleys import SurfaceValleyEvidence
-
 
 EPS = 1.0e-9
 
@@ -91,24 +91,16 @@ class MultiViewBoundaryEvidence:
             "multi_view_supported_face_fraction": (
                 float(np.mean(multi_supported)) if len(multi_supported) else 0.0
             ),
-            "face_boundary_score_quantiles": _finite_quantiles(
-                self.face_boundary_score[visible]
-            ),
-            "view_consistency_quantiles": _finite_quantiles(
-                self.face_view_consistency[visible]
-            ),
+            "face_boundary_score_quantiles": _finite_quantiles(self.face_boundary_score[visible]),
+            "view_consistency_quantiles": _finite_quantiles(self.face_view_consistency[visible]),
             "views": [
                 {
                     "view_id": item.frame.view_id,
                     "azimuth_degrees": item.frame.azimuth_degrees,
                     "obliquity_degrees": item.frame.obliquity_degrees,
                     "covered_pixel_count": int(np.count_nonzero(item.silhouette)),
-                    "visible_face_count": int(np.count_nonzero(
-                        item.visible_face_pixel_count
-                    )),
-                    "supported_face_count": int(np.count_nonzero(
-                        item.supported_face
-                    )),
+                    "visible_face_count": int(np.count_nonzero(item.visible_face_pixel_count)),
+                    "supported_face_count": int(np.count_nonzero(item.supported_face)),
                 }
                 for item in self.rasters
             ],
@@ -151,14 +143,16 @@ def build_multiview_frames(
     occ = _unit(np.cross(lr, ap))
     if float(occ @ arch.e_occ) < 0.0:
         occ = -occ
-    frames = [MultiViewFrame(
-        view_id="occlusal",
-        azimuth_degrees=None,
-        obliquity_degrees=0.0,
-        e_x=lr,
-        e_y=ap,
-        e_depth=occ,
-    )]
+    frames = [
+        MultiViewFrame(
+            view_id="occlusal",
+            azimuth_degrees=None,
+            obliquity_degrees=0.0,
+            e_x=lr,
+            e_y=ap,
+            e_depth=occ,
+        )
+    ]
     angle = math.radians(obliquity_degrees)
     for index in range(azimuth_count):
         azimuth = 2.0 * math.pi * index / azimuth_count
@@ -167,14 +161,16 @@ def build_multiview_frames(
         # A horizontal camera axis followed by its in-plane vertical axis.
         e_x = _unit(np.cross(occ, depth))
         e_y = _unit(np.cross(depth, e_x))
-        frames.append(MultiViewFrame(
-            view_id=f"oblique_{index + 1:02d}",
-            azimuth_degrees=float(math.degrees(azimuth)),
-            obliquity_degrees=float(obliquity_degrees),
-            e_x=e_x,
-            e_y=e_y,
-            e_depth=depth,
-        ))
+        frames.append(
+            MultiViewFrame(
+                view_id=f"oblique_{index + 1:02d}",
+                azimuth_degrees=float(math.degrees(azimuth)),
+                obliquity_degrees=float(obliquity_degrees),
+                e_x=e_x,
+                e_y=e_y,
+                e_depth=depth,
+            )
+        )
     return tuple(frames)
 
 
@@ -187,9 +183,7 @@ def _robust_normalise(values: np.ndarray, valid: np.ndarray) -> np.ndarray:
     low, high = np.quantile(selected, [0.05, 0.95])
     if high - low <= EPS:
         return output
-    output[valid] = np.clip(
-        (np.asarray(values)[valid] - low) / (high - low), 0.0, 1.0
-    )
+    output[valid] = np.clip((np.asarray(values)[valid] - low) / (high - low), 0.0, 1.0)
     return output
 
 
@@ -209,16 +203,20 @@ def _rasterise_view(
     if resolution_mm <= 0.0:
         raise ValueError("resolution_mm must be positive")
     relative_vertices = vertices - np.asarray(origin_global_mm, dtype=float)
-    transformed = np.column_stack([
-        relative_vertices @ frame.e_x,
-        relative_vertices @ frame.e_y,
-        relative_vertices @ frame.e_depth,
-    ])
-    transformed_normals = np.column_stack([
-        vertex_normals @ frame.e_x,
-        vertex_normals @ frame.e_y,
-        vertex_normals @ frame.e_depth,
-    ])
+    transformed = np.column_stack(
+        [
+            relative_vertices @ frame.e_x,
+            relative_vertices @ frame.e_y,
+            relative_vertices @ frame.e_depth,
+        ]
+    )
+    transformed_normals = np.column_stack(
+        [
+            vertex_normals @ frame.e_x,
+            vertex_normals @ frame.e_y,
+            vertex_normals @ frame.e_depth,
+        ]
+    )
     low = np.min(transformed[:, :2], axis=0) - resolution_mm
     high = np.max(transformed[:, :2], axis=0) + resolution_mm
     x_centres = np.arange(low[0], high[0] + resolution_mm, resolution_mm)
@@ -226,15 +224,14 @@ def _rasterise_view(
     shape = (len(x_centres), len(y_centres))
     top_depth = np.full(shape, -np.inf, dtype=np.float32)
     top_face_id = np.full(shape, -1, dtype=np.int32)
-    top_normal = np.zeros(shape + (3,), dtype=np.float32)
+    top_normal = np.zeros((*shape, 3), dtype=np.float32)
     top_valley = np.zeros(shape, dtype=np.float32)
 
     for face_id, face in enumerate(np.asarray(faces, dtype=np.int64)):
         triangle = transformed[face]
         xy = triangle[:, :2]
-        determinant = (
-            (xy[1, 1] - xy[2, 1]) * (xy[0, 0] - xy[2, 0])
-            + (xy[2, 0] - xy[1, 0]) * (xy[0, 1] - xy[2, 1])
+        determinant = (xy[1, 1] - xy[2, 1]) * (xy[0, 0] - xy[2, 0]) + (xy[2, 0] - xy[1, 0]) * (
+            xy[0, 1] - xy[2, 1]
         )
         if abs(determinant) <= 1.0e-10:
             continue
@@ -254,11 +251,7 @@ def _rasterise_view(
             + (xy[0, 0] - xy[2, 0]) * (points_y - xy[2, 1])
         ) / determinant
         weight_2 = 1.0 - weight_0 - weight_1
-        depth = (
-            weight_0 * triangle[0, 2]
-            + weight_1 * triangle[1, 2]
-            + weight_2 * triangle[2, 2]
-        )
+        depth = weight_0 * triangle[0, 2] + weight_1 * triangle[1, 2] + weight_2 * triangle[2, 2]
         higher = depth > top_depth[rows, columns]
         if not np.any(higher):
             continue
@@ -286,16 +279,11 @@ def _rasterise_view(
         smooth_normal[..., channel] = gaussian_filter(
             np.where(silhouette, top_normal[..., channel], 0.0), sigma=1.0
         ) / np.maximum(weight, EPS)
-    smooth_normal /= np.maximum(
-        np.linalg.norm(smooth_normal, axis=2, keepdims=True), EPS
+    smooth_normal /= np.maximum(np.linalg.norm(smooth_normal, axis=2, keepdims=True), EPS)
+    depth_edge = _robust_normalise(scharr(smooth_depth) / resolution_mm, interior)
+    normal_raw = np.sqrt(
+        sum((scharr(smooth_normal[..., channel]) / resolution_mm) ** 2 for channel in range(3))
     )
-    depth_edge = _robust_normalise(
-        scharr(smooth_depth) / resolution_mm, interior
-    )
-    normal_raw = np.sqrt(sum(
-        (scharr(smooth_normal[..., channel]) / resolution_mm) ** 2
-        for channel in range(3)
-    ))
     normal_edge = _robust_normalise(normal_raw, interior)
     valley_edge = np.where(interior, np.clip(top_valley, 0.0, 1.0), 0.0)
     boundary = np.where(
@@ -308,9 +296,7 @@ def _rasterise_view(
     pixel_scores = boundary[silhouette]
     face_count = len(faces)
     visible_pixels = np.bincount(face_ids, minlength=face_count).astype(np.int32)
-    score_sum = np.bincount(
-        face_ids, weights=pixel_scores, minlength=face_count
-    )
+    score_sum = np.bincount(face_ids, weights=pixel_scores, minlength=face_count)
     score_max = np.zeros(face_count, dtype=float)
     np.maximum.at(score_max, face_ids, pixel_scores)
     mean = np.divide(
@@ -321,8 +307,7 @@ def _rasterise_view(
     face_score = np.sqrt(np.maximum(mean * score_max, 0.0))
     visible_scores = face_score[visible_pixels > 0]
     threshold = (
-        float(np.quantile(visible_scores, edge_support_quantile))
-        if len(visible_scores) else 1.0
+        float(np.quantile(visible_scores, edge_support_quantile)) if len(visible_scores) else 1.0
     )
     supported = (visible_pixels > 0) & (face_score >= threshold)
     return MultiViewRaster(
@@ -362,9 +347,7 @@ def build_multiview_boundary_evidence(
     normals = np.asarray(dental.vertex_normals, dtype=float)
     face_valley_score = None
     if surface_valleys is not None:
-        face_valley_score = np.mean(
-            surface_valleys.valley_score[faces], axis=1
-        )
+        face_valley_score = np.mean(surface_valleys.valley_score[faces], axis=1)
     rasters = tuple(
         _rasterise_view(
             vertices=vertices,
@@ -382,9 +365,7 @@ def build_multiview_boundary_evidence(
             obliquity_degrees=obliquity_degrees,
         )
     )
-    visible = np.stack([
-        item.visible_face_pixel_count > 0 for item in rasters
-    ])
+    visible = np.stack([item.visible_face_pixel_count > 0 for item in rasters])
     scores = np.stack([item.visible_face_score for item in rasters])
     support = np.stack([item.supported_face for item in rasters])
     visible_count = np.sum(visible, axis=0).astype(np.int16)
@@ -476,18 +457,16 @@ def assignment_pair_boundary_evidence(
     visible_values = boundary[silhouette]
     positive_visible_values = visible_values[visible_values > EPS]
     strong_threshold = (
-        float(np.quantile(positive_visible_values, 0.75))
-        if len(positive_visible_values) else 1.0
+        float(np.quantile(positive_visible_values, 0.75)) if len(positive_visible_values) else 1.0
     )
     assignments = [
-        item for item in alignment.assignments
+        item
+        for item in alignment.assignments
         if item.center_lr_ap_mm is not None and item.s_mm is not None
     ]
     records: list[dict[str, object]] = []
     resolution = float(maps["resolution_mm"])
-    for pair_index, (first_item, second_item) in enumerate(
-        zip(assignments, assignments[1:], strict=False)
-    ):
+    for pair_index, (first_item, second_item) in enumerate(itertools.pairwise(assignments)):
         first = np.asarray(first_item.center_lr_ap_mm, dtype=float)
         second = np.asarray(second_item.center_lr_ap_mm, dtype=float)
         direction = second - first
@@ -500,12 +479,8 @@ def assignment_pair_boundary_evidence(
         delta_lr = grid_lr - midpoint[0]
         delta_ap = grid_ap - midpoint[1]
         longitudinal = delta_lr * direction[0] + delta_ap * direction[1]
-        transverse_coordinate = (
-            delta_lr * transverse[0] + delta_ap * transverse[1]
-        )
-        local_scale = arch.scale_at_s(
-            0.5 * (float(first_item.s_mm) + float(second_item.s_mm))
-        )
+        transverse_coordinate = delta_lr * transverse[0] + delta_ap * transverse[1]
+        local_scale = arch.scale_at_s(0.5 * (float(first_item.s_mm) + float(second_item.s_mm)))
         strip_half_width = max(2.0 * resolution, 0.12 * local_scale)
         transverse_half_span = max(3.0 * resolution, 0.60 * local_scale)
         corridor = (
@@ -520,21 +495,18 @@ def assignment_pair_boundary_evidence(
         else:
             mean_score = float(np.mean(values))
             p90_score = float(np.quantile(values, 0.90))
-            coverage = float(np.mean(
-                (values > EPS) & (values >= strong_threshold)
-            ))
+            coverage = float(np.mean((values > EPS) & (values >= strong_threshold)))
             supported = values > 0.0
-            mean_consistency = (
-                float(np.mean(view_values[supported]))
-                if np.any(supported) else 0.0
-            )
+            mean_consistency = float(np.mean(view_values[supported])) if np.any(supported) else 0.0
 
-        def crown_side_score(center: np.ndarray) -> float:
+        def crown_side_score(
+            center: np.ndarray,
+            scale: float = local_scale,
+        ) -> float:
             """内部算法说明。"""
-            radius = 0.30 * local_scale
+            radius = 0.30 * scale
             local = silhouette & (
-                (grid_lr - center[0]) ** 2 + (grid_ap - center[1]) ** 2
-                <= radius**2
+                (grid_lr - center[0]) ** 2 + (grid_ap - center[1]) ** 2 <= radius**2
             )
             selected = relief[local]
             return float(np.quantile(selected, 0.75)) if len(selected) else 0.0
@@ -542,34 +514,38 @@ def assignment_pair_boundary_evidence(
         first_crown = crown_side_score(first)
         second_crown = crown_side_score(second)
         crown_support = math.sqrt(max(first_crown * second_crown, 0.0))
-        tooth_tooth_score = float(np.clip(
-            math.sqrt(max(p90_score * mean_consistency, 0.0))
-            * math.sqrt(max(crown_support, 0.0))
-            * math.sqrt(max(coverage, EPS)),
-            0.0,
-            1.0,
-        ))
-        records.append({
-            "pair_index": int(pair_index),
-            "first_FDI": int(first_item.fdi),
-            "second_FDI": int(second_item.fdi),
-            "first_hypothesis_kind": first_item.kind,
-            "second_hypothesis_kind": second_item.kind,
-            "same_hypothesis": bool(
-                first_item.hypothesis_id is not None
-                and first_item.hypothesis_id == second_item.hypothesis_id
-            ),
-            "seed_separation_mm": separation,
-            "local_scale_mm": float(local_scale),
-            "midpoint_lr_ap_mm": [float(midpoint[0]), float(midpoint[1])],
-            "corridor_pixel_count": int(np.count_nonzero(corridor)),
-            "mean_boundary_score": mean_score,
-            "p90_boundary_score": p90_score,
-            "strong_boundary_coverage": coverage,
-            "mean_supporting_view_fraction": mean_consistency,
-            "first_crown_side_support": first_crown,
-            "second_crown_side_support": second_crown,
-            "tooth_tooth_boundary_score": tooth_tooth_score,
-            "diagnostic_only": True,
-        })
+        tooth_tooth_score = float(
+            np.clip(
+                math.sqrt(max(p90_score * mean_consistency, 0.0))
+                * math.sqrt(max(crown_support, 0.0))
+                * math.sqrt(max(coverage, EPS)),
+                0.0,
+                1.0,
+            )
+        )
+        records.append(
+            {
+                "pair_index": int(pair_index),
+                "first_FDI": int(first_item.fdi),
+                "second_FDI": int(second_item.fdi),
+                "first_hypothesis_kind": first_item.kind,
+                "second_hypothesis_kind": second_item.kind,
+                "same_hypothesis": bool(
+                    first_item.hypothesis_id is not None
+                    and first_item.hypothesis_id == second_item.hypothesis_id
+                ),
+                "seed_separation_mm": separation,
+                "local_scale_mm": float(local_scale),
+                "midpoint_lr_ap_mm": [float(midpoint[0]), float(midpoint[1])],
+                "corridor_pixel_count": int(np.count_nonzero(corridor)),
+                "mean_boundary_score": mean_score,
+                "p90_boundary_score": p90_score,
+                "strong_boundary_coverage": coverage,
+                "mean_supporting_view_fraction": mean_consistency,
+                "first_crown_side_support": first_crown,
+                "second_crown_side_support": second_crown,
+                "tooth_tooth_boundary_score": tooth_tooth_score,
+                "diagnostic_only": True,
+            }
+        )
     return records, boundary, consistency

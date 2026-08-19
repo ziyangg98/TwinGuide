@@ -13,6 +13,14 @@ def _design(**values: object) -> dict[str, object]:
 
 
 class CompactCaseSchemaTests(unittest.TestCase):
+    def test_observation_window_uses_documented_defaults(self) -> None:
+        window = normalize_case_definition(_design(observation_windows=[{"fdi": [11, 21]}]))[
+            "design"
+        ]["observation_windows"][0]
+
+        self.assertEqual(window["height_mm"], 5.0)
+        self.assertEqual(window["axis_drop_mm"], 0.2)
+
     def test_observation_window_defaults_and_overrides_expand(self) -> None:
         compact = _design(
             observation_windows=[
@@ -35,9 +43,7 @@ class CompactCaseSchemaTests(unittest.TestCase):
             ]
         )
 
-        windows = normalize_case_definition(compact)["design"][
-            "observation_windows"
-        ]
+        windows = normalize_case_definition(compact)["design"]["observation_windows"]
 
         self.assertEqual((windows[0]["start_fdi"], windows[0]["end_fdi"]), (11, 21))
         self.assertEqual(windows[0]["extent_mode"], "center_to_center")
@@ -49,11 +55,7 @@ class CompactCaseSchemaTests(unittest.TestCase):
         self.assertEqual(windows[1]["wall_overcut_mm"], 0.4)
 
     def test_observation_window_rejects_unknown_override(self) -> None:
-        compact = _design(
-            observation_windows=[
-                {"fdi": [11, 21], "unknown_mm": 1.0}
-            ]
-        )
+        compact = _design(observation_windows=[{"fdi": [11, 21], "unknown_mm": 1.0}])
         with self.assertRaisesRegex(ConfigurationError, "未知字段"):
             normalize_case_definition(compact)
 
@@ -104,9 +106,7 @@ class CompactCaseSchemaTests(unittest.TestCase):
             }
         )
 
-        anchors = normalize_case_definition(compact)["design"]["guide_anchors"][
-            "anchors"
-        ]
+        anchors = normalize_case_definition(compact)["design"]["guide_anchors"]["anchors"]
 
         self.assertEqual(
             anchors[2]["station"],
@@ -218,16 +218,12 @@ class CompactCaseSchemaTests(unittest.TestCase):
             }
         )
 
-        extension = normalize_case_definition(compact)["design"]["press_beam"][
-            "extension_anchor"
-        ]
+        extension = normalize_case_definition(compact)["design"]["press_beam"]["extension_anchor"]
 
         self.assertEqual(extension, {"segment": "u_side", "overlap_mm": 1.0})
 
     def test_normalization_does_not_mutate_input(self) -> None:
-        compact = _design(
-            observation_windows=[{"id": "first", "fdi": [11, 21]}]
-        )
+        compact = _design(observation_windows=[{"id": "first", "fdi": [11, 21]}])
 
         normalize_case_definition(compact)
 

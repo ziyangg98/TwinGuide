@@ -9,6 +9,7 @@ from all geometric fitting and is assigned by the caller afterwards.
 
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -19,9 +20,9 @@ from scipy.ndimage import (
     map_coordinates,
     maximum_filter,
 )
-from skimage.measure import find_contours, label as connected_components
+from skimage.measure import find_contours
+from skimage.measure import label as connected_components
 from skimage.morphology import closing, disk, remove_small_holes, remove_small_objects
-
 
 EPS = 1e-9
 MAX_ADJACENT_CORE_MERGE_MM = 5.75
@@ -30,6 +31,7 @@ MAX_ADJACENT_CORE_MERGE_MM = 5.75
 @dataclass(frozen=True)
 class ContactChord:
     """内部算法说明。"""
+
     pair_index: int
     first_instance_id: int
     second_instance_id: int
@@ -93,14 +95,10 @@ def select_crown_core_candidates(
     resolution = float(enhanced_maps["resolution_mm"])
     mask = np.asarray(enhanced_maps["silhouette"], dtype=bool)
     depth = distance_transform_edt(mask) * resolution
-    peak_window = max(5, int(round(2.4 / resolution)))
+    peak_window = max(5, round(2.4 / resolution))
     if peak_window % 2 == 0:
         peak_window += 1
-    raw_peaks = (
-        mask
-        & (depth >= 0.75)
-        & (depth >= maximum_filter(depth, size=peak_window) - 1e-9)
-    )
+    raw_peaks = mask & (depth >= 0.75) & (depth >= maximum_filter(depth, size=peak_window) - 1e-9)
     peak_labels = connected_components(raw_peaks, connectivity=2)
     points: list[np.ndarray] = []
     depths: list[float] = []
@@ -109,10 +107,14 @@ def select_crown_core_candidates(
         if not len(rows):
             continue
         weights = np.maximum(depth[rows, columns], 0.05) ** 2
-        points.append(np.asarray([
-            np.average(lr_centres[rows], weights=weights),
-            np.average(ap_centres[columns], weights=weights),
-        ]))
+        points.append(
+            np.asarray(
+                [
+                    np.average(lr_centres[rows], weights=weights),
+                    np.average(ap_centres[columns], weights=weights),
+                ]
+            )
+        )
         depths.append(float(np.max(depth[rows, columns])))
 
     if not points:
@@ -124,17 +126,13 @@ def select_crown_core_candidates(
     retained: list[int] = []
     for candidate in np.argsort(raw_depths)[::-1]:
         if all(
-            np.linalg.norm(raw_points[candidate] - raw_points[prior])
-            >= 3.0
-            for prior in retained
+            np.linalg.norm(raw_points[candidate] - raw_points[prior]) >= 3.0 for prior in retained
         ):
             retained.append(int(candidate))
     points_array = raw_points[retained]
     depths_array = raw_depths[retained]
 
-    reference = np.asarray(
-        [item.center_lr_ap_mm for item in ordered_instances], dtype=float
-    )
+    reference = np.asarray([item.center_lr_ap_mm for item in ordered_instances], dtype=float)
     vectors = np.empty((0, 2), dtype=float)
     lengths = np.empty(0, dtype=float)
     cumulative = np.asarray([0.0], dtype=float)
@@ -147,19 +145,19 @@ def select_crown_core_candidates(
         directed_s = np.zeros(len(points_array), dtype=float)
         for point_index, point in enumerate(points_array):
             options: list[tuple[float, float]] = []
-            for segment_index, (start, vector, length) in enumerate(zip(
-                reference[:-1], vectors, lengths
-            )):
+            for segment_index, (start, vector, length) in enumerate(
+                zip(reference[:-1], vectors, lengths, strict=False)
+            ):
                 if length <= EPS:
                     continue
-                fraction = float(np.clip(
-                    (point - start) @ vector / length**2, 0.0, 1.0
-                ))
+                fraction = float(np.clip((point - start) @ vector / length**2, 0.0, 1.0))
                 projection = start + fraction * vector
-                options.append((
-                    float(np.linalg.norm(point - projection)),
-                    float(cumulative[segment_index] + fraction * length),
-                ))
+                options.append(
+                    (
+                        float(np.linalg.norm(point - projection)),
+                        float(cumulative[segment_index] + fraction * length),
+                    )
+                )
 
             # Extrapolate both terminal tangents.  This is essential when the
             # first historical spatial slot belongs to a missing tooth: the
@@ -169,18 +167,18 @@ def select_crown_core_candidates(
                 fraction_mm = float((point - reference[0]) @ unit)
                 if fraction_mm < 0.0:
                     projection = reference[0] + fraction_mm * unit
-                    options.append((
-                        float(np.linalg.norm(point - projection)), fraction_mm
-                    ))
+                    options.append((float(np.linalg.norm(point - projection)), fraction_mm))
             if lengths[-1] > EPS:
                 unit = vectors[-1] / lengths[-1]
                 fraction_mm = float((point - reference[-1]) @ unit)
                 if fraction_mm > 0.0:
                     projection = reference[-1] + fraction_mm * unit
-                    options.append((
-                        float(np.linalg.norm(point - projection)),
-                        float(cumulative[-1] + fraction_mm),
-                    ))
+                    options.append(
+                        (
+                            float(np.linalg.norm(point - projection)),
+                            float(cumulative[-1] + fraction_mm),
+                        )
+                    )
             directed_s[point_index] = min(options, key=lambda item: item[0])[1]
 
     order = np.argsort(directed_s)
@@ -204,11 +202,12 @@ def select_crown_core_candidates(
     target_count = len(ordered_instances)
     while len(grouped) > target_count:
         adjacent_distances = [
-            float(np.linalg.norm(
-                np.asarray(second.center_lr_ap_mm)
-                - np.asarray(first.center_lr_ap_mm)
-            ))
-            for first, second in zip(grouped, grouped[1:])
+            float(
+                np.linalg.norm(
+                    np.asarray(second.center_lr_ap_mm) - np.asarray(first.center_lr_ap_mm)
+                )
+            )
+            for first, second in itertools.pairwise(grouped)
         ]
         if not adjacent_distances:
             break
@@ -218,42 +217,42 @@ def select_crown_core_candidates(
             break
         first = grouped[pair_index]
         second = grouped[pair_index + 1]
-        weights = np.asarray([
-            max(first.maximum_depth_mm, 0.1) ** 2,
-            max(second.maximum_depth_mm, 0.1) ** 2,
-        ])
-        centres = np.asarray([
-            first.center_lr_ap_mm, second.center_lr_ap_mm
-        ], dtype=float)
+        weights = np.asarray(
+            [
+                max(first.maximum_depth_mm, 0.1) ** 2,
+                max(second.maximum_depth_mm, 0.1) ** 2,
+            ]
+        )
+        centres = np.asarray([first.center_lr_ap_mm, second.center_lr_ap_mm], dtype=float)
         merged_center = np.average(centres, axis=0, weights=weights)
         merged = CrownCoreCandidate(
             candidate_id=min(first.member_candidate_ids + second.member_candidate_ids),
             center_lr_ap_mm=(float(merged_center[0]), float(merged_center[1])),
-            maximum_depth_mm=float(max(
-                first.maximum_depth_mm, second.maximum_depth_mm
-            )),
-            directed_arch_position_mm=float(np.average(
-                [first.directed_arch_position_mm, second.directed_arch_position_mm],
-                weights=weights,
-            )),
-            crown_core_quality=float(max(
-                first.crown_core_quality, second.crown_core_quality
-            )),
-            member_candidate_ids=tuple(sorted(
-                first.member_candidate_ids + second.member_candidate_ids
-            )),
-            maximum_merge_step_mm=float(max(
-                first.maximum_merge_step_mm,
-                second.maximum_merge_step_mm,
-                merge_distance,
-            )),
+            maximum_depth_mm=float(max(first.maximum_depth_mm, second.maximum_depth_mm)),
+            directed_arch_position_mm=float(
+                np.average(
+                    [first.directed_arch_position_mm, second.directed_arch_position_mm],
+                    weights=weights,
+                )
+            ),
+            crown_core_quality=float(max(first.crown_core_quality, second.crown_core_quality)),
+            member_candidate_ids=tuple(
+                sorted(first.member_candidate_ids + second.member_candidate_ids)
+            ),
+            maximum_merge_step_mm=float(
+                max(
+                    first.maximum_merge_step_mm,
+                    second.maximum_merge_step_mm,
+                    merge_distance,
+                )
+            ),
             merge_evidence_sufficient=bool(
                 first.merge_evidence_sufficient
                 and second.merge_evidence_sufficient
                 and merge_distance <= MAX_ADJACENT_CORE_MERGE_MM
             ),
         )
-        grouped[pair_index:pair_index + 2] = [merged]
+        grouped[pair_index : pair_index + 2] = [merged]
 
     if len(grouped) <= target_count:
         return candidates, grouped
@@ -261,20 +260,15 @@ def select_crown_core_candidates(
     # A distant surplus core must not be merged merely to satisfy the configured
     # count.  Choose the ordered subset that best agrees with the present-tooth
     # spatial priors and leave the rejected candidate explicit for diagnostics.
-    group_points = np.asarray(
-        [group.center_lr_ap_mm for group in grouped], dtype=float
+    group_points = np.asarray([group.center_lr_ap_mm for group in grouped], dtype=float)
+    group_quality = np.asarray([group.crown_core_quality for group in grouped], dtype=float)
+    assignment_cost = (
+        np.linalg.norm(reference[:, None, :] - group_points[None, :, :], axis=2)
+        - 0.08 * group_quality[None, :]
     )
-    group_quality = np.asarray(
-        [group.crown_core_quality for group in grouped], dtype=float
-    )
-    assignment_cost = np.linalg.norm(
-        reference[:, None, :] - group_points[None, :, :], axis=2
-    ) - 0.08 * group_quality[None, :]
     infinity = float("inf")
     cost = np.full((target_count + 1, len(grouped) + 1), infinity)
-    previous = np.full(
-        (target_count + 1, len(grouped) + 1), -1, dtype=int
-    )
+    previous = np.full((target_count + 1, len(grouped) + 1), -1, dtype=int)
     cost[0, :] = 0.0
     for tooth_index in range(1, target_count + 1):
         for group_count in range(1, len(grouped) + 1):
@@ -306,6 +300,7 @@ def select_crown_core_candidates(
 @dataclass(frozen=True)
 class ChordContourInstance:
     """内部算法说明。"""
+
     instance_id: int
     source_instance_id: int
     area_mm2: float
@@ -368,35 +363,22 @@ def refine_crown_core_seeds(
         ordered_instances=ordered_instances,
     )
     if len(selected_candidates) >= len(initial):
-        for slot_index, candidate in enumerate(selected_candidates[:len(initial)]):
-            global_anchors[slot_index] = np.asarray(
-                candidate.center_lr_ap_mm, dtype=float
-            )
+        for slot_index, candidate in enumerate(selected_candidates[: len(initial)]):
+            global_anchors[slot_index] = np.asarray(candidate.center_lr_ap_mm, dtype=float)
 
     seeds: list[CrownSeed] = []
     for index, item in enumerate(ordered_instances):
         initial_center = initial[index]
         neighbour_distances = np.linalg.norm(initial - initial_center, axis=1)
         neighbour_distances = neighbour_distances[neighbour_distances > EPS]
-        nearest_neighbour = (
-            float(np.min(neighbour_distances)) if len(neighbour_distances) else 8.0
-        )
+        nearest_neighbour = float(np.min(neighbour_distances)) if len(neighbour_distances) else 8.0
         maximum_refinement = min(5.5, max(2.5, 0.62 * nearest_neighbour))
-        distance_from_prior = np.hypot(
-            lr_grid - initial_center[0], ap_grid - initial_center[1]
-        )
+        distance_from_prior = np.hypot(lr_grid - initial_center[0], ap_grid - initial_center[1])
         local = (
-            mask
-            & (basin == index)
-            & (depth >= 0.35)
-            & (distance_from_prior <= maximum_refinement)
+            mask & (basin == index) & (depth >= 0.35) & (distance_from_prior <= maximum_refinement)
         )
         if np.count_nonzero(local) < 8:
-            local = (
-                mask
-                & (basin == index)
-                & (distance_from_prior <= maximum_refinement)
-            )
+            local = mask & (basin == index) & (distance_from_prior <= maximum_refinement)
         # These are topology seeds, not final estimated tooth centres.  Select
         # the nearest distinct distance-transform crown-core peak inside the
         # configured slot basin.  Nearest-peak selection prevents a premolar
@@ -411,40 +393,39 @@ def refine_crown_core_seeds(
         else:
             candidate_rows, candidate_columns = np.nonzero(local)
             if len(candidate_rows):
-                candidate_points = np.column_stack([
-                    lr_centres[candidate_rows], ap_centres[candidate_columns]
-                ])
-                candidate_distances = np.linalg.norm(
-                    candidate_points - initial_center, axis=1
+                candidate_points = np.column_stack(
+                    [lr_centres[candidate_rows], ap_centres[candidate_columns]]
                 )
+                candidate_distances = np.linalg.norm(candidate_points - initial_center, axis=1)
                 candidate_cost = (
-                    candidate_distances
-                    - 0.20 * response[candidate_rows, candidate_columns]
+                    candidate_distances - 0.20 * response[candidate_rows, candidate_columns]
                 )
                 anchor = candidate_points[int(np.argmin(candidate_cost))]
             else:
                 anchor = initial_center
         core_radius = min(1.10, max(0.75, 0.12 * nearest_neighbour))
-        distance_from_anchor = np.hypot(
-            lr_grid - anchor[0], ap_grid - anchor[1]
-        )
+        distance_from_anchor = np.hypot(lr_grid - anchor[0], ap_grid - anchor[1])
         core = mask & (depth >= 0.35) & (distance_from_anchor <= core_radius)
         rows, columns = np.nonzero(core)
         if len(rows):
             weights = np.maximum(response[rows, columns], 0.05) ** 2
-            centre = np.asarray([
-                np.average(lr_centres[rows], weights=weights),
-                np.average(ap_centres[columns], weights=weights),
-            ])
+            centre = np.asarray(
+                [
+                    np.average(lr_centres[rows], weights=weights),
+                    np.average(ap_centres[columns], weights=weights),
+                ]
+            )
         else:
             centre = initial_center.copy()
-        seeds.append(CrownSeed(
-            instance_id=int(item.instance_id),
-            center_lr_ap_mm=(float(centre[0]), float(centre[1])),
-            initial_center_lr_ap_mm=(float(initial_center[0]), float(initial_center[1])),
-            core_pixel_count=int(len(rows)),
-            refinement_distance_mm=float(np.linalg.norm(centre - initial_center)),
-        ))
+        seeds.append(
+            CrownSeed(
+                instance_id=int(item.instance_id),
+                center_lr_ap_mm=(float(centre[0]), float(centre[1])),
+                initial_center_lr_ap_mm=(float(initial_center[0]), float(initial_center[1])),
+                core_pixel_count=len(rows),
+                refinement_distance_mm=float(np.linalg.norm(centre - initial_center)),
+            )
+        )
     return seeds
 
 
@@ -459,8 +440,8 @@ def build_continuous_projection_mask(
     mask = support >= 0.16
     mask |= occupied
     mask = closing(mask, footprint=disk(1))
-    minimum_object = max(8, int(round(0.40 / resolution**2)))
-    maximum_hole = max(12, int(round(0.65 / resolution**2)))
+    minimum_object = max(8, round(0.40 / resolution**2))
+    maximum_hole = max(12, round(0.65 / resolution**2))
     mask = remove_small_objects(mask, max_size=minimum_object - 1)
     mask = remove_small_holes(mask, max_size=maximum_hole - 1)
     return np.asarray(mask, dtype=bool)
@@ -475,10 +456,12 @@ def _sample_grid(
     order: int,
 ) -> np.ndarray:
     """内部算法说明。"""
-    indices = np.vstack([
-        (points[:, 0] - lr_centres[0]) / resolution_mm,
-        (points[:, 1] - ap_centres[0]) / resolution_mm,
-    ])
+    indices = np.vstack(
+        [
+            (points[:, 0] - lr_centres[0]) / resolution_mm,
+            (points[:, 1] - ap_centres[0]) / resolution_mm,
+        ]
+    )
     return map_coordinates(values, indices, order=order, mode="constant", cval=0.0)
 
 
@@ -518,7 +501,7 @@ def find_contact_chords(
     origin_index = int(np.argmin(np.abs(sample_q)))
     chords: list[ContactChord] = []
 
-    for pair_index, (first, second) in enumerate(zip(ordered_instances, ordered_instances[1:])):
+    for pair_index, (first, second) in enumerate(itertools.pairwise(ordered_instances)):
         first_center = np.asarray(first.center_lr_ap_mm, dtype=float)
         second_center = np.asarray(second.center_lr_ap_mm, dtype=float)
         delta = second_center - first_center
@@ -540,9 +523,10 @@ def find_contact_chords(
                 if signed_first * signed_second >= 0.0:
                     continue
                 points = line_point + sample_q[:, None] * direction
-                sampled_mask = _sample_grid(
-                    mask_float, points, lr_centres, ap_centres, resolution, order=0
-                ) >= 0.5
+                sampled_mask = (
+                    _sample_grid(mask_float, points, lr_centres, ap_centres, resolution, order=0)
+                    >= 0.5
+                )
                 run = _inside_run_containing_origin(sampled_mask, origin_index)
                 if run is None:
                     continue
@@ -550,10 +534,14 @@ def find_contact_chords(
                 chord_length = float(sample_q[high] - sample_q[low])
                 if not 1.8 <= chord_length <= 12.0:
                     continue
-                chord_points = points[low:high + 1]
-                mean_score = float(np.mean(_sample_grid(
-                    score, chord_points, lr_centres, ap_centres, resolution, order=1
-                )))
+                chord_points = points[low : high + 1]
+                mean_score = float(
+                    np.mean(
+                        _sample_grid(
+                            score, chord_points, lr_centres, ap_centres, resolution, order=1
+                        )
+                    )
+                )
                 objective = (
                     chord_length
                     + 0.42 * abs(offset)
@@ -562,45 +550,57 @@ def find_contact_chords(
                 )
                 if best is None or objective < best[0]:
                     best = (
-                        objective, line_point, direction,
-                        points[low], points[high], chord_length,
-                        float(offset), float(angle_degrees), mean_score,
+                        objective,
+                        line_point,
+                        direction,
+                        points[low],
+                        points[high],
+                        chord_length,
+                        float(offset),
+                        float(angle_degrees),
+                        mean_score,
                     )
 
         if best is None:
             # A true edentulous/inter-tooth gap has no physical contact
             # endpoints.  The infinite mid-gap line is retained only as a
             # topological separator and is never reported as a tooth contour.
-            chords.append(ContactChord(
-                pair_index=pair_index,
-                first_instance_id=int(first.instance_id),
-                second_instance_id=int(second.instance_id),
-                kind="gap",
-                line_point_lr_ap_mm=(float(midpoint[0]), float(midpoint[1])),
-                line_direction_lr_ap=(float(perpendicular[0]), float(perpendicular[1])),
-                first_endpoint_lr_ap_mm=None,
-                second_endpoint_lr_ap_mm=None,
-                chord_length_mm=None,
-                centre_offset_mm=0.0,
-                angle_offset_degrees=0.0,
-                mean_projection_score=None,
-            ))
+            chords.append(
+                ContactChord(
+                    pair_index=pair_index,
+                    first_instance_id=int(first.instance_id),
+                    second_instance_id=int(second.instance_id),
+                    kind="gap",
+                    line_point_lr_ap_mm=(float(midpoint[0]), float(midpoint[1])),
+                    line_direction_lr_ap=(float(perpendicular[0]), float(perpendicular[1])),
+                    first_endpoint_lr_ap_mm=None,
+                    second_endpoint_lr_ap_mm=None,
+                    chord_length_mm=None,
+                    centre_offset_mm=0.0,
+                    angle_offset_degrees=0.0,
+                    mean_projection_score=None,
+                )
+            )
         else:
-            _, line_point, direction, endpoint_1, endpoint_2, length, offset, angle, mean_score = best
-            chords.append(ContactChord(
-                pair_index=pair_index,
-                first_instance_id=int(first.instance_id),
-                second_instance_id=int(second.instance_id),
-                kind="contact",
-                line_point_lr_ap_mm=(float(line_point[0]), float(line_point[1])),
-                line_direction_lr_ap=(float(direction[0]), float(direction[1])),
-                first_endpoint_lr_ap_mm=(float(endpoint_1[0]), float(endpoint_1[1])),
-                second_endpoint_lr_ap_mm=(float(endpoint_2[0]), float(endpoint_2[1])),
-                chord_length_mm=float(length),
-                centre_offset_mm=float(offset),
-                angle_offset_degrees=float(angle),
-                mean_projection_score=float(mean_score),
-            ))
+            _, line_point, direction, endpoint_1, endpoint_2, length, offset, angle, mean_score = (
+                best
+            )
+            chords.append(
+                ContactChord(
+                    pair_index=pair_index,
+                    first_instance_id=int(first.instance_id),
+                    second_instance_id=int(second.instance_id),
+                    kind="contact",
+                    line_point_lr_ap_mm=(float(line_point[0]), float(line_point[1])),
+                    line_direction_lr_ap=(float(direction[0]), float(direction[1])),
+                    first_endpoint_lr_ap_mm=(float(endpoint_1[0]), float(endpoint_1[1])),
+                    second_endpoint_lr_ap_mm=(float(endpoint_2[0]), float(endpoint_2[1])),
+                    chord_length_mm=float(length),
+                    centre_offset_mm=float(offset),
+                    angle_offset_degrees=float(angle),
+                    mean_projection_score=float(mean_score),
+                )
+            )
     return chords
 
 
@@ -630,7 +630,7 @@ def find_multichannel_contact_chords(
         """内部算法说明。"""
         return _sample_grid(values, points, lr_centres, ap_centres, resolution, order)
 
-    for pair_index, (first, second) in enumerate(zip(ordered_instances, ordered_instances[1:])):
+    for pair_index, (first, second) in enumerate(itertools.pairwise(ordered_instances)):
         first_center = np.asarray(first.center_lr_ap_mm, dtype=float)
         second_center = np.asarray(second.center_lr_ap_mm, dtype=float)
         delta = second_center - first_center
@@ -669,11 +669,13 @@ def find_multichannel_contact_chords(
 
                 signed_grid = (grid_points - line_point) @ line_normal
                 first_area = int(np.count_nonzero(local_roi & (signed_grid * signed_first >= 0.0)))
-                second_area = int(np.count_nonzero(local_roi & (signed_grid * signed_second >= 0.0)))
-                if min(first_area, second_area) < max(60, int(round(4.0 / resolution**2))):
+                second_area = int(
+                    np.count_nonzero(local_roi & (signed_grid * signed_second >= 0.0))
+                )
+                if min(first_area, second_area) < max(60, round(4.0 / resolution**2)):
                     continue
 
-                chord_points = points[low:high + 1]
+                chord_points = points[low : high + 1]
                 endpoint_points = np.vstack([points[low], points[high]])
                 endpoint_edge = float(np.mean(sample(fused_edge, endpoint_points)))
                 line_edge = float(np.mean(sample(fused_edge, chord_points)))
@@ -681,9 +683,8 @@ def find_multichannel_contact_chords(
                 shift = 0.65 * line_normal
                 minus = chord_points - shift
                 plus = chord_points + shift
-                valid_shift = (
-                    (sample(mask_float, minus, order=0) >= 0.5)
-                    & (sample(mask_float, plus, order=0) >= 0.5)
+                valid_shift = (sample(mask_float, minus, order=0) >= 0.5) & (
+                    sample(mask_float, plus, order=0) >= 0.5
                 )
                 if np.count_nonzero(valid_shift) >= 4:
                     centre_height = sample(height_filled, chord_points)[valid_shift]
@@ -692,14 +693,12 @@ def find_multichannel_contact_chords(
                         + sample(height_filled, plus)[valid_shift]
                     )
                     height_valley = float(np.mean(side_height - centre_height))
-                    minus_normal = np.column_stack([
-                        sample(normals[..., channel], minus)[valid_shift]
-                        for channel in range(3)
-                    ])
-                    plus_normal = np.column_stack([
-                        sample(normals[..., channel], plus)[valid_shift]
-                        for channel in range(3)
-                    ])
+                    minus_normal = np.column_stack(
+                        [sample(normals[..., channel], minus)[valid_shift] for channel in range(3)]
+                    )
+                    plus_normal = np.column_stack(
+                        [sample(normals[..., channel], plus)[valid_shift] for channel in range(3)]
+                    )
                     dot = np.sum(minus_normal * plus_normal, axis=1)
                     normal_jump = float(np.mean(np.clip(1.0 - dot, 0.0, 2.0)) / 2.0)
                 else:
@@ -715,67 +714,74 @@ def find_multichannel_contact_chords(
                     - 0.08 * abs(offset) / max(search_offset, EPS)
                     - 0.05 * abs(angle_degrees) / 24.0
                 )
-                candidates.append({
-                    "score": float(score),
-                    "line_point": line_point,
-                    "direction": direction,
-                    "endpoint_1": points[low],
-                    "endpoint_2": points[high],
-                    "length": chord_length,
-                    "offset": float(offset),
-                    "angle": float(angle_degrees),
-                    "line_edge": line_edge,
-                    "endpoint_edge": endpoint_edge,
-                    "height_valley": height_valley,
-                    "normal_jump": normal_jump,
-                })
+                candidates.append(
+                    {
+                        "score": float(score),
+                        "line_point": line_point,
+                        "direction": direction,
+                        "endpoint_1": points[low],
+                        "endpoint_2": points[high],
+                        "length": chord_length,
+                        "offset": float(offset),
+                        "angle": float(angle_degrees),
+                        "line_edge": line_edge,
+                        "endpoint_edge": endpoint_edge,
+                        "height_valley": height_valley,
+                        "normal_jump": normal_jump,
+                    }
+                )
 
         if not candidates:
-            chords.append(ContactChord(
-                pair_index=pair_index,
-                first_instance_id=int(first.instance_id),
-                second_instance_id=int(second.instance_id),
-                kind="gap",
-                line_point_lr_ap_mm=(float(midpoint[0]), float(midpoint[1])),
-                line_direction_lr_ap=(float(perpendicular[0]), float(perpendicular[1])),
-                first_endpoint_lr_ap_mm=None,
-                second_endpoint_lr_ap_mm=None,
-                chord_length_mm=None,
-                centre_offset_mm=0.0,
-                angle_offset_degrees=0.0,
-                mean_projection_score=None,
-            ))
+            chords.append(
+                ContactChord(
+                    pair_index=pair_index,
+                    first_instance_id=int(first.instance_id),
+                    second_instance_id=int(second.instance_id),
+                    kind="gap",
+                    line_point_lr_ap_mm=(float(midpoint[0]), float(midpoint[1])),
+                    line_direction_lr_ap=(float(perpendicular[0]), float(perpendicular[1])),
+                    first_endpoint_lr_ap_mm=None,
+                    second_endpoint_lr_ap_mm=None,
+                    chord_length_mm=None,
+                    centre_offset_mm=0.0,
+                    angle_offset_degrees=0.0,
+                    mean_projection_score=None,
+                )
+            )
             continue
 
         candidates.sort(key=lambda item: item["score"], reverse=True)
         best = candidates[0]
         distinct = [
-            item for item in candidates[1:]
+            item
+            for item in candidates[1:]
             if abs(item["offset"] - best["offset"]) >= 0.30
             or abs(item["angle"] - best["angle"]) >= 6.0
         ]
         runner_up = distinct[0] if distinct else candidates[min(1, len(candidates) - 1)]
         margin = float(best["score"] - runner_up["score"])
         kind = "contact" if best["score"] >= 0.22 else "uncertain"
-        chords.append(ContactChord(
-            pair_index=pair_index,
-            first_instance_id=int(first.instance_id),
-            second_instance_id=int(second.instance_id),
-            kind=kind,
-            line_point_lr_ap_mm=tuple(float(value) for value in best["line_point"]),
-            line_direction_lr_ap=tuple(float(value) for value in best["direction"]),
-            first_endpoint_lr_ap_mm=tuple(float(value) for value in best["endpoint_1"]),
-            second_endpoint_lr_ap_mm=tuple(float(value) for value in best["endpoint_2"]),
-            chord_length_mm=float(best["length"]),
-            centre_offset_mm=float(best["offset"]),
-            angle_offset_degrees=float(best["angle"]),
-            mean_projection_score=float(best["line_edge"]),
-            evidence_score=float(best["score"]),
-            confidence_margin=margin,
-            height_valley_mm=float(best["height_valley"]),
-            normal_jump=float(best["normal_jump"]),
-            endpoint_edge_support=float(best["endpoint_edge"]),
-        ))
+        chords.append(
+            ContactChord(
+                pair_index=pair_index,
+                first_instance_id=int(first.instance_id),
+                second_instance_id=int(second.instance_id),
+                kind=kind,
+                line_point_lr_ap_mm=tuple(float(value) for value in best["line_point"]),
+                line_direction_lr_ap=tuple(float(value) for value in best["direction"]),
+                first_endpoint_lr_ap_mm=tuple(float(value) for value in best["endpoint_1"]),
+                second_endpoint_lr_ap_mm=tuple(float(value) for value in best["endpoint_2"]),
+                chord_length_mm=float(best["length"]),
+                centre_offset_mm=float(best["offset"]),
+                angle_offset_degrees=float(best["angle"]),
+                mean_projection_score=float(best["line_edge"]),
+                evidence_score=float(best["score"]),
+                confidence_margin=margin,
+                height_valley_mm=float(best["height_valley"]),
+                normal_jump=float(best["normal_jump"]),
+                endpoint_edge_support=float(best["endpoint_edge"]),
+            )
+        )
     return chords
 
 
@@ -794,9 +800,7 @@ def _component_at_point(
     candidates = np.argwhere(components > 0)
     if not len(candidates):
         return 0
-    physical = np.column_stack([
-        lr_centres[candidates[:, 0]], ap_centres[candidates[:, 1]]
-    ])
+    physical = np.column_stack([lr_centres[candidates[:, 0]], ap_centres[candidates[:, 1]]])
     nearest = int(np.argmin(np.linalg.norm(physical - point, axis=1)))
     return int(components[tuple(candidates[nearest])])
 
@@ -816,30 +820,36 @@ def _outer_concavity_candidates(
 
     def physical(raw: np.ndarray) -> np.ndarray:
         """内部算法说明。"""
-        return np.column_stack([
-            np.interp(raw[:, 0], np.arange(len(lr_centres)), lr_centres),
-            np.interp(raw[:, 1], np.arange(len(ap_centres)), ap_centres),
-        ])
+        return np.column_stack(
+            [
+                np.interp(raw[:, 0], np.arange(len(lr_centres)), lr_centres),
+                np.interp(raw[:, 1], np.arange(len(ap_centres)), ap_centres),
+            ]
+        )
 
     physical_contours = [physical(raw) for raw in contours]
     areas = [
-        0.5 * abs(np.sum(
-            contour[:, 0] * np.roll(contour[:, 1], -1)
-            - np.roll(contour[:, 0], -1) * contour[:, 1]
-        ))
+        0.5
+        * abs(
+            np.sum(
+                contour[:, 0] * np.roll(contour[:, 1], -1)
+                - np.roll(contour[:, 0], -1) * contour[:, 1]
+            )
+        )
         for contour in physical_contours
     ]
     points = physical_contours[int(np.argmax(areas))]
     if len(points) < 12:
         return points, np.zeros(len(points)), np.zeros((len(points), 2))
     sigma = max(1.0, 0.20 / resolution)
-    smooth = np.column_stack([
-        gaussian_filter1d(points[:, 0], sigma=sigma, mode="wrap"),
-        gaussian_filter1d(points[:, 1], sigma=sigma, mode="wrap"),
-    ])
+    smooth = np.column_stack(
+        [
+            gaussian_filter1d(points[:, 0], sigma=sigma, mode="wrap"),
+            gaussian_filter1d(points[:, 1], sigma=sigma, mode="wrap"),
+        ]
+    )
     signed_area = 0.5 * np.sum(
-        smooth[:, 0] * np.roll(smooth[:, 1], -1)
-        - np.roll(smooth[:, 0], -1) * smooth[:, 1]
+        smooth[:, 0] * np.roll(smooth[:, 1], -1) - np.roll(smooth[:, 0], -1) * smooth[:, 1]
     )
     orientation = 1.0 if signed_area >= 0.0 else -1.0
     # Contact necks occur at different physical scales.  A single 0.55-mm
@@ -852,7 +862,7 @@ def _outer_concavity_candidates(
     notch_direction = np.zeros((len(smooth), 2), dtype=float)
     fractions = np.linspace(0.12, 0.88, 9)
     for span_mm in span_mm_values:
-        span = max(3, int(round(span_mm / resolution)))
+        span = max(3, round(span_mm / resolution))
         previous = np.roll(smooth, span, axis=0)
         following = np.roll(smooth, -span, axis=0)
         incoming = smooth - previous
@@ -865,29 +875,32 @@ def _outer_concavity_candidates(
         concavity = np.maximum(0.0, -orientation * turning)
         notch_fraction = np.zeros(len(smooth), dtype=float)
         for index in np.flatnonzero(concavity > 0.006):
-            samples = previous[index] + fractions[:, None] * (
-                following[index] - previous[index]
+            samples = previous[index] + fractions[:, None] * (following[index] - previous[index])
+            inside = (
+                _sample_grid(
+                    component_mask.astype(float),
+                    samples,
+                    lr_centres,
+                    ap_centres,
+                    resolution,
+                    order=0,
+                )
+                >= 0.5
             )
-            inside = _sample_grid(
-                component_mask.astype(float), samples,
-                lr_centres, ap_centres, resolution, order=0,
-            ) >= 0.5
             notch_fraction[index] = 1.0 - float(np.mean(inside))
         scale_score = concavity * np.clip(notch_fraction / 0.30, 0.0, 1.0)
         # The vector from the local notch mouth towards the indentation point
         # points into the crown union.  Opposing buccal/palatal contact notches
         # should therefore point towards one another along their joining chord.
         direction = smooth - 0.5 * (previous + following)
-        direction /= np.maximum(
-            np.linalg.norm(direction, axis=1, keepdims=True), EPS
-        )
+        direction /= np.maximum(np.linalg.norm(direction, axis=1, keepdims=True), EPS)
         stronger = scale_score > score
         score[stronger] = scale_score[stronger]
         notch_direction[stronger] = direction[stronger]
 
     # Keep local peaks only; closely spaced staircase points represent one
     # anatomical notch and must not produce artificial ultra-short chords.
-    peak_window = max(2, int(round(0.45 / resolution)))
+    peak_window = max(2, round(0.45 / resolution))
     peaks = np.zeros(len(score), dtype=bool)
     for shift in range(-peak_window, peak_window + 1):
         peaks |= score < np.roll(score, shift)
@@ -910,38 +923,22 @@ def _paired_concavity_metrics(
 ) -> dict[str, float | str]:
     """评价两个轮廓凹点是否构成相向的邻牙接触对。"""
 
-    segment = np.asarray(endpoint_2, dtype=float) - np.asarray(
-        endpoint_1, dtype=float
-    )
+    segment = np.asarray(endpoint_2, dtype=float) - np.asarray(endpoint_1, dtype=float)
     length = float(np.linalg.norm(segment))
     chord_direction = segment / max(length, EPS)
-    first_faces_second = max(
-        0.0, float(np.asarray(notch_direction_1) @ chord_direction)
-    )
-    second_faces_first = max(
-        0.0, float(np.asarray(notch_direction_2) @ -chord_direction)
-    )
+    first_faces_second = max(0.0, float(np.asarray(notch_direction_1) @ chord_direction))
+    second_faces_first = max(0.0, float(np.asarray(notch_direction_2) @ -chord_direction))
     facing = float(np.sqrt(first_faces_second * second_faces_first))
     axial_mismatch = abs(float(segment @ np.asarray(inter_seed_axis, dtype=float)))
-    axial_alignment = float(np.exp(-(
-        axial_mismatch / max(0.22 * centre_distance, 0.60)
-    ) ** 2))
-    paired_concavity = float(np.sqrt(
-        max(float(concavity_1), 0.0) * max(float(concavity_2), 0.0)
-    ))
+    axial_alignment = float(np.exp(-((axial_mismatch / max(0.22 * centre_distance, 0.60)) ** 2)))
+    paired_concavity = float(np.sqrt(max(float(concavity_1), 0.0) * max(float(concavity_2), 0.0)))
     concavity_score = float(np.clip(paired_concavity / 0.35, 0.0, 1.0))
     crown_support = float(np.clip(endpoint_crown_support, 0.0, 1.0))
     score = float(
-        0.30 * concavity_score
-        + 0.30 * facing
-        + 0.18 * axial_alignment
-        + 0.22 * crown_support
+        0.30 * concavity_score + 0.30 * facing + 0.18 * axial_alignment + 0.22 * crown_support
     )
     strong = bool(
-        score >= 0.68
-        and facing >= 0.55
-        and axial_alignment >= 0.55
-        and crown_support >= 0.18
+        score >= 0.68 and facing >= 0.55 and axial_alignment >= 0.55 and crown_support >= 0.18
     )
     level = "strong" if strong else "moderate" if score >= 0.38 else "weak"
     return {
@@ -973,18 +970,20 @@ def contact_chords_are_non_crossing(chords: list[ContactChord]) -> bool:
     """内部算法说明。\n\nValidate that finite contact separators do not properly intersect."""
 
     segments = [
-        np.asarray([
-            chord.first_endpoint_lr_ap_mm,
-            chord.second_endpoint_lr_ap_mm,
-        ], dtype=float)
+        np.asarray(
+            [
+                chord.first_endpoint_lr_ap_mm,
+                chord.second_endpoint_lr_ap_mm,
+            ],
+            dtype=float,
+        )
         for chord in chords
-        if chord.first_endpoint_lr_ap_mm is not None
-        and chord.second_endpoint_lr_ap_mm is not None
+        if chord.first_endpoint_lr_ap_mm is not None and chord.second_endpoint_lr_ap_mm is not None
     ]
     return not any(
         _segments_cross(first, second)
         for index, first in enumerate(segments)
-        for second in segments[index + 1:]
+        for second in segments[index + 1 :]
     )
 
 
@@ -1029,7 +1028,9 @@ def find_shortest_concavity_chords(
         """内部算法说明。"""
         return _sample_grid(values, points, lr_centres, ap_centres, resolution, order)
 
-    def gap(pair_index: int, first, second, midpoint: np.ndarray, perpendicular: np.ndarray) -> ContactChord:
+    def gap(
+        pair_index: int, first, second, midpoint: np.ndarray, perpendicular: np.ndarray
+    ) -> ContactChord:
         """内部算法说明。"""
         return ContactChord(
             pair_index=pair_index,
@@ -1047,7 +1048,7 @@ def find_shortest_concavity_chords(
             selection_method="disconnected_component_gap",
         )
 
-    for pair_index, (first, second) in enumerate(zip(ordered_seeds, ordered_seeds[1:])):
+    for pair_index, (first, second) in enumerate(itertools.pairwise(ordered_seeds)):
         first_center = np.asarray(first.center_lr_ap_mm, dtype=float)
         second_center = np.asarray(second.center_lr_ap_mm, dtype=float)
         delta = second_center - first_center
@@ -1055,18 +1056,16 @@ def find_shortest_concavity_chords(
         axis = delta / max(centre_distance, EPS)
         perpendicular = np.asarray([-axis[1], axis[0]])
         midpoint = 0.5 * (first_center + second_center)
-        first_component = _component_at_point(
-            components, first_center, lr_centres, ap_centres
-        )
-        second_component = _component_at_point(
-            components, second_center, lr_centres, ap_centres
-        )
+        first_component = _component_at_point(components, first_center, lr_centres, ap_centres)
+        second_component = _component_at_point(components, second_center, lr_centres, ap_centres)
         if pair_index in forced_gaps:
             configured_gap = gap(pair_index, first, second, midpoint, perpendicular)
-            chords.append(replace(
-                configured_gap,
-                selection_method="configured_missing_slot_gap",
-            ))
+            chords.append(
+                replace(
+                    configured_gap,
+                    selection_method="configured_missing_slot_gap",
+                )
+            )
             continue
         if first_component == 0 or first_component != second_component:
             chords.append(gap(pair_index, first, second, midpoint, perpendicular))
@@ -1092,10 +1091,7 @@ def find_shortest_concavity_chords(
             along = relative_first @ axis
             transverse = (contour_points - midpoint) @ perpendicular
             if local_neck:
-                eligible = (
-                    (along >= 0.18 * centre_distance)
-                    & (along <= 0.82 * centre_distance)
-                )
+                eligible = (along >= 0.18 * centre_distance) & (along <= 0.82 * centre_distance)
             else:
                 eligible = (
                     (concavity_scores >= 0.010)
@@ -1138,30 +1134,36 @@ def find_shortest_concavity_chords(
                     line_normal = np.asarray([-direction[1], direction[0]])
                     signed_first = float((first_center - line_point) @ line_normal)
                     signed_second = float((second_center - line_point) @ line_normal)
-                    if signed_first * signed_second >= 0.0 or min(
-                        abs(signed_first), abs(signed_second)
-                    ) < 0.40:
+                    if (
+                        signed_first * signed_second >= 0.0
+                        or min(abs(signed_first), abs(signed_second)) < 0.40
+                    ):
                         continue
-                    samples = endpoint_1 + np.linspace(0.03, 0.97, max(9, int(length / (0.5 * resolution))))[:, None] * segment
+                    samples = (
+                        endpoint_1
+                        + np.linspace(0.03, 0.97, max(9, int(length / (0.5 * resolution))))[:, None]
+                        * segment
+                    )
                     inside_fraction = float(np.mean(sample(mask_float, samples, order=0) >= 0.5))
                     if inside_fraction < 0.86:
                         continue
                     signed_grid = (grid_points - line_point) @ line_normal
-                    first_area = int(np.count_nonzero(
-                        local_roi & (signed_grid * signed_first >= 0.0)
-                    ))
-                    second_area = int(np.count_nonzero(
-                        local_roi & (signed_grid * signed_second >= 0.0)
-                    ))
-                    if min(first_area, second_area) < max(60, int(round(4.0 / resolution**2))):
+                    first_area = int(
+                        np.count_nonzero(local_roi & (signed_grid * signed_first >= 0.0))
+                    )
+                    second_area = int(
+                        np.count_nonzero(local_roi & (signed_grid * signed_second >= 0.0))
+                    )
+                    if min(first_area, second_area) < max(60, round(4.0 / resolution**2)):
                         continue
                     candidate_segment = np.vstack([endpoint_1, endpoint_2])
-                    if any(_segments_cross(candidate_segment, prior) for prior in accepted_segments):
+                    if any(
+                        _segments_cross(candidate_segment, prior) for prior in accepted_segments
+                    ):
                         continue
 
-                    endpoint_edge = float(np.mean(sample(
-                        fused_edge, candidate_segment, order=1
-                    )))
+                    endpoint_edge = float(np.mean(sample(fused_edge, candidate_segment, order=1)))
+
                     def crown_support(endpoint: np.ndarray) -> float:
                         """评价凹点端点是否同时得到两侧牙冠内部支撑。"""
 
@@ -1169,16 +1171,20 @@ def find_shortest_concavity_chords(
                         for center in (first_center, second_center):
                             inward = center - endpoint
                             inward /= max(float(np.linalg.norm(inward)), EPS)
-                            support_points = endpoint + np.asarray([
-                                0.45, 0.90, 1.35,
-                            ])[:, None] * inward
-                            values = sample(
-                                relief_score, support_points, order=1
+                            support_points = (
+                                endpoint
+                                + np.asarray(
+                                    [
+                                        0.45,
+                                        0.90,
+                                        1.35,
+                                    ]
+                                )[:, None]
+                                * inward
                             )
+                            values = sample(relief_score, support_points, order=1)
                             values = values[np.isfinite(values)]
-                            side_support.append(
-                                float(np.max(values)) if len(values) else 0.0
-                            )
+                            side_support.append(float(np.max(values)) if len(values) else 0.0)
                         # Both neighbouring crown interiors must support the
                         # same contour endpoint.  A gingival notch close to
                         # only one crown therefore remains weak evidence.
@@ -1203,34 +1209,33 @@ def find_shortest_concavity_chords(
                     shift = 0.60 * line_normal
                     minus = samples - shift
                     plus = samples + shift
-                    valid = (
-                        (sample(mask_float, minus, order=0) >= 0.5)
-                        & (sample(mask_float, plus, order=0) >= 0.5)
+                    valid = (sample(mask_float, minus, order=0) >= 0.5) & (
+                        sample(mask_float, plus, order=0) >= 0.5
                     )
                     if np.count_nonzero(valid) >= 4:
                         centre_height = sample(height_filled, samples)[valid]
                         side_height = 0.5 * (
-                            sample(height_filled, minus)[valid]
-                            + sample(height_filled, plus)[valid]
+                            sample(height_filled, minus)[valid] + sample(height_filled, plus)[valid]
                         )
                         height_valley = float(np.mean(side_height - centre_height))
-                        minus_normal = np.column_stack([
-                            sample(normals[..., channel], minus)[valid]
-                            for channel in range(3)
-                        ])
-                        plus_normal = np.column_stack([
-                            sample(normals[..., channel], plus)[valid]
-                            for channel in range(3)
-                        ])
-                        normal_jump = float(np.mean(np.clip(
-                            1.0 - np.sum(minus_normal * plus_normal, axis=1), 0.0, 2.0
-                        )) / 2.0)
+                        minus_normal = np.column_stack(
+                            [sample(normals[..., channel], minus)[valid] for channel in range(3)]
+                        )
+                        plus_normal = np.column_stack(
+                            [sample(normals[..., channel], plus)[valid] for channel in range(3)]
+                        )
+                        normal_jump = float(
+                            np.mean(
+                                np.clip(1.0 - np.sum(minus_normal * plus_normal, axis=1), 0.0, 2.0)
+                            )
+                            / 2.0
+                        )
                     else:
                         height_valley = 0.0
                         normal_jump = 0.0
-                    concavity_support = float(np.mean([
-                        concavity_scores[first_index], concavity_scores[second_index]
-                    ]))
+                    concavity_support = float(
+                        np.mean([concavity_scores[first_index], concavity_scores[second_index]])
+                    )
                     base_evidence = (
                         0.42 * np.clip(concavity_support / 0.35, 0.0, 1.0)
                         + 0.24 * endpoint_edge
@@ -1241,29 +1246,29 @@ def find_shortest_concavity_chords(
                     # Paired-notch geometry is deliberately soft evidence.  It
                     # changes ranking and confidence without making a standard
                     # two-notch shape mandatory for every tooth contact.
-                    evidence = 0.84 * base_evidence + 0.16 * float(
-                        paired["score"]
+                    evidence = 0.84 * base_evidence + 0.16 * float(paired["score"])
+                    angle = float(
+                        np.degrees(np.arctan2(direction @ axis, direction @ perpendicular))
                     )
-                    angle = float(np.degrees(np.arctan2(
-                        direction @ axis, direction @ perpendicular
-                    )))
-                    result.append({
-                        "endpoint_1": endpoint_1,
-                        "endpoint_2": endpoint_2,
-                        "segment": candidate_segment,
-                        "line_point": line_point,
-                        "direction": direction,
-                        "length": length,
-                        "offset": float((line_point - midpoint) @ axis),
-                        "angle": angle,
-                        "line_edge": line_edge,
-                        "endpoint_edge": endpoint_edge,
-                        "height_valley": height_valley,
-                        "normal_jump": normal_jump,
-                        "concavity": concavity_support,
-                        "paired": paired,
-                        "evidence": float(evidence),
-                    })
+                    result.append(
+                        {
+                            "endpoint_1": endpoint_1,
+                            "endpoint_2": endpoint_2,
+                            "segment": candidate_segment,
+                            "line_point": line_point,
+                            "direction": direction,
+                            "length": length,
+                            "offset": float((line_point - midpoint) @ axis),
+                            "angle": angle,
+                            "line_edge": line_edge,
+                            "endpoint_edge": endpoint_edge,
+                            "height_valley": height_valley,
+                            "normal_jump": normal_jump,
+                            "concavity": concavity_support,
+                            "paired": paired,
+                            "evidence": float(evidence),
+                        }
+                    )
             return result
 
         candidates = build_candidates(contour, concavity, notch_direction)
@@ -1272,18 +1277,14 @@ def find_shortest_concavity_chords(
             # Some posterior contacts form a broad, shallow embrasure.  Only
             # when the sharp-scale search fails, retry at molar-scale turning
             # windows so already-valid sharp contact chords remain unchanged.
-            broad_contour, broad_concavity, broad_direction = (
-                _outer_concavity_candidates(
+            broad_contour, broad_concavity, broad_direction = _outer_concavity_candidates(
                 components == first_component,
                 lr_centres,
                 ap_centres,
                 resolution,
                 span_mm_values=(0.90, 1.35),
-                )
             )
-            candidates = build_candidates(
-                broad_contour, broad_concavity, broad_direction
-            )
+            candidates = build_candidates(broad_contour, broad_concavity, broad_direction)
             if candidates:
                 selection_method = "shortest_valid_broad_concavity_pair"
 
@@ -1321,58 +1322,56 @@ def find_shortest_concavity_chords(
                     selection_method="legacy_midline_fallback",
                 )
                 chords.append(fallback)
-                accepted_segments.append(np.asarray([
-                    fallback.first_endpoint_lr_ap_mm,
-                    fallback.second_endpoint_lr_ap_mm,
-                ], dtype=float))
+                accepted_segments.append(
+                    np.asarray(
+                        [
+                            fallback.first_endpoint_lr_ap_mm,
+                            fallback.second_endpoint_lr_ap_mm,
+                        ],
+                        dtype=float,
+                    )
+                )
             continue
 
         minimum_length = min(item["length"] for item in candidates)
-        shortest = [
-            item for item in candidates
-            if item["length"] <= minimum_length + 0.30
-        ]
+        shortest = [item for item in candidates if item["length"] <= minimum_length + 0.30]
         shortest.sort(key=lambda item: item["evidence"], reverse=True)
         best = shortest[0]
         other_lengths = sorted(
-            item["length"] for item in candidates
+            item["length"]
+            for item in candidates
             if item is not best and item["length"] > best["length"] + 0.05
         )
-        length_margin = (
-            float(other_lengths[0] - best["length"])
-            if other_lengths else 0.0
-        )
+        length_margin = float(other_lengths[0] - best["length"]) if other_lengths else 0.0
         accepted_segments.append(best["segment"])
-        chords.append(ContactChord(
-            pair_index=pair_index,
-            first_instance_id=int(first.instance_id),
-            second_instance_id=int(second.instance_id),
-            kind="contact",
-            line_point_lr_ap_mm=tuple(float(value) for value in best["line_point"]),
-            line_direction_lr_ap=tuple(float(value) for value in best["direction"]),
-            first_endpoint_lr_ap_mm=tuple(float(value) for value in best["endpoint_1"]),
-            second_endpoint_lr_ap_mm=tuple(float(value) for value in best["endpoint_2"]),
-            chord_length_mm=float(best["length"]),
-            centre_offset_mm=float(best["offset"]),
-            angle_offset_degrees=float(best["angle"]),
-            mean_projection_score=float(best["line_edge"]),
-            evidence_score=float(best["evidence"]),
-            confidence_margin=length_margin,
-            height_valley_mm=float(best["height_valley"]),
-            normal_jump=float(best["normal_jump"]),
-            endpoint_edge_support=float(best["endpoint_edge"]),
-            endpoint_concavity_support=float(best["concavity"]),
-            paired_concavity_facing_support=float(best["paired"]["facing"]),
-            paired_concavity_axial_alignment=float(
-                best["paired"]["axial_alignment"]
-            ),
-            paired_concavity_crown_support=float(
-                best["paired"]["crown_support"]
-            ),
-            paired_concavity_score=float(best["paired"]["score"]),
-            paired_concavity_level=str(best["paired"]["level"]),
-            selection_method=selection_method,
-        ))
+        chords.append(
+            ContactChord(
+                pair_index=pair_index,
+                first_instance_id=int(first.instance_id),
+                second_instance_id=int(second.instance_id),
+                kind="contact",
+                line_point_lr_ap_mm=tuple(float(value) for value in best["line_point"]),
+                line_direction_lr_ap=tuple(float(value) for value in best["direction"]),
+                first_endpoint_lr_ap_mm=tuple(float(value) for value in best["endpoint_1"]),
+                second_endpoint_lr_ap_mm=tuple(float(value) for value in best["endpoint_2"]),
+                chord_length_mm=float(best["length"]),
+                centre_offset_mm=float(best["offset"]),
+                angle_offset_degrees=float(best["angle"]),
+                mean_projection_score=float(best["line_edge"]),
+                evidence_score=float(best["evidence"]),
+                confidence_margin=length_margin,
+                height_valley_mm=float(best["height_valley"]),
+                normal_jump=float(best["normal_jump"]),
+                endpoint_edge_support=float(best["endpoint_edge"]),
+                endpoint_concavity_support=float(best["concavity"]),
+                paired_concavity_facing_support=float(best["paired"]["facing"]),
+                paired_concavity_axial_alignment=float(best["paired"]["axial_alignment"]),
+                paired_concavity_crown_support=float(best["paired"]["crown_support"]),
+                paired_concavity_score=float(best["paired"]["score"]),
+                paired_concavity_level=str(best["paired"]["level"]),
+                selection_method=selection_method,
+            )
+        )
     return chords
 
 
@@ -1442,9 +1441,9 @@ def split_projection_by_chords(
             if component == 0:
                 candidates = np.argwhere(components > 0)
                 if len(candidates):
-                    physical = np.column_stack([
-                        lr_centres[candidates[:, 0]], ap_centres[candidates[:, 1]]
-                    ])
+                    physical = np.column_stack(
+                        [lr_centres[candidates[:, 0]], ap_centres[candidates[:, 1]]]
+                    )
                     nearest = int(np.argmin(np.linalg.norm(physical - center, axis=1)))
                     component = int(components[tuple(candidates[nearest])])
             if component > 0:
@@ -1453,32 +1452,34 @@ def split_projection_by_chords(
         rows, columns = np.nonzero(region)
         if len(rows) == 0:
             raise RuntimeError(f"contact-chord region {index} is empty")
-        centroid = np.asarray([
-            float(np.mean(lr_centres[rows])), float(np.mean(ap_centres[columns]))
-        ])
+        centroid = np.asarray(
+            [float(np.mean(lr_centres[rows])), float(np.mean(ap_centres[columns]))]
+        )
         interior_distance = distance_transform_edt(region) * resolution
         maximum_radius = float(np.max(interior_distance))
         interior_rows, interior_columns = np.nonzero(
             interior_distance >= maximum_radius - 0.25 * resolution
         )
-        interior_center = np.asarray([
-            float(np.mean(lr_centres[interior_rows])),
-            float(np.mean(ap_centres[interior_columns])),
-        ])
+        interior_center = np.asarray(
+            [
+                float(np.mean(lr_centres[interior_rows])),
+                float(np.mean(ap_centres[interior_columns])),
+            ]
+        )
         contour = _contour_from_region(region, lr_centres, ap_centres)
         if not contour:
             raise RuntimeError(f"contact-chord region {index} has no contour")
         label_grid[region] = index + 1
-        results.append(ChordContourInstance(
-            instance_id=index,
-            source_instance_id=int(instance.instance_id),
-            area_mm2=float(len(rows) * resolution**2),
-            area_centroid_lr_ap_mm=(float(centroid[0]), float(centroid[1])),
-            interior_center_lr_ap_mm=(
-                float(interior_center[0]), float(interior_center[1])
-            ),
-            maximum_interior_radius_mm=maximum_radius,
-            pixel_count=int(len(rows)),
-            contour_lr_ap_mm=contour,
-        ))
+        results.append(
+            ChordContourInstance(
+                instance_id=index,
+                source_instance_id=int(instance.instance_id),
+                area_mm2=float(len(rows) * resolution**2),
+                area_centroid_lr_ap_mm=(float(centroid[0]), float(centroid[1])),
+                interior_center_lr_ap_mm=(float(interior_center[0]), float(interior_center[1])),
+                maximum_interior_radius_mm=maximum_radius,
+                pixel_count=len(rows),
+                contour_lr_ap_mm=contour,
+            )
+        )
     return results, label_grid

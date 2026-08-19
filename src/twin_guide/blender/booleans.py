@@ -72,9 +72,7 @@ def _weld_manifold_output(
             index = int(parents[index])
         return index
 
-    for first, second in cKDTree(vertices).query_pairs(
-        MANIFOLD_OUTPUT_WELD_TOLERANCE_MM
-    ):
+    for first, second in cKDTree(vertices).query_pairs(MANIFOLD_OUTPUT_WELD_TOLERANCE_MM):
         first_root = find(first)
         second_root = find(second)
         if first_root != second_root:
@@ -127,9 +125,7 @@ def _weld_manifold_output(
             {
                 int(face_index)
                 for edge in overused_edges
-                for face_index in np.flatnonzero(
-                    np.sum(np.isin(mesh.faces, edge), axis=1) == 2
-                )
+                for face_index in np.flatnonzero(np.sum(np.isin(mesh.faces, edge), axis=1) == 2)
             }
         )
         valid_candidates = []
@@ -141,9 +137,7 @@ def _weld_manifold_output(
             candidate.update_faces(keep_faces)
             candidate.remove_unreferenced_vertices()
             if candidate.is_volume:
-                valid_candidates.append(
-                    (float(face_areas[face_index]), face_index, candidate)
-                )
+                valid_candidates.append((float(face_areas[face_index]), face_index, candidate))
         if valid_candidates:
             return min(valid_candidates, key=lambda item: (item[0], item[1]))[2]
 
@@ -151,11 +145,7 @@ def _weld_manifold_output(
         incident_face_sets = []
         for edge in bad_edges:
             incident_face_sets.append(
-                set(
-                    np.flatnonzero(
-                        np.sum(np.isin(mesh.faces, edge), axis=1) == 2
-                    ).tolist()
-                )
+                set(np.flatnonzero(np.sum(np.isin(mesh.faces, edge), axis=1) == 2).tolist())
             )
         common_faces = set.intersection(*incident_face_sets)
         if len(common_faces) == 1:
@@ -177,8 +167,7 @@ def _weld_manifold_output(
         float(
             np.min(
                 np.linalg.norm(
-                    mesh.vertices[overused_edges[:, 0]]
-                    - mesh.vertices[overused_edges[:, 1]],
+                    mesh.vertices[overused_edges[:, 0]] - mesh.vertices[overused_edges[:, 1]],
                     axis=1,
                 )
             )
@@ -199,6 +188,7 @@ def apply_manifold3d_difference(
     *,
     cutter_clearance_mm: float = MANIFOLD_CUTTER_CLEARANCE_MM,
     simplify_tolerance_mm: float = MANIFOLD_SIMPLIFY_TOLERANCE_MM,
+    conservative_clearance_kernel: bool = False,
 ) -> bpy.types.Object:
     """用 manifold3d 后端执行一次差集并返回封闭的 Blender 三角网格。"""
 
@@ -207,6 +197,7 @@ def apply_manifold3d_difference(
         (cutter_mesh,),
         cutter_clearance_mm=cutter_clearance_mm,
         simplify_tolerance_mm=simplify_tolerance_mm,
+        conservative_clearance_kernel=conservative_clearance_kernel,
     )
 
 
@@ -216,6 +207,7 @@ def apply_manifold3d_differences(
     *,
     cutter_clearance_mm: float = MANIFOLD_CUTTER_CLEARANCE_MM,
     simplify_tolerance_mm: float = MANIFOLD_SIMPLIFY_TOLERANCE_MM,
+    conservative_clearance_kernel: bool = False,
     validate_inputs: bool = True,
     validate_result: bool = True,
 ) -> bpy.types.Object:
@@ -270,20 +262,22 @@ def apply_manifold3d_differences(
                 # 裁剪边界与目标相距至少一个外扩半径和固定余量，
                 # 因此人工封口的外扩不可能触及目标。
                 bounds = result_manifold.bounding_box()
-                padding = (
-                    2.0 * cutter_clearance_mm
-                    + MANIFOLD_CUTTER_LOCALIZATION_MARGIN_MM
-                )
+                padding = 2.0 * cutter_clearance_mm + MANIFOLD_CUTTER_LOCALIZATION_MARGIN_MM
                 minimum = tuple(float(bounds[index]) - padding for index in range(3))
                 size = tuple(
-                    float(bounds[index + 3] - bounds[index]) + 2.0 * padding
-                    for index in range(3)
+                    float(bounds[index + 3] - bounds[index]) + 2.0 * padding for index in range(3)
                 )
                 local_box = Manifold.cube(size).translate(minimum)
                 localized_cutter = cutter_manifold ^ local_box
-                expanded_cutter = localized_cutter.minkowski_sum(
-                    Manifold.sphere(cutter_clearance_mm, circular_segments=4)
-                )
+                if conservative_clearance_kernel:
+                    # 轴对齐立方体是半径 r 欧氏球的外包络：任意方向的
+                    # 支撑距离都不小于 r，不会像低面数内接球那样欠切。
+                    kernel = Manifold.cube((2.0 * cutter_clearance_mm,) * 3).translate(
+                        (-cutter_clearance_mm,) * 3
+                    )
+                else:
+                    kernel = Manifold.sphere(cutter_clearance_mm, circular_segments=4)
+                expanded_cutter = localized_cutter.minkowski_sum(kernel)
             result_manifold -= expanded_cutter
         output_manifold = (
             result_manifold.simplify(simplify_tolerance_mm)
@@ -301,11 +295,7 @@ def apply_manifold3d_differences(
         raise BooleanOperationError(
             f"对 {target_mesh.name} 和 [{cutter_names}] 执行 manifold3d 差集失败"
         ) from error
-    if (
-        result is None
-        or result.is_empty
-        or (validate_result and not result.is_volume)
-    ):
+    if result is None or result.is_empty or (validate_result and not result.is_volume):
         raise BooleanOperationError(
             f"对 {target_mesh.name} 执行 manifold3d 多切割体差集未返回封闭体"
         )

@@ -267,6 +267,44 @@ class CaseConfigTests(unittest.TestCase):
         self.assertEqual(parameters.sampling_mode.value, "adaptive")
         self.assertIsNone(parameters.stop_report)
         self.assertEqual(parameters.maximum_angle_degrees, 120.0)
+        self.assertEqual(parameters.axial_depth_range_mm, (0.0, 0.0))
+        self.assertEqual(parameters.axial_step_mm, 0.5)
+
+    def test_loads_signed_handpiece_axial_range(self):
+        config_data = self._valid_config_data()
+        config_data["handpiece_avoidance"] = {
+            "handpiece": "handpiece.stl",
+            "stop_report": "stop_report.json",
+            "axial_depth_range_mm": [-2.0, 4.0],
+            "axial_step_mm": 0.25,
+        }
+
+        parameters = CaseConfig.from_yaml(self._write_config(config_data)).handpiece_avoidance[0]
+
+        self.assertEqual(parameters.axial_depth_range_mm, (-2.0, 4.0))
+        self.assertEqual(parameters.axial_step_mm, 0.25)
+
+    def test_rejects_handpiece_axial_range_without_current_pose(self):
+        config_data = self._valid_config_data()
+        config_data["handpiece_avoidance"] = {
+            "handpiece": "handpiece.stl",
+            "stop_report": "stop_report.json",
+            "axial_depth_range_mm": [1.0, 4.0],
+        }
+
+        with self.assertRaisesRegex(ConfigurationError, "必须包含 0 mm"):
+            CaseConfig.from_yaml(self._write_config(config_data))
+
+    def test_rejects_reversed_handpiece_axial_range(self):
+        config_data = self._valid_config_data()
+        config_data["handpiece_avoidance"] = {
+            "handpiece": "handpiece.stl",
+            "stop_report": "stop_report.json",
+            "axial_depth_range_mm": [1.0, -1.0],
+        }
+
+        with self.assertRaisesRegex(ConfigurationError, "从小到大"):
+            CaseConfig.from_yaml(self._write_config(config_data))
 
     def test_loads_meeting_adjustment_interfaces(self):
         config_data = self._valid_config_data()
@@ -1390,6 +1428,7 @@ design:
                     "height_mm": 16.0,
                     "platform_height_mm": 9.0,
                     "closed_bore_height_mm": 4.0,
+                    "rotation_degrees": -39.0,
                 },
             ],
             "connector_avoidance": [
@@ -1415,6 +1454,7 @@ design:
         config = CaseConfig.from_yaml(path)
 
         self.assertEqual(config.editor_overrides.sleeve_for(1).height_mm, 16.0)
+        self.assertEqual(config.editor_overrides.sleeve_for(1).rotation_degrees, -39.0)
         self.assertEqual(
             config.editor_overrides.connector_for(1, "left").downward_offset_mm,
             2.0,
@@ -1667,6 +1707,86 @@ design:
 
         with self.assertRaisesRegex(ConfigurationError, "未知 ring_index"):
             CaseConfig.from_yaml(path)
+
+    def test_loads_generation_algorithm_parameters(self):
+        data = self._valid_config_data()
+        data["geometry"].update(
+            anchor_selection={
+                "clearance_mm": 1.7,
+                "minimum_span_connector_diameters": 1.4,
+                "surface_sample_limit": 2048,
+                "candidate_limit": 256,
+            },
+            connector_path={
+                "curve_resolution": 48,
+                "recut_sleeve_bore": False,
+                "endpoint_tension": 0.5,
+                "contact_tension": 0.8,
+                "lower_approach_overlap_mm": 0.8,
+                "lower_dive_merge_arc_mm": 4.0,
+                "centerline_spacing_mm": 0.2,
+            },
+        )
+        data["windows"]["observation_solver"] = {
+            "side_extension_mm": 0.6,
+            "minimum_axis_visibility_row_fraction": 0.7,
+            "union_batch_size": 8,
+            "adaptive_volume_identity_tolerance_mm3": 0.004,
+        }
+        path = self._write_config(data)
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        raw["planning"]["guide_posts"][0]["drill_inside_handpiece_length_mm"] = 11.5
+        path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+
+        config = CaseConfig.from_yaml(path)
+
+        self.assertEqual(config.geometry.anchor_selection.clearance_mm, 1.7)
+        self.assertEqual(config.geometry.anchor_selection.candidate_limit, 256)
+        self.assertEqual(config.geometry.connector_path.curve_resolution, 48)
+        self.assertFalse(config.geometry.connector_path.recut_sleeve_bore)
+        self.assertEqual(config.windows.observation_solver.side_extension_mm, 0.6)
+        self.assertEqual(config.windows.observation_solver.union_batch_size, 8)
+        self.assertEqual(config.guide_posts[0].drill_inside_handpiece_length_mm, 11.5)
+        self.assertEqual(config.guide_posts[0].twin_guide_extension_mm, 9.5)
+
+    def test_loads_fdi_new_profile_from_runtime_config(self):
+        data = self._valid_config_data()
+        data["tooth_identification"] = {
+            "backend": "fdi_new",
+            "profile": {
+                "projection_resolution_mm": 0.15,
+                "candidate_detection_resolution_mm": 0.11,
+                "height_quantiles": [0.30, 0.50, 0.70],
+                "surface_valley_smoothing_iterations": [0, 2, 5],
+                "run_stability": False,
+            },
+        }
+
+        config = CaseConfig.from_yaml(self._write_config(data))
+
+        assert config.tooth_identification is not None
+        profile = config.tooth_identification.profile
+        self.assertEqual(profile.projection_resolution_mm, 0.15)
+        self.assertEqual(profile.candidate_detection_resolution_mm, 0.11)
+        self.assertEqual(profile.height_quantiles, (0.30, 0.50, 0.70))
+        self.assertEqual(profile.surface_valley_smoothing_iterations, (0, 2, 5))
+        self.assertFalse(profile.run_stability)
+
+    def test_rejects_unknown_fdi_new_profile_parameter(self):
+        data = self._valid_config_data()
+        data["tooth_identification"] = {
+            "profile": {"untracked_threshold": 1.0},
+        }
+
+        with self.assertRaisesRegex(ConfigurationError, "untracked_threshold"):
+            CaseConfig.from_yaml(self._write_config(data))
+
+    def test_rejects_connector_overlap_at_or_above_diameter(self):
+        data = self._valid_config_data()
+        data["geometry"]["connector_path"] = {"lower_approach_overlap_mm": 2.3}
+
+        with self.assertRaisesRegex(ConfigurationError, "必须小于连接梁直径"):
+            CaseConfig.from_yaml(self._write_config(data))
 
 
 if __name__ == "__main__":

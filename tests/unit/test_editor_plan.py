@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from twin_guide.config import ConnectorAvoidanceOverride, EditorOverrides
 from twin_guide.editor_plan import (
     EDITOR_PLAN_SCHEMA,
+    EDITOR_SNAPSHOT_SCHEMA,
     build_editor_plan,
     editor_geometry_fingerprint,
     editor_plan_fingerprint,
@@ -18,7 +19,7 @@ from twin_guide.geometry import Vec3
 class EditorPlanTests(unittest.TestCase):
     def test_snapshot_requires_matching_schema_revision_and_geometry(self):
         value = {
-            "schema_version": "twin-guide.ui-editor-snapshot/4.0",
+            "schema_version": EDITOR_SNAPSHOT_SCHEMA,
             "revision": 4,
             "geometry_fingerprint": "geometry-4",
         }
@@ -71,9 +72,7 @@ class EditorPlanTests(unittest.TestCase):
                 root / "ui-plan",
                 1.0,
                 EditorOverrides(
-                    connector_avoidance=(
-                        ConnectorAvoidanceOverride(1, 0.6, 2.0, "left"),
-                    )
+                    connector_avoidance=(ConnectorAvoidanceOverride(1, 0.6, 2.0, "left"),)
                 ),
             )
 
@@ -235,12 +234,16 @@ class EditorPlanTests(unittest.TestCase):
             operation = next(
                 item for item in plan["features"] if item["id"] == "operation_window:1"
             )["geometry"]
-            sleeve = next(
-                item for item in plan["features"] if item["id"] == "sleeve:site_1"
-            )["geometry"]
+            sleeve = next(item for item in plan["features"] if item["id"] == "sleeve:site_1")[
+                "geometry"
+            ]
 
             self.assertEqual(plan["schema_version"], EDITOR_PLAN_SCHEMA)
             self.assertEqual(sleeve["parameters"]["axis_origin"], [0.0, 0.0, 0.0])
+            self.assertEqual(
+                sleeve["pair_axis_origins"],
+                [[-2.0, 0.0, 0.0], [2.0, 0.0, 0.0]],
+            )
             self.assertAlmostEqual(operation["base_depth_mm"], 3.0)
             self.assertAlmostEqual(operation["base_width_mm"], 4.0)
             self.assertAlmostEqual(operation["base_height_mm"], 3.0)

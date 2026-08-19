@@ -199,8 +199,7 @@ def _bridge_short_visibility_gaps(
             (
                 index
                 for index in component
-                if (closed or index > 0)
-                and core_mask[(index - 1) % count]
+                if (closed or index > 0) and core_mask[(index - 1) % count]
             ),
             None,
         )
@@ -313,14 +312,9 @@ def _cutout_clearance_mask(
 
     retained = np.asarray(
         [
-            all(
-                window_distance(_vec3(point), window) >= clearance_mm
-                for window in cutouts.windows
-            )
+            all(window_distance(_vec3(point), window) >= clearance_mm for window in cutouts.windows)
             and all(
-                channel_distance(
-                    _vec3(point), channel.start, channel.end, channel.radius_mm
-                )
+                channel_distance(_vec3(point), channel.start, channel.end, channel.radius_mm)
                 >= clearance_mm
                 for channel in cutouts.channels
             )
@@ -340,9 +334,7 @@ def _cutout_clearance_mask(
     return retained
 
 
-def _point_at_fraction(
-    points: np.ndarray, fraction: float
-) -> tuple[np.ndarray, np.ndarray]:
+def _point_at_fraction(points: np.ndarray, fraction: float) -> tuple[np.ndarray, np.ndarray]:
     """按折线弧长比例返回插值点和局部切向。"""
 
     lengths = np.linalg.norm(np.diff(points, axis=0), axis=1)
@@ -377,9 +369,7 @@ def _measure_thicknesses(
         distance = float(np.dot(location - points[ray_index], directions[ray_index]))
         if distance >= 0.05:
             hits[int(ray_index)].append(distance)
-    return np.asarray(
-        [min(hits[index]) if hits[index] else np.nan for index in range(len(points))]
-    )
+    return np.asarray([min(hits[index]) if hits[index] else np.nan for index in range(len(points))])
 
 
 def _anchor_candidate(
@@ -425,15 +415,9 @@ def _anchor_candidate(
     targets = [anchor]
     for ring_radius in (0.75, 1.50):
         for angle in np.linspace(0.0, 2.0 * np.pi, 12, endpoint=False):
-            targets.append(
-                anchor
-                + ring_radius
-                * (np.cos(angle) * tangent + np.sin(angle) * cross)
-            )
+            targets.append(anchor + ring_radius * (np.cos(angle) * tangent + np.sin(angle) * cross))
     targets = np.asarray(targets)
-    patch_points, patch_distances, patch_triangles = trimesh.proximity.closest_point(
-        mesh, targets
-    )
+    patch_points, patch_distances, patch_triangles = trimesh.proximity.closest_point(mesh, targets)
     patch_normals = np.asarray(mesh.face_normals)[patch_triangles]
     patch_away, _ = _directions_away_from_teeth(dentition, patch_points)
     if (
@@ -486,12 +470,7 @@ def _station_geometry(
     # 切面法向是水平牙弓切向，因此原点的牙合高度不改变该竖直平面。
     # 当牙位映射无法给出 guide_top 时，使用牙冠中心仅定义切面站位；
     # 后续仍必须与真实导板网格相交并通过可见性、厚度和净距 QA。
-    origins = np.asarray(
-        [
-            (tooth.guide_top or tooth.crown_point).as_tuple()
-            for tooth in selected
-        ]
-    )
+    origins = np.asarray([(tooth.guide_top or tooth.crown_point).as_tuple() for tooth in selected])
     tooth_centers = np.asarray([tooth.crown_point.as_tuple() for tooth in selected])
     tangents = np.asarray([tooth.local_tangent.as_tuple() for tooth in selected])
     outwards = np.asarray([tooth.local_outward.as_tuple() for tooth in selected])
@@ -516,9 +495,7 @@ def _covered_neighbour_reference_tangent(
         for fdi in station.fdis:
             tooth = positions.get(fdi)
             if tooth is None or tooth.guide_top is None or fdi in missing_teeth:
-                raise GeometryError(
-                    f"双牙站位 {station.fdis} 的牙位 {fdi} 没有真实导板覆盖"
-                )
+                raise GeometryError(f"双牙站位 {station.fdis} 的牙位 {fdi} 没有真实导板覆盖")
             selected.append(tooth)
         direction = np.asarray(
             (selected[1].crown_point - selected[0].crown_point).as_tuple(),
@@ -577,11 +554,7 @@ def _interpolate_missing_tooth(
     except ValueError as error:
         raise GeometryError(f"缺失牙位 {fdi} 不在 FDI 牙弓顺序中") from error
     left_index = next(
-        (
-            index
-            for index in range(target_index - 1, -1, -1)
-            if fdi_order[index] in positions
-        ),
+        (index for index in range(target_index - 1, -1, -1) if fdi_order[index] in positions),
         None,
     )
     right_index = next(
@@ -661,8 +634,10 @@ def _external_trajectory(
     """
 
     section = mesh.section(plane_origin=origin, plane_normal=plane_normal)
-    polylines = () if section is None else tuple(
-        np.asarray(line, dtype=float) for line in section.discrete if len(line) >= 2
+    polylines = (
+        ()
+        if section is None
+        else tuple(np.asarray(line, dtype=float) for line in section.discrete if len(line) >= 2)
     )
     runs = []
     for points in polylines:
@@ -691,9 +666,7 @@ def _external_trajectory(
         raise GeometryError(f"牙位切面没有{requirement}连续背牙外表面轨迹")
     if not require_both_sides:
         local_runs = tuple(
-            run
-            for run in runs
-            if float(np.min(np.linalg.norm(run - tooth_center, axis=1))) <= 15.0
+            run for run in runs if float(np.min(np.linalg.norm(run - tooth_center, axis=1))) <= 15.0
         )
         if not local_runs:
             raise GeometryError("牙位切面的 U 形内侧轨迹均距目标牙位超过 15 mm")
@@ -715,9 +688,7 @@ def _common_positive_sleeve_axis(sleeves: SleeveGenerationResult) -> np.ndarray:
     if float(np.dot(first, second)) < 0.0:
         second = -second
     common = _unit(first + second)
-    guide_outside = _unit(
-        np.asarray(sleeves.template_frame.normal.as_tuple(), dtype=float)
-    )
+    guide_outside = _unit(np.asarray(sleeves.template_frame.normal.as_tuple(), dtype=float))
     if float(np.dot(common, guide_outside)) < 0.0:
         common = -common
     if float(np.dot(common, guide_outside)) < 0.25:
@@ -740,9 +711,7 @@ def _rotation_lateral_direction(
 ) -> np.ndarray:
     """返回两导管连线在公共轴法平面内的单位投影。"""
 
-    guide_line = _guide_midpoint(sleeves.sleeves[1]) - _guide_midpoint(
-        sleeves.sleeves[0]
-    )
+    guide_line = _guide_midpoint(sleeves.sleeves[1]) - _guide_midpoint(sleeves.sleeves[0])
     lateral = guide_line - float(np.dot(guide_line, positive_axis)) * positive_axis
     if float(np.linalg.norm(lateral)) <= 1e-6:
         raise GeometryError("两导管连线与公共轴近似平行，无法建立锚点旋转面")
@@ -754,9 +723,7 @@ def _u_and_back_u_directions(
     rotation_lateral: np.ndarray,
     arch_outward: np.ndarray,
     u_side_angle_degrees: float = DEFAULT_GUIDE_ANCHOR_U_SIDE_RAY_ANGLE_DEGREES,
-    back_u_side_angle_degrees: float = (
-        DEFAULT_GUIDE_ANCHOR_BACK_U_SIDE_RAY_ANGLE_DEGREES
-    ),
+    back_u_side_angle_degrees: float = (DEFAULT_GUIDE_ANCHOR_BACK_U_SIDE_RAY_ANGLE_DEGREES),
 ) -> tuple[np.ndarray, np.ndarray]:
     """按牙位局部外向语义返回病例配置的 U 侧与背 U 侧射线。"""
 
@@ -799,9 +766,7 @@ def _side_rotation_direction(
     back_u_lateral = rotation_lateral if alignment > 0.0 else -rotation_lateral
     side_lateral = -back_u_lateral if u_side else back_u_lateral
     angle = np.deg2rad(angle_degrees)
-    return _unit(
-        np.cos(angle) * positive_axis + np.sin(angle) * side_lateral
-    )
+    return _unit(np.cos(angle) * positive_axis + np.sin(angle) * side_lateral)
 
 
 def _ray_outer_exit_anchor(
@@ -829,10 +794,7 @@ def _ray_outer_exit_anchor(
     )
     clusters: list[list[tuple[float, np.ndarray, int]]] = []
     for hit in hits:
-        if (
-            not clusters
-            or hit[0] - clusters[-1][-1][0] > RAY_DUPLICATE_HIT_TOLERANCE_MM
-        ):
+        if not clusters or hit[0] - clusters[-1][-1][0] > RAY_DUPLICATE_HIT_TOLERANCE_MM:
             clusters.append([hit])
         else:
             clusters[-1].append(hit)
@@ -841,8 +803,7 @@ def _ray_outer_exit_anchor(
             allowed_hits = tuple(
                 hit
                 for hit in cluster
-                if 0 <= hit[2] < len(allowed_face_mask)
-                and bool(allowed_face_mask[hit[2]])
+                if 0 <= hit[2] < len(allowed_face_mask) and bool(allowed_face_mask[hit[2]])
             )
             for _, point, face_index in allowed_hits:
                 normal = _unit(np.asarray(mesh.face_normals[face_index], dtype=float))
@@ -896,22 +857,17 @@ def select_tooth_section_u_side_ray_anchors(
         _, _, arch_outward, tooth_highest_point = geometry
         ray_origin = tooth_highest_point - ANCHOR_AXIS_DROP_MM * positive_axis
         station_angle_degrees = (
-            angle_degrees
-            if station.ray_angle_degrees is None
-            else station.ray_angle_degrees
+            angle_degrees if station.ray_angle_degrees is None else station.ray_angle_degrees
         )
         try:
-            reference_tangent, reference_fdis = (
-                _covered_neighbour_reference_tangent(
-                    station,
-                    positions,
-                    teeth.fdi_order,
-                    teeth.missing_teeth,
-                )
+            reference_tangent, reference_fdis = _covered_neighbour_reference_tangent(
+                station,
+                positions,
+                teeth.fdi_order,
+                teeth.missing_teeth,
             )
             plane_normal = _unit(
-                reference_tangent
-                - float(np.dot(reference_tangent, positive_axis)) * positive_axis
+                reference_tangent - float(np.dot(reference_tangent, positive_axis)) * positive_axis
             )
             local_lateral = _unit(np.cross(plane_normal, positive_axis))
             direction = _side_rotation_direction(
@@ -989,8 +945,7 @@ def select_tooth_section_local_anchor_pairs(
                 teeth.missing_teeth,
             )
             plane_normal = _unit(
-                reference_tangent
-                - float(np.dot(reference_tangent, positive_axis)) * positive_axis
+                reference_tangent - float(np.dot(reference_tangent, positive_axis)) * positive_axis
             )
             local_lateral = _unit(np.cross(plane_normal, positive_axis))
             u_direction = _side_rotation_direction(
@@ -1073,8 +1028,7 @@ def select_local_independent_guide_anchors(
                 teeth.missing_teeth,
             )
             plane_normal = _unit(
-                reference_tangent
-                - float(np.dot(reference_tangent, positive_axis)) * positive_axis
+                reference_tangent - float(np.dot(reference_tangent, positive_axis)) * positive_axis
             )
             local_lateral = _unit(np.cross(plane_normal, positive_axis))
             direction = _side_rotation_direction(
@@ -1259,10 +1213,7 @@ def select_tooth_section_anchor_pairs(
                 _vec3(rotation_normal),
                 _vec3(lateral),
                 (_vec3(first_point), _vec3(ray_origin), _vec3(second_point)),
-                tuple(
-                    tuple(_vec3(point) for point in support)
-                    for support in support_trajectories
-                ),
+                tuple(tuple(_vec3(point) for point in support) for support in support_trajectories),
                 first,
                 second,
                 ray_angles,
@@ -1370,8 +1321,7 @@ def select_tooth_section_anchor_candidates(
             accepted_outward_coordinates.append(outward_coordinate)
         if not candidates:
             raise GeometryError(
-                f"牙位站位 {station.fdis} 的 U 侧外表面轨迹没有通过"
-                "补丁、厚度和净距检查的单锚点"
+                f"牙位站位 {station.fdis} 的 U 侧外表面轨迹没有通过补丁、厚度和净距检查的单锚点"
             )
         results.append(
             ToothSectionAnchorCandidateSet(

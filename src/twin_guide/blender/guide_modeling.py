@@ -40,6 +40,7 @@ from twin_guide.blender.scene import duplicate_mesh_object, remove_object
 from twin_guide.blender.sleeve_reconstruction import create_closed_sleeve_object
 from twin_guide.blender.stl_io import (
     export_stl_mesh,
+    export_stl_meshes,
     import_polygon_mesh,
     import_stl_mesh,
 )
@@ -1320,6 +1321,16 @@ def build_guide_from_links(
         ),
         encoding="utf-8",
     )
+    if preview:
+        # UI 已用控件实时表达导柱参数；「更新预览」只需快速
+        # 检查各实体的新位置和形态。最后一次体素融合、通道复切和
+        # 手机避让保留给「确认导出并检验」，避免每次拖动都等待数分钟。
+        model_path = output_directory / "twin_guide.stl"
+        export_stl_meshes(
+            model_path,
+            (cut_template_mesh, *accessory_meshes, *link_meshes, *sleeve_meshes),
+        )
+        return BuildArtifacts(model_path, ())
     if not preview:
         process_image_paths = _render_process_images(
             output_directory,
@@ -1394,12 +1405,13 @@ def build_guide_from_links(
     for avoidance in handpiece_avoidance or ():
         handpiece_cutter = import_polygon_mesh(
             avoidance.envelope_mesh_path,
-            f"handpiece_{avoidance.avoidance_id}_current_depth_lr_sweep_cutter",
+            f"handpiece_{avoidance.avoidance_id}_axial_rotation_sweep_cutter",
         )
         final_mesh = apply_manifold3d_differences(
             final_mesh,
             (handpiece_cutter,),
-            cutter_clearance_mm=avoidance.extra_clearance_mm,
+            cutter_clearance_mm=avoidance.effective_clearance_mm,
+            conservative_clearance_kernel=True,
             simplify_tolerance_mm=0.0,
             validate_inputs=not preview,
             validate_result=not preview,

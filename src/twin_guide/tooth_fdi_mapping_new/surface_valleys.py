@@ -6,7 +6,6 @@ from dataclasses import dataclass
 
 import numpy as np
 
-
 EPS = 1.0e-12
 
 
@@ -25,11 +24,13 @@ class SurfaceValleyEvidence:
 def _unique_edges(faces: np.ndarray) -> np.ndarray:
     """算法说明。"""
     triangles = np.asarray(faces, dtype=np.int64)
-    edges = np.vstack([
-        triangles[:, (0, 1)],
-        triangles[:, (1, 2)],
-        triangles[:, (2, 0)],
-    ])
+    edges = np.vstack(
+        [
+            triangles[:, (0, 1)],
+            triangles[:, (1, 2)],
+            triangles[:, (2, 0)],
+        ]
+    )
     edges = np.sort(edges, axis=1)
     return np.unique(edges, axis=0)
 
@@ -55,12 +56,12 @@ def estimate_minimum_curvature(
 ) -> tuple[np.ndarray, np.ndarray]:
     """算法说明。
 
-Estimate signed minimum principal curvature from normal variation.
+    Estimate signed minimum principal curvature from normal variation.
 
-    A local symmetric shape operator is fitted at every vertex from all
-    incident edge tangents and normal differences.  With consistently outward
-    normals, convex crown domes are positive and concave dental valleys are
-    negative, matching the convention used by Yuan et al.
+        A local symmetric shape operator is fitted at every vertex from all
+        incident edge tangents and normal differences.  With consistently outward
+        normals, convex crown domes are positive and concave dental valleys are
+        negative, matching the convention used by Yuan et al.
     """
 
     points = np.asarray(vertices, dtype=float)
@@ -103,10 +104,12 @@ Estimate signed minimum principal curvature from normal variation.
     s22 = (-b21 * a12 + b22 * a11) / safe_determinant
     off_diagonal = 0.5 * (s12 + s21)
     half_trace = 0.5 * (s11 + s22)
-    radius = np.sqrt(np.maximum(
-        0.25 * (s11 - s22) ** 2 + off_diagonal**2,
-        0.0,
-    ))
+    radius = np.sqrt(
+        np.maximum(
+            0.25 * (s11 - s22) ** 2 + off_diagonal**2,
+            0.0,
+        )
+    )
     minimum = half_trace - radius
     minimum[~valid] = 0.0
     minimum[~np.isfinite(minimum)] = 0.0
@@ -125,13 +128,10 @@ def _smooth_on_mesh(
     first = edges[:, 0]
     second = edges[:, 1]
     count = len(output)
-    degree = np.bincount(
-        np.concatenate([first, second]), minlength=count
-    ).astype(float)
+    degree = np.bincount(np.concatenate([first, second]), minlength=count).astype(float)
     for _ in range(iterations):
-        neighbor_sum = (
-            np.bincount(first, weights=output[second], minlength=count)
-            + np.bincount(second, weights=output[first], minlength=count)
+        neighbor_sum = np.bincount(first, weights=output[second], minlength=count) + np.bincount(
+            second, weights=output[first], minlength=count
         )
         output = (2.0 * output + neighbor_sum) / np.maximum(2.0 + degree, 1.0)
     return output
@@ -162,16 +162,12 @@ def build_surface_valley_evidence(
 
     if normalization_scale_mm <= 0.0:
         raise ValueError("normalization_scale_mm must be positive")
-    scales = tuple(sorted(set(int(value) for value in smoothing_iterations)))
+    scales = tuple(sorted({int(value) for value in smoothing_iterations}))
     if not scales or scales[0] < 0:
         raise ValueError("smoothing_iterations must contain non-negative integers")
-    minimum, valid = estimate_minimum_curvature(
-        vertices, faces, vertex_normals
-    )
+    minimum, valid = estimate_minimum_curvature(vertices, faces, vertex_normals)
     edges = _unique_edges(faces)
-    smoothed = np.stack([
-        _smooth_on_mesh(minimum, edges, iterations) for iterations in scales
-    ])
+    smoothed = np.stack([_smooth_on_mesh(minimum, edges, iterations) for iterations in scales])
     stable_minimum = np.median(smoothed, axis=0)
     strength = np.maximum(-stable_minimum * normalization_scale_mm, 0.0)
     score = _robust_valley_score(strength, valid)

@@ -85,9 +85,7 @@ def _plan_operation_window(
         raise ValueError(f"种植位 {site_index} 的操作窗范围内没有导板表面采样点")
     depth_coordinates = tuple((sample.position - center).dot(normal) for sample in local_samples)
     guide_depth_coordinates = tuple(
-        (
-            guide.center + guide.axis * axial_coordinate - center
-        ).dot(normal)
+        (guide.center + guide.axis * axial_coordinate - center).dot(normal)
         for guide in guides
         for axial_coordinate in (guide.axial_min_mm, guide.axial_max_mm)
     )

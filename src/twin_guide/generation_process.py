@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import replace
 from time import perf_counter
 
-from twin_guide.case_analysis import analyze_case
 from twin_guide.clearance_adjustment import adjust_clearance
 from twin_guide.config import CaseConfig, Jaw, PressBeamMode
 from twin_guide.geometry import Vec3
@@ -218,6 +217,8 @@ def run_generation_process(
     timings: dict[str, float] = {}
 
     started = perf_counter()
+    from twin_guide.case_analysis import analyze_case
+
     case = analyze_case(config, force_rebuild=force_rebuild)
     context.case = case
     context.sleeve_generation = SleeveGenerationResult(
@@ -293,12 +294,7 @@ def run_generation_process(
                 context.window_cutouts,
                 context.tooth_identification,
             ),
-            TemplatePointSelectionConfig(
-                template_clearance_mm=(
-                    config.geometry.connector_radius_mm + config.geometry.fusion_voxel_size_mm
-                ),
-                connector_radius_mm=config.geometry.connector_radius_mm,
-            ),
+            TemplatePointSelectionConfig.from_geometry(config.geometry),
         )
     context.terminal_distal_common_node = (
         context.template_link_points.template_points.terminal_distal_common_node
@@ -349,15 +345,7 @@ def run_generation_process(
     started = perf_counter()
     context.point_linking = link_selected_points(
         context.template_link_points,
-        PointLinkingConfig(
-            radius_mm=config.geometry.connector_radius_mm,
-            include_lower_main=config.geometry.connection_blocks.lower_main,
-            include_upper_main=config.geometry.connection_blocks.upper_main,
-            include_press_beam=config.geometry.connection_blocks.press_beam,
-            stop_platform_front_avoidance_mm=(config.geometry.sleeve_stop_front_avoidance_mm),
-            stop_platform_overrides=config.editor_overrides.connector_avoidance,
-            connector_guide_endpoint=config.geometry.connector_guide_endpoint,
-        ),
+        PointLinkingConfig.from_geometry(config.geometry, config.editor_overrides),
         context.press_beam_points,
         context.guide_component_bridge,
         context.guide_terminal_u_extension,

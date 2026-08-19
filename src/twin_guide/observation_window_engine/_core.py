@@ -15,6 +15,7 @@ import numpy as np
 import trimesh
 from manifold3d import Manifold, Mesh
 
+from twin_guide.config import ObservationSolverParameters
 from twin_guide.tooth_identification import stage_2_mapping_payload
 from twin_guide.tooth_mapping.controlled_mesh_repair import (
     ControlledVolumeRepairError,
@@ -45,6 +46,37 @@ class ObservationWindowRequest:
     residual_volume_tolerance_mm3: float = 1e-4
     volume_identity_tolerance_mm3: float = 5e-2
     volume_identity_relative_tolerance: float = 1e-4
+
+    @classmethod
+    def from_solver(
+        cls,
+        *,
+        case: Path,
+        mapping_report: Path,
+        source: Path,
+        output_dir: Path,
+        solver: ObservationSolverParameters,
+    ) -> ObservationWindowRequest:
+        """由稳定配置构建引擎请求，避免入口层重复字段列表。"""
+
+        return cls(
+            case=case,
+            mapping_report=mapping_report,
+            source=source,
+            output_dir=output_dir,
+            side_extension_mm=solver.side_extension_mm,
+            wall_overcut_mm=solver.wall_overcut_mm,
+            following_wall_safety_mm=solver.following_wall_safety_mm,
+            axis_core_overcut_mm=solver.axis_core_overcut_mm,
+            minimum_axis_visibility_row_fraction=(solver.minimum_axis_visibility_row_fraction),
+            minimum_axis_clear_corridor_fraction=(solver.minimum_axis_clear_corridor_fraction),
+            union_batch_size=solver.union_batch_size,
+            fragment_volume_tolerance_mm3=solver.fragment_volume_tolerance_mm3,
+            minimum_removed_volume_mm3=solver.minimum_removed_volume_mm3,
+            residual_volume_tolerance_mm3=solver.residual_volume_tolerance_mm3,
+            volume_identity_tolerance_mm3=solver.volume_identity_tolerance_mm3,
+            volume_identity_relative_tolerance=solver.volume_identity_relative_tolerance,
+        )
 
 
 def _preview_window_fingerprint(
@@ -133,7 +165,7 @@ def union_batched(meshes: list[trimesh.Trimesh], batch_size: int) -> trimesh.Tri
     while len(current) > 1:
         next_level = []
         for start in range(0, len(current), batch_size):
-            batch = current[start:start + batch_size]
+            batch = current[start : start + batch_size]
             next_level.append(batch[0] if len(batch) == 1 else boolean("union", batch))
         current = next_level
     return current[0]
@@ -147,10 +179,12 @@ def regularize_manifold(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     topology and later welds vertices by coordinate.
     """
 
-    solid = Manifold(mesh=Mesh(
-        vert_properties=np.asarray(mesh.vertices, dtype=np.float32),
-        tri_verts=np.asarray(mesh.faces, dtype=np.uint32),
-    ))
+    solid = Manifold(
+        mesh=Mesh(
+            vert_properties=np.asarray(mesh.vertices, dtype=np.float32),
+            tri_verts=np.asarray(mesh.faces, dtype=np.uint32),
+        )
+    )
     if str(solid.status()) != "Error.NoError":
         raise RuntimeError(f"Manifold regularization failed: {solid.status()}")
     indexed = solid.to_mesh()
@@ -243,10 +277,9 @@ def axis_sweep_axis_points(
     axis_end = np.asarray(definition["axis_end_global_mm"], dtype=float)
     row_count = int(definition["axis_section_count"])
     fractions = np.linspace(0.0, 1.0, row_count)
-    return np.asarray([
-        (1.0 - fraction) * axis_start + fraction * axis_end
-        for fraction in fractions
-    ])
+    return np.asarray(
+        [(1.0 - fraction) * axis_start + fraction * axis_end for fraction in fractions]
+    )
 
 
 def _structured_sweep_volume(
@@ -349,12 +382,12 @@ def build_axis_sweep_cutter(
     axis_start = np.asarray(definition["axis_start_global_mm"], dtype=float)
     axis_end = np.asarray(definition["axis_end_global_mm"], dtype=float)
     axis_direction = unit(axis_end - axis_start)
-    zero_direction = unit(np.asarray(
-        definition["zero_degree_occlusal_direction_global"], dtype=float
-    ))
-    exterior_direction = unit(np.asarray(
-        definition["positive_90_degree_exterior_direction_global"], dtype=float
-    ))
+    zero_direction = unit(
+        np.asarray(definition["zero_degree_occlusal_direction_global"], dtype=float)
+    )
+    exterior_direction = unit(
+        np.asarray(definition["positive_90_degree_exterior_direction_global"], dtype=float)
+    )
     row_count = int(definition["axis_section_count"])
     angle_count = int(definition["angle_section_count"])
     angles_deg = np.linspace(
@@ -363,10 +396,12 @@ def build_axis_sweep_cutter(
         angle_count,
     )
     angles = np.deg2rad(angles_deg)
-    directions = np.asarray([
-        unit(math.cos(angle) * zero_direction + math.sin(angle) * exterior_direction)
-        for angle in angles
-    ])
+    directions = np.asarray(
+        [
+            unit(math.cos(angle) * zero_direction + math.sin(angle) * exterior_direction)
+            for angle in angles
+        ]
+    )
     axis_points = axis_sweep_axis_points(definition)
     inside_axis = np.asarray(source.contains(axis_points), dtype=bool)
     radial_directions = np.tile(directions, (row_count, 1))
@@ -390,9 +425,7 @@ def build_axis_sweep_cutter(
     grouped: list[list[float]] = [[] for _ in range(len(origins))]
     for location, ray_index in zip(locations, ray_indices, strict=False):
         index = int(ray_index)
-        inward_distance = float(np.dot(
-            location - origins[index], ray_directions[index]
-        ))
+        inward_distance = float(np.dot(location - origins[index], ray_directions[index]))
         radial_distance = ray_span_mm - inward_distance
         if radial_distance > 1e-5:
             grouped[index].append(radial_distance)
@@ -416,17 +449,14 @@ def build_axis_sweep_cutter(
         exterior_wall_entry = unique[-2] if len(unique) >= 2 else 0.0
         radii[row, column] = exterior_boundary + radial_overcut_mm
         applied_overcut[row, column] = radial_overcut_mm
-        first_wall_thickness[row, column] = (
-            exterior_boundary - exterior_wall_entry
-        )
+        first_wall_thickness[row, column] = exterior_boundary - exterior_wall_entry
 
     valid = np.isfinite(radii)
     valid_count = int(np.count_nonzero(valid))
     valid_fraction = float(valid_count / radii.size)
     row_has_a_wall_hit = np.any(valid, axis=1)
     dense_wall_coverage = bool(
-        valid_fraction >= minimum_valid_fraction
-        and np.all(row_has_a_wall_hit)
+        valid_fraction >= minimum_valid_fraction and np.all(row_has_a_wall_hit)
     )
     # A buccal-only or terminally clipped guide legitimately has no material
     # along some requested rays.  Permit interpolation only when the rows that
@@ -449,8 +479,7 @@ def build_axis_sweep_cutter(
         and np.all(valid[supported_rows, -2])
     )
     terminally_clipped_wall_coverage = bool(
-        supported_rows_are_contiguous
-        and supported_exterior_anchors_complete
+        supported_rows_are_contiguous and supported_exterior_anchors_complete
     )
     wall_intersection_support_complete = bool(
         dense_wall_coverage or terminally_clipped_wall_coverage
@@ -483,9 +512,7 @@ def build_axis_sweep_cutter(
     )
     row_minimum_depths = np.min(required_depths, axis=1)
     finite_row_depths = np.sort(row_minimum_depths[np.isfinite(row_minimum_depths)])
-    required_visible_rows = math.ceil(
-        minimum_axis_visibility_row_fraction * row_count - EPS
-    )
+    required_visible_rows = math.ceil(minimum_axis_visibility_row_fraction * row_count - EPS)
     if len(finite_row_depths) < required_visible_rows:
         raise RuntimeError(
             "观察窗有效牙面不足："
@@ -502,76 +529,80 @@ def build_axis_sweep_cutter(
             f"需要 {calculated_core_depth_mm:.2f} mm，"
             f"允许不超过 {maximum_inner_depth_mm:.2f} mm"
         )
-    inner = (
-        axis_points[:, None, :]
-        - calculated_core_depth_mm * directions[None, ::-1, :]
-    )
+    inner = axis_points[:, None, :] - calculated_core_depth_mm * directions[None, ::-1, :]
 
     start_shift = -side_extension_mm * axis_direction
     end_shift = side_extension_mm * axis_direction
-    outer = np.concatenate([
-        outer[:1] + start_shift,
-        outer,
-        outer[-1:] + end_shift,
-    ], axis=0)
-    inner = np.concatenate([
-        inner[:1] + start_shift,
-        inner,
-        inner[-1:] + end_shift,
-    ], axis=0)
+    outer = np.concatenate(
+        [
+            outer[:1] + start_shift,
+            outer,
+            outer[-1:] + end_shift,
+        ],
+        axis=0,
+    )
+    inner = np.concatenate(
+        [
+            inner[:1] + start_shift,
+            inner,
+            inner[-1:] + end_shift,
+        ],
+        axis=0,
+    )
     cutter = _structured_sweep_volume(outer, inner)
     valid_thickness = first_wall_thickness[np.isfinite(first_wall_thickness)]
     valid_overcut = applied_overcut[np.isfinite(applied_overcut)]
-    return cutter, outer, {
-        "ray_sample_count": int(radii.size),
-        "valid_ray_sample_count": valid_count,
-        "filled_ray_sample_count": int(radii.size - valid_count),
-        "valid_ray_fraction": valid_fraction,
-        "wall_intersection_support_complete": wall_intersection_support_complete,
-        "wall_intersection_coverage_mode": (
-            "dense"
-            if dense_wall_coverage
-            else (
-                "terminal_clip_exterior_anchor_interpolation"
-                if len(supported_rows) < row_count
-                else "exterior_anchor_interpolation"
-            )
-        ),
-        "exterior_anchor_row_count": int(np.count_nonzero(
-            valid[:, -1] & valid[:, -2]
-        )),
-        "supported_axis_row_count": len(supported_rows),
-        "terminal_uncovered_axis_row_count": int(row_count - len(supported_rows)),
-        "supported_axis_rows_are_contiguous": supported_rows_are_contiguous,
-        "axis_origin_inside_guide_fraction": float(np.mean(inside_axis)),
-        "external_ray_origin_distance_mm": ray_span_mm,
-        "multi_boundary_ray_count": int(multi_boundary_ray_count),
-        "measured_wall_thickness_min_mm": float(np.min(valid_thickness)),
-        "measured_wall_thickness_median_mm": float(np.median(valid_thickness)),
-        "measured_wall_thickness_max_mm": float(np.max(valid_thickness)),
-        "applied_wall_thickness_min_mm": float(np.min(filled_radii)),
-        "applied_wall_thickness_max_mm": float(np.max(filled_radii)),
-        "following_wall_ray_count": 0,
-        "nearest_following_wall_clearance_mm": -1.0,
-        "requested_wall_overcut_mm": float(radial_overcut_mm),
-        "applied_wall_overcut_min_mm": float(np.min(valid_overcut)),
-        "applied_wall_overcut_max_mm": float(np.max(valid_overcut)),
-        "curtailed_overcut_ray_count": 0,
-        "minimum_clearance_after_overcut_mm": -1.0,
-        "axis_core_overcut_mm": float(axis_core_overcut_mm),
-        "dental_guided_inner_boundary": True,
-        "dental_guided_ray_count": int(np.count_nonzero(dental_hits)),
-        "dental_guided_ray_fraction": float(np.mean(dental_hits)),
-        "dental_surface_penetration_mm": dental_penetration_mm,
-        "calculated_axis_core_depth_mm": calculated_core_depth_mm,
-        "maximum_inner_boundary_depth_mm": maximum_inner_depth_mm,
-        "required_visible_axis_row_count": required_visible_rows,
-        "available_dental_axis_row_count": len(finite_row_depths),
-        "minimum_required_core_depth_by_axis_row_mm": [
-            None if not math.isfinite(value) else float(value)
-            for value in row_minimum_depths
-        ],
-    }
+    return (
+        cutter,
+        outer,
+        {
+            "ray_sample_count": int(radii.size),
+            "valid_ray_sample_count": valid_count,
+            "filled_ray_sample_count": int(radii.size - valid_count),
+            "valid_ray_fraction": valid_fraction,
+            "wall_intersection_support_complete": wall_intersection_support_complete,
+            "wall_intersection_coverage_mode": (
+                "dense"
+                if dense_wall_coverage
+                else (
+                    "terminal_clip_exterior_anchor_interpolation"
+                    if len(supported_rows) < row_count
+                    else "exterior_anchor_interpolation"
+                )
+            ),
+            "exterior_anchor_row_count": int(np.count_nonzero(valid[:, -1] & valid[:, -2])),
+            "supported_axis_row_count": len(supported_rows),
+            "terminal_uncovered_axis_row_count": int(row_count - len(supported_rows)),
+            "supported_axis_rows_are_contiguous": supported_rows_are_contiguous,
+            "axis_origin_inside_guide_fraction": float(np.mean(inside_axis)),
+            "external_ray_origin_distance_mm": ray_span_mm,
+            "multi_boundary_ray_count": int(multi_boundary_ray_count),
+            "measured_wall_thickness_min_mm": float(np.min(valid_thickness)),
+            "measured_wall_thickness_median_mm": float(np.median(valid_thickness)),
+            "measured_wall_thickness_max_mm": float(np.max(valid_thickness)),
+            "applied_wall_thickness_min_mm": float(np.min(filled_radii)),
+            "applied_wall_thickness_max_mm": float(np.max(filled_radii)),
+            "following_wall_ray_count": 0,
+            "nearest_following_wall_clearance_mm": -1.0,
+            "requested_wall_overcut_mm": float(radial_overcut_mm),
+            "applied_wall_overcut_min_mm": float(np.min(valid_overcut)),
+            "applied_wall_overcut_max_mm": float(np.max(valid_overcut)),
+            "curtailed_overcut_ray_count": 0,
+            "minimum_clearance_after_overcut_mm": -1.0,
+            "axis_core_overcut_mm": float(axis_core_overcut_mm),
+            "dental_guided_inner_boundary": True,
+            "dental_guided_ray_count": int(np.count_nonzero(dental_hits)),
+            "dental_guided_ray_fraction": float(np.mean(dental_hits)),
+            "dental_surface_penetration_mm": dental_penetration_mm,
+            "calculated_axis_core_depth_mm": calculated_core_depth_mm,
+            "maximum_inner_boundary_depth_mm": maximum_inner_depth_mm,
+            "required_visible_axis_row_count": required_visible_rows,
+            "available_dental_axis_row_count": len(finite_row_depths),
+            "minimum_required_core_depth_by_axis_row_mm": [
+                None if not math.isfinite(value) else float(value) for value in row_minimum_depths
+            ],
+        },
+    )
 
 
 def build_preview(
@@ -582,9 +613,7 @@ def build_preview(
     """仅构建变化的观察窗 cutter，不执行导板差集和临床 QA。"""
 
     mapping_path = args.mapping_report.resolve()
-    mapping = stage_2_mapping_payload(
-        json.loads(mapping_path.read_text(encoding="utf-8"))
-    )
+    mapping = stage_2_mapping_payload(json.loads(mapping_path.read_text(encoding="utf-8")))
     if mapping.get("status") != "tooth_guide_mapping_complete" or not all(
         mapping.get("QA", {}).values()
     ):
@@ -604,13 +633,9 @@ def build_preview(
     dental = None
     for window in windows:
         definition = window.get("axis_sweep")
-        if window.get("opening_geometry") != "axis_sweep" or not isinstance(
-            definition, dict
-        ):
+        if window.get("opening_geometry") != "axis_sweep" or not isinstance(definition, dict):
             raise RuntimeError(f"window {window['id']} has no axis-sweep definition")
-        digest = _preview_window_fingerprint(
-            source_path, dental_path, window, args
-        )
+        digest = _preview_window_fingerprint(source_path, dental_path, window, args)
         cache_path = window_cache / f"{digest}.npz"
         cutter = None
         if cache_path.is_file() and not force_rebuild:
@@ -636,14 +661,16 @@ def build_preview(
             _write_preview_mesh_cache(cutter, cache_path)
         cutters.append(cutter)
         digests.append(digest)
-        window_reports.append({
-            "id": window["id"],
-            "opening_geometry": "axis_sweep",
-            "start_fdi": window["start_fdi"],
-            "end_fdi": window["end_fdi"],
-            "height_mm": window["height_mm"],
-            "axis_sweep": definition,
-        })
+        window_reports.append(
+            {
+                "id": window["id"],
+                "opening_geometry": "axis_sweep",
+                "start_fdi": window["start_fdi"],
+                "end_fdi": window["end_fdi"],
+                "height_mm": window["height_mm"],
+                "axis_sweep": definition,
+            }
+        )
 
     combined_digest = hashlib.sha256("|".join(digests).encode()).hexdigest()
     combined_dir = output_dir / "preview-combined-cache" / combined_digest
@@ -670,9 +697,7 @@ def build_preview(
         },
     }
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     return report
 
 
@@ -702,47 +727,42 @@ def axis_sweep_tooth_visibility(
 ) -> dict[str, float | int]:
     """内部算法说明。\n\nCheck that exterior sight rays reach dental before the cut guide."""
 
-    zero_direction = unit(np.asarray(
-        definition["zero_degree_occlusal_direction_global"], dtype=float
-    ))
-    exterior_direction = unit(np.asarray(
-        definition["positive_90_degree_exterior_direction_global"], dtype=float
-    ))
+    zero_direction = unit(
+        np.asarray(definition["zero_degree_occlusal_direction_global"], dtype=float)
+    )
+    exterior_direction = unit(
+        np.asarray(definition["positive_90_degree_exterior_direction_global"], dtype=float)
+    )
     angle_count = int(definition["angle_section_count"])
-    angles = np.deg2rad(np.linspace(
-        float(definition["minimum_angle_deg"]),
-        float(definition["maximum_angle_deg"]),
-        angle_count,
-    ))
-    radial_directions = np.asarray([
-        unit(math.cos(angle) * zero_direction + math.sin(angle) * exterior_direction)
-        for angle in angles
-    ])
+    angles = np.deg2rad(
+        np.linspace(
+            float(definition["minimum_angle_deg"]),
+            float(definition["maximum_angle_deg"]),
+            angle_count,
+        )
+    )
+    radial_directions = np.asarray(
+        [
+            unit(math.cos(angle) * zero_direction + math.sin(angle) * exterior_direction)
+            for angle in angles
+        ]
+    )
     # The first and last surface rows are Boolean end extensions.  Visibility is
     # assessed only across the semantic FDI-to-FDI axis interval.
     surface = np.asarray(outer_surface[1:-1], dtype=float)
     directions = -np.tile(radial_directions, (len(surface), 1))
-    origins = (
-        surface + 0.5 * radial_directions[None, :, :]
-    ).reshape((-1, 3))
+    origins = (surface + 0.5 * radial_directions[None, :, :]).reshape((-1, 3))
     guide_distance = _nearest_ray_hit_distances(result_guide, origins, directions)
     dental_distance = _nearest_ray_hit_distances(dental, origins, directions)
     axis_points = axis_sweep_axis_points(definition)
     if len(axis_points) != len(surface):
         raise RuntimeError("axis-sweep visibility rows do not match semantic axis rows")
     repeated_axis = np.repeat(axis_points, angle_count, axis=0)
-    corridor_length = np.einsum(
-        "ij,ij->i", origins - repeated_axis, -directions
-    )
-    corridor_clear = (
-        ~np.isfinite(guide_distance)
-        | (guide_distance + 0.05 >= corridor_length)
-    )
+    corridor_length = np.einsum("ij,ij->i", origins - repeated_axis, -directions)
+    corridor_clear = ~np.isfinite(guide_distance) | (guide_distance + 0.05 >= corridor_length)
     corridor_clear_grid = corridor_clear.reshape((len(surface), angle_count))
     clear_fraction_by_row = np.mean(corridor_clear_grid, axis=1)
-    visible = np.isfinite(dental_distance) & (
-        dental_distance + 0.05 < guide_distance
-    )
+    visible = np.isfinite(dental_distance) & (dental_distance + 0.05 < guide_distance)
     visible_grid = visible.reshape((len(surface), angle_count))
     visible_rows = np.any(visible_grid, axis=1)
     finite_dental = dental_distance[np.isfinite(dental_distance)]
@@ -755,17 +775,11 @@ def axis_sweep_tooth_visibility(
         "axis_rows_with_visible_dental_count": int(np.count_nonzero(visible_rows)),
         "axis_rows_with_visible_dental_fraction": float(np.mean(visible_rows)),
         "visible_dental_by_axis_row": [bool(value) for value in visible_rows],
-        "axis_rows_without_visible_dental": [
-            int(index) for index in np.flatnonzero(~visible_rows)
-        ],
+        "axis_rows_without_visible_dental": [int(index) for index in np.flatnonzero(~visible_rows)],
         "clear_axis_corridor_ray_count": int(np.count_nonzero(corridor_clear)),
         "clear_axis_corridor_ray_fraction": float(np.mean(corridor_clear)),
-        "minimum_clear_axis_corridor_fraction_per_row": float(
-            np.min(clear_fraction_by_row)
-        ),
-        "clear_axis_corridor_fraction_by_row": [
-            float(value) for value in clear_fraction_by_row
-        ],
+        "minimum_clear_axis_corridor_fraction_per_row": float(np.min(clear_fraction_by_row)),
+        "clear_axis_corridor_fraction_by_row": [float(value) for value in clear_fraction_by_row],
         "nearest_dental_hit_distance_mm": (
             float(np.min(finite_dental)) if len(finite_dental) else -1.0
         ),
@@ -784,10 +798,10 @@ def _run_once(args: ObservationWindowRequest) -> dict[str, object]:
     """内部算法说明。"""
     case_yaml = args.case.resolve()
     mapping_path = args.mapping_report.resolve()
-    mapping = stage_2_mapping_payload(
-        json.loads(mapping_path.read_text(encoding="utf-8"))
-    )
-    if mapping.get("status") != "tooth_guide_mapping_complete" or not all(mapping.get("QA", {}).values()):
+    mapping = stage_2_mapping_payload(json.loads(mapping_path.read_text(encoding="utf-8")))
+    if mapping.get("status") != "tooth_guide_mapping_complete" or not all(
+        mapping.get("QA", {}).values()
+    ):
         raise RuntimeError("tooth-guide mapping has not passed all QA gates")
     source_path = args.source.resolve()
     source = load_mesh(source_path)
@@ -812,12 +826,8 @@ def _run_once(args: ObservationWindowRequest) -> dict[str, object]:
         source_repaired_path = repaired_mesh_path
         source.export(source_repaired_path)
     repair_report = dict(repair.report)
-    repair_report["report_json"] = (
-        str(repair_report_path) if repair.report["applied"] else None
-    )
-    repair_report["repaired_mesh_ply"] = (
-        str(source_repaired_path) if source_repaired_path else None
-    )
+    repair_report["report_json"] = str(repair_report_path) if repair.report["applied"] else None
+    repair_report["repaired_mesh_ply"] = str(source_repaired_path) if source_repaired_path else None
     if repair.report["applied"]:
         repair_report_path.write_text(
             json.dumps(repair_report, ensure_ascii=False, indent=2),
@@ -836,17 +846,12 @@ def _run_once(args: ObservationWindowRequest) -> dict[str, object]:
         opening_geometry = str(window.get("opening_geometry", ""))
         if opening_geometry != "axis_sweep":
             raise RuntimeError(
-                f"window {window['id']} must use axis_sweep, got "
-                f"{opening_geometry!r}"
+                f"window {window['id']} must use axis_sweep, got {opening_geometry!r}"
             )
-        failed_indices = sorted(
-            int(item["sample_index"]) for item in window.get("failures", [])
-        )
+        failed_indices = sorted(int(item["sample_index"]) for item in window.get("failures", []))
         definition = window.get("axis_sweep")
         if not isinstance(definition, dict):
-            raise RuntimeError(
-                f"window {window['id']} has no mapped axis-sweep definition"
-            )
+            raise RuntimeError(f"window {window['id']} has no mapped axis-sweep definition")
         cutter, surface, wall_report = build_axis_sweep_cutter(
             source,
             dental,
@@ -862,21 +867,23 @@ def _run_once(args: ObservationWindowRequest) -> dict[str, object]:
         profile_point_count = int(definition["angle_section_count"])
         cutters[window["id"]] = cutter
         surfaces[window["id"]] = surface
-        window_reports.append({
-            "id": window["id"],
-            "opening_geometry": opening_geometry,
-            "start_fdi": window["start_fdi"],
-            "end_fdi": window["end_fdi"],
-            "extent_mode": window["extent_mode"],
-            "height_mm": window["height_mm"],
-            "top_open": window["top_open"],
-            "section_count": profile_count,
-            "profile_point_count": profile_point_count,
-            "guide_coverage_clipped_edge_section_count": len(failed_indices),
-            "cutter_volume_mm3": float(abs(cutter.volume)),
-            "exterior_wall_sampling": wall_report,
-            "axis_sweep": window.get("axis_sweep"),
-        })
+        window_reports.append(
+            {
+                "id": window["id"],
+                "opening_geometry": opening_geometry,
+                "start_fdi": window["start_fdi"],
+                "end_fdi": window["end_fdi"],
+                "extent_mode": window["extent_mode"],
+                "height_mm": window["height_mm"],
+                "top_open": window["top_open"],
+                "section_count": profile_count,
+                "profile_point_count": profile_point_count,
+                "guide_coverage_clipped_edge_section_count": len(failed_indices),
+                "cutter_volume_mm3": float(abs(cutter.volume)),
+                "exterior_wall_sampling": wall_report,
+                "axis_sweep": window.get("axis_sweep"),
+            }
+        )
 
     combined = retain_positive_volume_components(
         regularize_manifold(union_batched(list(cutters.values()), args.union_batch_size))
@@ -886,10 +893,20 @@ def _run_once(args: ObservationWindowRequest) -> dict[str, object]:
         raise RuntimeError("observation-window difference removed the entire guide")
     source_components = len(source.split(only_watertight=False))
     result_components = sorted(
-        result_all.split(only_watertight=False), key=lambda item: abs(float(item.volume)), reverse=True
+        result_all.split(only_watertight=False),
+        key=lambda item: abs(float(item.volume)),
+        reverse=True,
     )
-    significant = [item for item in result_components if abs(float(item.volume)) >= args.fragment_volume_tolerance_mm3]
-    discarded = [item for item in result_components if abs(float(item.volume)) < args.fragment_volume_tolerance_mm3]
+    significant = [
+        item
+        for item in result_components
+        if abs(float(item.volume)) >= args.fragment_volume_tolerance_mm3
+    ]
+    discarded = [
+        item
+        for item in result_components
+        if abs(float(item.volume)) < args.fragment_volume_tolerance_mm3
+    ]
     discarded_fragment_volume = float(sum(abs(float(item.volume)) for item in discarded))
     result = significant[0] if len(significant) == 1 else trimesh.util.concatenate(significant)
     result.remove_unreferenced_vertices()
@@ -898,9 +915,7 @@ def _run_once(args: ObservationWindowRequest) -> dict[str, object]:
     result = remove_submicron_degenerate_faces(result)
 
     visibility_reports = {}
-    for mapped_window, window_report in zip(
-        selected_windows, window_reports, strict=True
-    ):
+    for mapped_window, window_report in zip(selected_windows, window_reports, strict=True):
         visibility = axis_sweep_tooth_visibility(
             result,
             dental,
@@ -911,18 +926,14 @@ def _run_once(args: ObservationWindowRequest) -> dict[str, object]:
         window_report["tooth_visibility"] = visibility
 
     axis_clearances = {}
-    for mapped_window, window_report in zip(
-        selected_windows, window_reports, strict=True
-    ):
+    for mapped_window, window_report in zip(selected_windows, window_reports, strict=True):
         definition = mapped_window["axis_sweep"]
         axis_points = axis_sweep_axis_points(definition)
         dense_axis = []
         dense_row_coordinates = []
         samples_per_interval = 10
         for row, (start, end) in enumerate(itertools.pairwise(axis_points)):
-            for fraction in np.linspace(
-                0.0, 1.0, samples_per_interval, endpoint=False
-            ):
+            for fraction in np.linspace(0.0, 1.0, samples_per_interval, endpoint=False):
                 dense_axis.append((1.0 - fraction) * start + fraction * end)
                 dense_row_coordinates.append(row + float(fraction))
         dense_axis.append(axis_points[-1])
@@ -932,21 +943,23 @@ def _run_once(args: ObservationWindowRequest) -> dict[str, object]:
         minimum_clearance = float(np.min(distances))
         clearance_threshold = max(0.15, args.axis_core_overcut_mm - 0.15)
         failed_dense = np.flatnonzero(distances < clearance_threshold)
-        failed_rows = sorted({
-            int(np.clip(
-                round(dense_row_coordinates[int(index)]),
-                0,
-                len(axis_points) - 1,
-            ))
-            for index in failed_dense
-        })
+        failed_rows = sorted(
+            {
+                int(
+                    np.clip(
+                        round(dense_row_coordinates[int(index)]),
+                        0,
+                        len(axis_points) - 1,
+                    )
+                )
+                for index in failed_dense
+            }
+        )
         _, row_clearances, _ = result.nearest.on_surface(axis_points)
         axis_clearances[window_report["id"]] = minimum_clearance
         window_report["minimum_removed_axis_clearance_mm"] = minimum_clearance
         window_report["axis_clearance_threshold_mm"] = float(clearance_threshold)
-        window_report["axis_clearance_by_row_mm"] = [
-            float(value) for value in row_clearances
-        ]
+        window_report["axis_clearance_by_row_mm"] = [float(value) for value in row_clearances]
         window_report["axis_rows_below_clearance_threshold"] = failed_rows
 
     residual = boolean("intersection", [result, combined])
@@ -959,22 +972,24 @@ def _run_once(args: ObservationWindowRequest) -> dict[str, object]:
     identity_error = abs(boolean_removed_volume - intersection_volume)
     effective_identity_tolerance = max(
         args.volume_identity_tolerance_mm3,
-        args.volume_identity_relative_tolerance
-        * max(intersection_volume, 1.0),
+        args.volume_identity_relative_tolerance * max(intersection_volume, 1.0),
     )
     qa = {
-        "all_configured_windows_have_complete_profiles": all(item["section_count"] >= 2 for item in window_reports),
+        "all_configured_windows_have_complete_profiles": all(
+            item["section_count"] >= 2 for item in window_reports
+        ),
         "exterior_wall_raycast_succeeded": all(
-            bool(item["exterior_wall_sampling"].get(
-                "wall_intersection_support_complete",
-                item["exterior_wall_sampling"]["valid_ray_fraction"] >= 0.75,
-            ))
+            bool(
+                item["exterior_wall_sampling"].get(
+                    "wall_intersection_support_complete",
+                    item["exterior_wall_sampling"]["valid_ray_fraction"] >= 0.75,
+                )
+            )
             for item in window_reports
         ),
         "radial_overcut_preserves_following_wall_clearance": all(
             item["exterior_wall_sampling"]["following_wall_ray_count"] == 0
-            or item["exterior_wall_sampling"]["minimum_clearance_after_overcut_mm"]
-            >= 0.1 - 1e-6
+            or item["exterior_wall_sampling"]["minimum_clearance_after_overcut_mm"] >= 0.1 - 1e-6
             for item in window_reports
         ),
         "axis_sweep_semantic_axis_is_fully_open": all(
@@ -995,8 +1010,7 @@ def _run_once(args: ObservationWindowRequest) -> dict[str, object]:
         "result_is_closed_volume": bool(result.is_volume),
         "result_component_count_preserved": len(significant) == source_components,
         "discarded_components_are_sub_tolerance_fragments": all(
-            abs(float(item.volume)) < args.fragment_volume_tolerance_mm3
-            for item in discarded
+            abs(float(item.volume)) < args.fragment_volume_tolerance_mm3 for item in discarded
         ),
         "window_cut_removed_material": removed_volume >= args.minimum_removed_volume_mm3,
         "no_residual_cutter_overlap": residual_volume <= args.residual_volume_tolerance_mm3,
@@ -1031,9 +1045,7 @@ def _run_once(args: ObservationWindowRequest) -> dict[str, object]:
             "minimum_axis_clear_corridor_fraction": float(
                 args.minimum_axis_clear_corridor_fraction
             ),
-            "volume_identity_relative_tolerance": float(
-                args.volume_identity_relative_tolerance
-            ),
+            "volume_identity_relative_tolerance": float(args.volume_identity_relative_tolerance),
             "source_controlled_auto_repair": repair_report,
         },
         "windows": window_reports,

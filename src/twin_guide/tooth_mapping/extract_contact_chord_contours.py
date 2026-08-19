@@ -41,9 +41,11 @@ from .fdi import (
 )
 from .pipeline import PALETTE, estimate_frame_and_arch, load_mesh, resolve_case_path
 
-APPROVABLE_CONTACT_SEPARATOR_METHODS = frozenset({
-    "shortest_valid_local_neck_pair",
-})
+APPROVABLE_CONTACT_SEPARATOR_METHODS = frozenset(
+    {
+        "shortest_valid_local_neck_pair",
+    }
+)
 
 
 def _approved_contact_separators(config):
@@ -56,15 +58,11 @@ def _approved_contact_separators(config):
         raise RuntimeError("tooth_recognition must be a mapping")
     records = recognition.get("approved_contact_separators", [])
     if not isinstance(records, list):
-        raise RuntimeError(
-            "tooth_recognition.approved_contact_separators must be a list"
-        )
+        raise RuntimeError("tooth_recognition.approved_contact_separators must be a list")
     approvals = {}
     for index, record in enumerate(records):
         if not isinstance(record, dict):
-            raise RuntimeError(
-                f"approved_contact_separators[{index}] must be a mapping"
-            )
+            raise RuntimeError(f"approved_contact_separators[{index}] must be a mapping")
         fdis = record.get("fdis")
         if (
             not isinstance(fdis, list)
@@ -81,14 +79,10 @@ def _approved_contact_separators(config):
                 f"approved_contact_separators[{index}].selection_method is not approvable"
             )
         if record.get("review_status") != "user_confirmed":
-            raise RuntimeError(
-                f"approved_contact_separators[{index}] must be user_confirmed"
-            )
+            raise RuntimeError(f"approved_contact_separators[{index}] must be user_confirmed")
         key = tuple(sorted(int(value) for value in fdis))
         if key in approvals:
-            raise RuntimeError(
-                f"duplicate approved contact separator for FDI {key}"
-            )
+            raise RuntimeError(f"duplicate approved contact separator for FDI {key}")
         approvals[key] = str(method)
     return approvals
 
@@ -100,10 +94,14 @@ def _contact_separator_is_approved(chord, labels, approvals):
         return True
     if chord.selection_method == "shortest_valid_concavity_pair":
         return True
-    pair = tuple(sorted((
-        int(labels[chord.pair_index]),
-        int(labels[chord.pair_index + 1]),
-    )))
+    pair = tuple(
+        sorted(
+            (
+                int(labels[chord.pair_index]),
+                int(labels[chord.pair_index + 1]),
+            )
+        )
+    )
     return approvals.get(pair) == chord.selection_method
 
 
@@ -116,7 +114,9 @@ def _save_contact_diagnostics(path, points, maps, mask, instances, chords):
     axis.contour(lr, ap, mask.T.astype(float), levels=[0.5], colors=["#475569"], linewidths=0.8)
     for index, instance in enumerate(instances):
         center = np.asarray(instance.center_lr_ap_mm)
-        axis.scatter(*center, s=45, color=PALETTE[index % len(PALETTE)], edgecolor="black", zorder=4)
+        axis.scatter(
+            *center, s=45, color=PALETTE[index % len(PALETTE)], edgecolor="black", zorder=4
+        )
         axis.text(center[0] + 0.25, center[1] + 0.25, f"I{index + 1}", fontsize=8)
     for chord in chords:
         point = np.asarray(chord.line_point_lr_ap_mm)
@@ -125,7 +125,14 @@ def _save_contact_diagnostics(path, points, maps, mask, instances, chords):
             first = np.asarray(chord.first_endpoint_lr_ap_mm)
             second = np.asarray(chord.second_endpoint_lr_ap_mm)
             axis.plot([first[0], second[0]], [first[1], second[1]], color="#dc2626", linewidth=1.8)
-            axis.scatter([first[0], second[0]], [first[1], second[1]], s=22, color="#facc15", edgecolor="#7f1d1d", zorder=5)
+            axis.scatter(
+                [first[0], second[0]],
+                [first[1], second[1]],
+                s=22,
+                color="#facc15",
+                edgecolor="#7f1d1d",
+                zorder=5,
+            )
         else:
             segment = np.vstack([point - 4.0 * direction, point + 4.0 * direction])
             axis.plot(segment[:, 0], segment[:, 1], color="#2563eb", linestyle="--", linewidth=1.4)
@@ -167,8 +174,10 @@ def _save_final(path, points, contours, chords, labels):
 def _save_regions(path, maps, label_grid):
     """内部算法说明。"""
     extent = [
-        float(np.min(maps["lr_centres"])), float(np.max(maps["lr_centres"])),
-        float(np.min(maps["ap_centres"])), float(np.max(maps["ap_centres"])),
+        float(np.min(maps["lr_centres"])),
+        float(np.max(maps["lr_centres"])),
+        float(np.min(maps["ap_centres"])),
+        float(np.max(maps["ap_centres"])),
     ]
     figure, axis = plt.subplots(figsize=(10, 8), constrained_layout=True)
     masked = np.ma.masked_where(label_grid.T == 0, label_grid.T)
@@ -245,8 +254,7 @@ def _configured_projection_support(
     components, component_count = connected_components(candidate_mask)
     candidate_components: set[int] = set()
     support_points = [
-        np.asarray(candidate.center_lr_ap_mm, dtype=float)
-        for candidate in candidates
+        np.asarray(candidate.center_lr_ap_mm, dtype=float) for candidate in candidates
     ]
     for point in support_points:
         row = int(np.argmin(np.abs(lr - point[0])))
@@ -257,13 +265,9 @@ def _configured_projection_support(
     supported = candidate_mask & np.isin(components, list(candidate_components))
 
     selected_member_ids = {
-        candidate_id
-        for group in selected
-        for candidate_id in group.member_candidate_ids
+        candidate_id for group in selected for candidate_id in group.member_candidate_ids
     }
-    rejected_ids = {
-        candidate.candidate_id for candidate in candidates
-    } - selected_member_ids
+    rejected_ids = {candidate.candidate_id for candidate in candidates} - selected_member_ids
     excluded_pixel_count = 0
     rejection_chords = []
     if rejected_ids:
@@ -303,52 +307,52 @@ def _configured_projection_support(
         {
             "candidate_id": int(candidate.candidate_id),
             "center_LR_AP_mm": list(candidate.center_lr_ap_mm),
-            "directed_arch_position_mm": float(
-                candidate.directed_arch_position_mm
-            ),
+            "directed_arch_position_mm": float(candidate.directed_arch_position_mm),
             "maximum_depth_mm": float(candidate.maximum_depth_mm),
             "crown_core_quality": float(candidate.crown_core_quality),
             "selected_for_present_FDI": candidate.candidate_id not in rejected_ids,
         }
         for candidate in candidates
     ]
-    return configured, {
-        "raw_projection_pixel_count": int(np.count_nonzero(raw_mask)),
-        "configured_projection_pixel_count": int(np.count_nonzero(configured)),
-        "ignored_outside_configured_support_pixel_count": int(np.count_nonzero(raw_mask & ~configured)),
-        "configured_present_intervals_s_mm": used_intervals,
-        "slot_intervals_used_as_hard_crop": False,
-        "maximum_arch_transverse_distance_mm": 11.5,
-        "core_grouping_policy": core_grouping_policy,
-        "raw_component_count": int(component_count),
-        "crown_core_candidates": candidate_records,
-        "selected_candidate_count": len(selected),
-        "effective_physical_instance_count": len(selected),
-        "slot_based_physical_instance_recovery_used": False,
-        "rejected_candidate_ids": sorted(int(value) for value in rejected_ids),
-        "rejected_interference_pixel_count": int(excluded_pixel_count),
-        "interference_partition_chord_count": len(rejection_chords),
-        "physical_crown_core_groups": [
-            {
-                "physical_instance_index": int(index + 1),
-                "member_candidate_ids": list(group.member_candidate_ids),
-                "center_LR_AP_mm": list(group.center_lr_ap_mm),
-                "directed_arch_position_mm": float(
-                    group.directed_arch_position_mm
-                ),
-                "maximum_merge_step_mm": float(group.maximum_merge_step_mm),
-                "merge_evidence_sufficient": bool(
-                    group.merge_evidence_sufficient
-                ),
-            }
-            for index, group in enumerate(selected)
-        ],
-        "selection_rule": (
-            "merge only locally supported adjacent crown-core peaks; if "
-            "well-separated surplus groups remain, select a strictly ordered "
-            "present-prior subset and leave the rest unnumbered"
-        ),
-    }, selected
+    return (
+        configured,
+        {
+            "raw_projection_pixel_count": int(np.count_nonzero(raw_mask)),
+            "configured_projection_pixel_count": int(np.count_nonzero(configured)),
+            "ignored_outside_configured_support_pixel_count": int(
+                np.count_nonzero(raw_mask & ~configured)
+            ),
+            "configured_present_intervals_s_mm": used_intervals,
+            "slot_intervals_used_as_hard_crop": False,
+            "maximum_arch_transverse_distance_mm": 11.5,
+            "core_grouping_policy": core_grouping_policy,
+            "raw_component_count": int(component_count),
+            "crown_core_candidates": candidate_records,
+            "selected_candidate_count": len(selected),
+            "effective_physical_instance_count": len(selected),
+            "slot_based_physical_instance_recovery_used": False,
+            "rejected_candidate_ids": sorted(int(value) for value in rejected_ids),
+            "rejected_interference_pixel_count": int(excluded_pixel_count),
+            "interference_partition_chord_count": len(rejection_chords),
+            "physical_crown_core_groups": [
+                {
+                    "physical_instance_index": int(index + 1),
+                    "member_candidate_ids": list(group.member_candidate_ids),
+                    "center_LR_AP_mm": list(group.center_lr_ap_mm),
+                    "directed_arch_position_mm": float(group.directed_arch_position_mm),
+                    "maximum_merge_step_mm": float(group.maximum_merge_step_mm),
+                    "merge_evidence_sufficient": bool(group.merge_evidence_sufficient),
+                }
+                for index, group in enumerate(selected)
+            ],
+            "selection_rule": (
+                "merge only locally supported adjacent crown-core peaks; if "
+                "well-separated surplus groups remain, select a strictly ordered "
+                "present-prior subset and leave the rest unnumbered"
+            ),
+        },
+        selected,
+    )
 
 
 def run(args):
@@ -394,16 +398,17 @@ def run(args):
         if "height_quantile" in enhanced:
             projection_height_quantile = float(enhanced["height_quantile"])
         if "core_grouping_policy" in enhanced:
-            recorded_policy = str(
-                np.asarray(enhanced["core_grouping_policy"]).item()
-            )
+            recorded_policy = str(np.asarray(enhanced["core_grouping_policy"]).item())
             if recorded_policy != core_grouping_policy:
                 raise RuntimeError(
                     "enhanced projection/core extraction grouping policies differ: "
                     f"projection={recorded_policy}, extraction={core_grouping_policy}"
                 )
     frame = estimate_frame_and_arch(
-        dental, guide, anatomy, semantics,
+        dental,
+        guide,
+        anatomy,
+        semantics,
         projection_height_quantile,
         float(parameters["minimum_crown_normal_dot"]),
     )
@@ -414,11 +419,17 @@ def run(args):
     height = delta @ np.asarray(frame["e_occ"])
     normal_dot = np.asarray(dental.vertex_normals) @ np.asarray(frame["e_occ"])
     height_floor = float(np.quantile(height, float(parameters["crown_height_quantile"])))
-    crown_support = (height >= height_floor) & (normal_dot >= float(parameters["minimum_crown_normal_dot"]))
+    crown_support = (height >= height_floor) & (
+        normal_dot >= float(parameters["minimum_crown_normal_dot"])
+    )
     points = np.column_stack([lr[crown_support], ap[crown_support]])
     maps = build_lr_ap_feature_maps(
-        lr=lr, ap=ap, height=height, normal_dot=normal_dot,
-        crown_support=crown_support, resolution_mm=args.resolution_mm,
+        lr=lr,
+        ap=ap,
+        height=height,
+        normal_dot=normal_dot,
+        crown_support=crown_support,
+        resolution_mm=args.resolution_mm,
     )
     curve_points = np.column_stack([frame["curve"].lr, frame["curve"].ap])
     curve_tree = cKDTree(curve_points)
@@ -434,19 +445,20 @@ def run(args):
         ordered = [
             SimpleNamespace(
                 instance_id=int(label),
-                center_lr_ap_mm=tuple(float(value) for value in slot_by_fdi[label]["arch_LR_AP_mm"]),
+                center_lr_ap_mm=tuple(
+                    float(value) for value in slot_by_fdi[label]["arch_LR_AP_mm"]
+                ),
             )
             for label in numbered_order
         ]
-        mask, projection_filter_diagnostics, selected_core_groups = (
-            _configured_projection_support(
+        mask, projection_filter_diagnostics, selected_core_groups = _configured_projection_support(
             enhanced,
             frame,
             source["tooth_slots"],
             semantics.present_teeth,
             ordered,
             core_grouping_policy,
-        ))
+        )
         enhanced["silhouette"] = mask
         if core_grouping_policy == ARCH_PROGRESS_POLICY:
             partition_instances = core_groups_to_seeds(
@@ -458,8 +470,7 @@ def run(args):
                 enhanced_maps=enhanced, ordered_instances=ordered
             )
         projection_filter_diagnostics["post_filter_raw_component_recovery"] = (
-            "disabled: filtered interference and arch-corridor pixels may not "
-            "be silently restored"
+            "disabled: filtered interference and arch-corridor pixels may not be silently restored"
         )
         chords = find_shortest_concavity_chords(
             enhanced_maps=enhanced,
@@ -500,14 +511,20 @@ def run(args):
         "report": output_dir / "contact_chord_report.json",
     }
     if getattr(args, "write_diagnostics", True):
-        paths.update({
-            "contact_diagnostics": output_dir / "01_contact_endpoints_and_chords.png",
-            "partitioned_regions": output_dir / "02_chord_partitioned_regions.png",
-            "final_contours": output_dir / "03_final_contact_chord_contours.png",
-        })
+        paths.update(
+            {
+                "contact_diagnostics": output_dir / "01_contact_endpoints_and_chords.png",
+                "partitioned_regions": output_dir / "02_chord_partitioned_regions.png",
+                "final_contours": output_dir / "03_final_contact_chord_contours.png",
+            }
+        )
         _save_contact_diagnostics(
-            paths["contact_diagnostics"], points, partition_maps, mask,
-            partition_instances, chords,
+            paths["contact_diagnostics"],
+            points,
+            partition_maps,
+            mask,
+            partition_instances,
+            chords,
         )
         _save_regions(paths["partitioned_regions"], partition_maps, label_grid)
         _save_final(paths["final_contours"], points, contours, chords, labels)
@@ -520,16 +537,18 @@ def run(args):
         chord_records.append(record)
     contour_records = []
     for label, contour in zip(labels, contours, strict=False):
-        contour_records.append({
-            "FDI": int(label),
-            "source_unlabelled_instance_id": int(contour.source_instance_id),
-            "area_mm2": float(contour.area_mm2),
-            "area_centroid_LR_AP_mm": list(contour.area_centroid_lr_ap_mm),
-            "interior_center_LR_AP_mm": list(contour.interior_center_lr_ap_mm),
-            "maximum_interior_radius_mm": float(contour.maximum_interior_radius_mm),
-            "pixel_count": int(contour.pixel_count),
-            "contour_LR_AP_mm": contour.contour_lr_ap_mm,
-        })
+        contour_records.append(
+            {
+                "FDI": int(label),
+                "source_unlabelled_instance_id": int(contour.source_instance_id),
+                "area_mm2": float(contour.area_mm2),
+                "area_centroid_LR_AP_mm": list(contour.area_centroid_lr_ap_mm),
+                "interior_center_LR_AP_mm": list(contour.interior_center_lr_ap_mm),
+                "maximum_interior_radius_mm": float(contour.maximum_interior_radius_mm),
+                "pixel_count": int(contour.pixel_count),
+                "contour_LR_AP_mm": contour.contour_lr_ap_mm,
+            }
+        )
     mask_pixel_count = int(np.count_nonzero(mask))
     assigned_pixel_count = int(np.count_nonzero(label_grid))
     mask_coverage = float(assigned_pixel_count / max(mask_pixel_count, 1))
@@ -545,11 +564,16 @@ def run(args):
         "chord_or_gap_count_equals_adjacent_pair_count": len(chords) == len(contours) - 1,
         "assigned_FDI_equal_present_teeth": assigned == set(semantics.present_teeth),
         "missing_and_excluded_FDI_are_not_assigned": not bool(assigned & forbidden),
-        "all_contours_are_nonempty": all(item.pixel_count > 30 and len(item.contour_lr_ap_mm) > 8 for item in contours),
+        "all_contours_are_nonempty": all(
+            item.pixel_count > 30 and len(item.contour_lr_ap_mm) > 8 for item in contours
+        ),
         "all_contact_chords_have_two_endpoints": all(
-            item.kind != "contact" or (
-                item.first_endpoint_lr_ap_mm is not None and item.second_endpoint_lr_ap_mm is not None
-            ) for item in chords
+            item.kind != "contact"
+            or (
+                item.first_endpoint_lr_ap_mm is not None
+                and item.second_endpoint_lr_ap_mm is not None
+            )
+            for item in chords
         ),
         "no_uncertain_contact_chords": not any(item.kind == "uncertain" for item in chords),
         "all_contacts_use_approved_anatomical_separators": all(
@@ -567,34 +591,33 @@ def run(args):
         ),
         "physical_instance_count_equals_present_FDI_count": (
             projection_filter_diagnostics is None
-            or projection_filter_diagnostics[
-                "effective_physical_instance_count"
-            ]
+            or projection_filter_diagnostics["effective_physical_instance_count"]
             == len(semantics.present_teeth)
         ),
         "slot_based_physical_instance_recovery_is_disabled": (
             projection_filter_diagnostics is None
-            or not projection_filter_diagnostics[
-                "slot_based_physical_instance_recovery_used"
-            ]
+            or not projection_filter_diagnostics["slot_based_physical_instance_recovery_used"]
         ),
         "all_multi_core_merges_have_local_spacing_evidence": (
             projection_filter_diagnostics is None
             or all(
                 bool(item["merge_evidence_sufficient"])
-                for item in projection_filter_diagnostics[
-                    "physical_crown_core_groups"
-                ]
+                for item in projection_filter_diagnostics["physical_crown_core_groups"]
             )
         ),
         "physical_instances_are_strictly_ordered_on_directed_arch": (
             projection_filter_diagnostics is None
-            or bool(np.all(np.diff([
-                float(item["directed_arch_position_mm"])
-                for item in projection_filter_diagnostics[
-                    "physical_crown_core_groups"
-                ]
-            ]) > 0.0))
+            or bool(
+                np.all(
+                    np.diff(
+                        [
+                            float(item["directed_arch_position_mm"])
+                            for item in projection_filter_diagnostics["physical_crown_core_groups"]
+                        ]
+                    )
+                    > 0.0
+                )
+            )
         ),
         "configured_internal_missing_slots_are_gap_separators": all(
             chords[index].kind == "gap"
@@ -620,8 +643,7 @@ def run(args):
                 source.get("sources", {}).get("surgical_reference", []) or []
             ),
             "enhanced_projection_maps": (
-                str(args.enhanced_maps.resolve())
-                if args.enhanced_maps is not None else None
+                str(args.enhanced_maps.resolve()) if args.enhanced_maps is not None else None
             ),
         },
         # Persist the exact anatomical frame used to measure LR/AP centres so
@@ -640,13 +662,15 @@ def run(args):
             "enhanced_projection_used": args.enhanced_maps is not None,
             "enhanced_projection_height_quantile": projection_height_quantile,
             "core_grouping_policy": core_grouping_policy,
-            "configured_FDI_used_for_slot_matching_and_support_filter": args.enhanced_maps is not None,
+            "configured_FDI_used_for_slot_matching_and_support_filter": args.enhanced_maps
+            is not None,
             "FDI_used_to_score_or_choose_concavity_endpoints": False,
             "watershed_used": False,
             "ellipse_used_as_final_contour": False,
             "pre_boundary_seed_definition": (
                 "weighted interior crown core from silhouette depth, height, occlusal normal and low-edge support"
-                if args.enhanced_maps is not None else "coarse unlabelled ellipse centre"
+                if args.enhanced_maps is not None
+                else "coarse unlabelled ellipse centre"
             ),
             "final_center_definition": "uniform area centroid after the physical contour is complete",
             "interior_center_definition": "centre of the maximum inscribed circle after contour completion",
@@ -664,9 +688,9 @@ def run(args):
                 "configured_FDI": int(label),
                 "instance_id": int(item.instance_id),
                 "seed_center_LR_AP_mm": list(item.center_lr_ap_mm),
-                "initial_center_LR_AP_mm": list(getattr(
-                    item, "initial_center_lr_ap_mm", item.center_lr_ap_mm
-                )),
+                "initial_center_LR_AP_mm": list(
+                    getattr(item, "initial_center_lr_ap_mm", item.center_lr_ap_mm)
+                ),
                 "core_pixel_count": int(getattr(item, "core_pixel_count", 0)),
                 "refinement_distance_mm": float(getattr(item, "refinement_distance_mm", 0.0)),
             }
@@ -706,10 +730,7 @@ def parse_args():
         "--core-grouping-policy",
         choices=CORE_GROUPING_POLICIES,
         default=DEFAULT_POLICY,
-        help=(
-            "must match the enhanced projection; arch_progress is the current "
-            "TwinGuide default"
-        ),
+        help=("must match the enhanced projection; arch_progress is the current TwinGuide default"),
     )
     return parser.parse_args()
 
@@ -717,13 +738,19 @@ def parse_args():
 def main():
     """内部算法说明。"""
     report = run(parse_args())
-    print(json.dumps({
-        "status": report["status"],
-        "contact_count": sum(item["kind"] == "contact" for item in report["chords"]),
-        "gap_count": sum(item["kind"] == "gap" for item in report["chords"]),
-        "QA": report["QA"],
-        "outputs": report["outputs"],
-    }, ensure_ascii=False, indent=2))
+    print(
+        json.dumps(
+            {
+                "status": report["status"],
+                "contact_count": sum(item["kind"] == "contact" for item in report["chords"]),
+                "gap_count": sum(item["kind"] == "gap" for item in report["chords"]),
+                "QA": report["QA"],
+                "outputs": report["outputs"],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
     # A review result is still written for diagnosis, but must not look like a
     # successful batch result to an automated downstream process.
     return 0 if report["safe_for_downstream_use"] else 2

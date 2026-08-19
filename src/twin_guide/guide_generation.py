@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from twin_guide.blender.guide_modeling import build_guide_from_links
 from twin_guide.config import CaseConfig
+from twin_guide.effective_case import write_effective_case
 from twin_guide.generation_process import run_generation_process
 from twin_guide.models import BuildArtifacts
 from twin_guide.stage_artifacts import compose_stage_overviews
@@ -16,20 +16,23 @@ from twin_guide.ui_jobs import write_manifest
 FORMAL_CACHE_VERSION = "formal-generation-v1"
 
 
+def build_guide_from_links(*args: object, **kwargs: object) -> BuildArtifacts:
+    """延迟加载 Blender 实体化代码，使缓存与编排测试可独立运行。"""
+
+    from twin_guide.blender.guide_modeling import build_guide_from_links as build
+
+    return build(*args, **kwargs)
+
+
 def _formal_fingerprint(config: CaseConfig) -> str:
     """返回正式生成产物使用的语义指纹。"""
 
     from twin_guide.editor_plan import editor_geometry_fingerprint
 
     config_path = (
-        None
-        if config.tooth_identification is None
-        else config.tooth_identification.case_yaml
+        None if config.tooth_identification is None else config.tooth_identification.case_yaml
     )
-    return (
-        f"{FORMAL_CACHE_VERSION}:"
-        f"{editor_geometry_fingerprint(config, config_path)}"
-    )
+    return f"{FORMAL_CACHE_VERSION}:{editor_geometry_fingerprint(config, config_path)}"
 
 
 def _cached_formal_artifacts(config: CaseConfig) -> BuildArtifacts | None:
@@ -121,6 +124,7 @@ def generate_guide(
         几何生成必须在 Blender 提供的 Python 环境中运行。
     """
 
+    write_effective_case(config)
     if not preview and not force_rebuild:
         cached = _cached_formal_artifacts(config)
         if cached is not None:

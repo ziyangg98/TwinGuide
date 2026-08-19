@@ -16,13 +16,13 @@ from scipy.interpolate import PchipInterpolator
 from scipy.optimize import minimize_scalar
 from scipy.spatial import cKDTree
 
-
 EPS = 1e-9
 
 
 @dataclass(frozen=True)
 class ContactToothLocation:
     """内部算法说明。"""
+
     fdi: int
     centroid_lr_ap_mm: tuple[float, float]
     arch_s_mm: float
@@ -48,18 +48,14 @@ class MeasuredArchCurve:
     def at_s(self, values: np.ndarray | float) -> np.ndarray:
         """内部算法说明。"""
         values_array = np.asarray(values, dtype=float)
-        return np.column_stack([
-            self.s_to_lr(values_array), self.s_to_ap(values_array)
-        ])
+        return np.column_stack([self.s_to_lr(values_array), self.s_to_ap(values_array)])
 
     def tangent_at_s(self, value: float) -> np.ndarray:
         """内部算法说明。"""
         delta = max(0.12, 0.003 * (self.s[-1] - self.s[0]))
         lo = max(float(self.s[0]), value - delta)
         hi = min(float(self.s[-1]), value + delta)
-        vector = self.at_s(np.asarray([hi]))[0] - self.at_s(
-            np.asarray([lo])
-        )[0]
+        vector = self.at_s(np.asarray([hi]))[0] - self.at_s(np.asarray([lo]))[0]
         length = float(np.linalg.norm(vector))
         if length <= EPS:
             raise RuntimeError("measured arch has a degenerate local tangent")
@@ -80,9 +76,9 @@ def fit_measured_contour_arch(
 
     if len(contour_records) < 3:
         raise RuntimeError("at least three measured tooth contours are required")
-    centroids = np.asarray([
-        record["area_centroid_LR_AP_mm"] for record in contour_records
-    ], dtype=float)
+    centroids = np.asarray(
+        [record["area_centroid_LR_AP_mm"] for record in contour_records], dtype=float
+    )
     if centroids.shape != (len(contour_records), 2):
         raise RuntimeError("measured tooth centroids must be LR/AP pairs")
     adjacent = np.linalg.norm(np.diff(centroids, axis=0), axis=1)
@@ -91,44 +87,28 @@ def fit_measured_contour_arch(
 
     start_direction = (centroids[0] - centroids[1]) / adjacent[0]
     end_direction = (centroids[-1] - centroids[-2]) / adjacent[-1]
-    first_contour = np.asarray(
-        contour_records[0]["contour_LR_AP_mm"], dtype=float
-    )
-    last_contour = np.asarray(
-        contour_records[-1]["contour_LR_AP_mm"], dtype=float
-    )
-    start_support = float(np.max(
-        (first_contour - centroids[0]) @ start_direction
-    ))
-    end_support = float(np.max(
-        (last_contour - centroids[-1]) @ end_direction
-    ))
+    first_contour = np.asarray(contour_records[0]["contour_LR_AP_mm"], dtype=float)
+    last_contour = np.asarray(contour_records[-1]["contour_LR_AP_mm"], dtype=float)
+    start_support = float(np.max((first_contour - centroids[0]) @ start_direction))
+    end_support = float(np.max((last_contour - centroids[-1]) @ end_direction))
     start_extension = max(start_support + 0.35, 0.35 * adjacent[0])
     end_extension = max(end_support + 0.35, 0.35 * adjacent[-1])
-    controls = np.vstack([
-        centroids[0] + start_extension * start_direction,
-        centroids,
-        centroids[-1] + end_extension * end_direction,
-    ])
-    control_parameter = np.r_[
-        0.0, np.cumsum(np.linalg.norm(np.diff(controls, axis=0), axis=1))
-    ]
+    controls = np.vstack(
+        [
+            centroids[0] + start_extension * start_direction,
+            centroids,
+            centroids[-1] + end_extension * end_direction,
+        ]
+    )
+    control_parameter = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(controls, axis=0), axis=1))]
     if np.any(np.diff(control_parameter) <= EPS):
         raise RuntimeError("measured arch controls contain duplicate points")
-    lr_interpolator = PchipInterpolator(
-        control_parameter, controls[:, 0], extrapolate=False
-    )
-    ap_interpolator = PchipInterpolator(
-        control_parameter, controls[:, 1], extrapolate=False
-    )
-    parameter = np.linspace(
-        control_parameter[0], control_parameter[-1], sample_count
-    )
+    lr_interpolator = PchipInterpolator(control_parameter, controls[:, 0], extrapolate=False)
+    ap_interpolator = PchipInterpolator(control_parameter, controls[:, 1], extrapolate=False)
+    parameter = np.linspace(control_parameter[0], control_parameter[-1], sample_count)
     lr = np.asarray(lr_interpolator(parameter), dtype=float)
     ap = np.asarray(ap_interpolator(parameter), dtype=float)
-    segment = np.linalg.norm(
-        np.diff(np.column_stack([lr, ap]), axis=0), axis=1
-    )
+    segment = np.linalg.norm(np.diff(np.column_stack([lr, ap]), axis=0), axis=1)
     cumulative = np.r_[0.0, np.cumsum(segment)]
     apex_index = int(np.argmin(ap))
     s = cumulative - cumulative[apex_index]
@@ -207,10 +187,14 @@ def sample_crown_height(
     col_hi = int(np.clip(np.searchsorted(ap, point[1]), 1, len(ap) - 1))
     row_lo = row_hi - 1
     col_lo = col_hi - 1
-    values = np.asarray([
-        height[row_lo, col_lo], height[row_hi, col_lo],
-        height[row_lo, col_hi], height[row_hi, col_hi],
-    ])
+    values = np.asarray(
+        [
+            height[row_lo, col_lo],
+            height[row_hi, col_lo],
+            height[row_lo, col_hi],
+            height[row_hi, col_hi],
+        ]
+    )
     if np.all(np.isfinite(values)):
         x_fraction = (point[0] - lr[row_lo]) / max(lr[row_hi] - lr[row_lo], EPS)
         y_fraction = (point[1] - ap[col_lo]) / max(ap[col_hi] - ap[col_lo], EPS)
@@ -252,24 +236,23 @@ def locate_contact_teeth(
         contour = np.asarray(record["contour_LR_AP_mm"], dtype=float)
         s_mm, arch_point, _ = project_point_to_arch(curve, centroid)
         interval = contour_arch_interval(curve, contour)
-        height, lift_method, lift_distance = sample_crown_height(
-            enhanced_maps, centroid
+        height, lift_method, lift_distance = sample_crown_height(enhanced_maps, centroid)
+        global_point = origin + centroid[0] * e_lr + centroid[1] * e_ap + height * e_occ
+        output.append(
+            ContactToothLocation(
+                fdi=fdi,
+                centroid_lr_ap_mm=(float(centroid[0]), float(centroid[1])),
+                arch_s_mm=s_mm,
+                arch_lr_ap_mm=(float(arch_point[0]), float(arch_point[1])),
+                contour_interval_s_mm=interval,
+                crown_height_mm=height,
+                crown_point_global_mm=tuple(float(value) for value in global_point),
+                lift_method=lift_method,
+                lift_distance_mm=lift_distance,
+            )
         )
-        global_point = (
-            origin + centroid[0] * e_lr + centroid[1] * e_ap + height * e_occ
-        )
-        output.append(ContactToothLocation(
-            fdi=fdi,
-            centroid_lr_ap_mm=(float(centroid[0]), float(centroid[1])),
-            arch_s_mm=s_mm,
-            arch_lr_ap_mm=(float(arch_point[0]), float(arch_point[1])),
-            contour_interval_s_mm=interval,
-            crown_height_mm=height,
-            crown_point_global_mm=tuple(float(value) for value in global_point),
-            lift_method=lift_method,
-            lift_distance_mm=lift_distance,
-        ))
     return output
+
 
 def locate_reported_teeth(
     *,
@@ -292,22 +275,22 @@ def locate_reported_teeth(
         contour = np.asarray(record["contour_lr_ap_mm"], dtype=float)
         crown_point = np.asarray(record["crown_point_global_mm"], dtype=float)
         if centroid.shape != (2,) or crown_point.shape != (3,):
-            raise RuntimeError(
-                f"fdi_new region {fdi} has invalid centroid or crown point"
-            )
+            raise RuntimeError(f"fdi_new region {fdi} has invalid centroid or crown point")
         if not np.all(np.isfinite(centroid)) or not np.all(np.isfinite(crown_point)):
             raise RuntimeError(f"fdi_new region {fdi} contains non-finite geometry")
         s_mm, arch_point, _ = project_point_to_arch(curve, centroid)
         interval = contour_arch_interval(curve, contour)
-        output.append(ContactToothLocation(
-            fdi=fdi,
-            centroid_lr_ap_mm=(float(centroid[0]), float(centroid[1])),
-            arch_s_mm=s_mm,
-            arch_lr_ap_mm=(float(arch_point[0]), float(arch_point[1])),
-            contour_interval_s_mm=interval,
-            crown_height_mm=float(record["crown_height_mm"]),
-            crown_point_global_mm=tuple(float(value) for value in crown_point),
-            lift_method="authoritative_v2_component_crown_point",
-            lift_distance_mm=0.0,
-        ))
+        output.append(
+            ContactToothLocation(
+                fdi=fdi,
+                centroid_lr_ap_mm=(float(centroid[0]), float(centroid[1])),
+                arch_s_mm=s_mm,
+                arch_lr_ap_mm=(float(arch_point[0]), float(arch_point[1])),
+                contour_interval_s_mm=interval,
+                crown_height_mm=float(record["crown_height_mm"]),
+                crown_point_global_mm=tuple(float(value) for value in crown_point),
+                lift_method="authoritative_v2_component_crown_point",
+                lift_distance_mm=0.0,
+            )
+        )
     return output

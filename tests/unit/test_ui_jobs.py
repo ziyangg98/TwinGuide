@@ -29,18 +29,23 @@ class UiJobTests(unittest.TestCase):
             config = SimpleNamespace(output_directory=root / "formal")
             process = Mock()
             process.poll.return_value = None
-            with patch(
-                "twin_guide.ui_jobs.CaseConfig.from_yaml",
-                return_value=config,
-            ), patch(
-                "twin_guide.ui_jobs.subprocess.Popen",
-                return_value=process,
-            ) as popen, patch(
-                "twin_guide.ui_jobs._WORKER_PROCESS",
-                None,
-            ), patch(
-                "twin_guide.ui_jobs._WORKER_REQUEST_PATH",
-                None,
+            with (
+                patch(
+                    "twin_guide.ui_jobs.CaseConfig.from_yaml",
+                    return_value=config,
+                ),
+                patch(
+                    "twin_guide.ui_jobs.subprocess.Popen",
+                    return_value=process,
+                ) as popen,
+                patch(
+                    "twin_guide.ui_jobs._WORKER_PROCESS",
+                    None,
+                ),
+                patch(
+                    "twin_guide.ui_jobs._WORKER_REQUEST_PATH",
+                    None,
+                ),
             ):
                 for revision in (1, 2):
                     start_background_job(
@@ -53,6 +58,38 @@ class UiJobTests(unittest.TestCase):
                     )
 
             popen.assert_called_once()
+
+    def test_background_job_uses_explicit_formal_output_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            process = Mock()
+            process.poll.return_value = None
+            formal = root / "selected-result"
+            with (
+                patch(
+                    "twin_guide.ui_jobs.subprocess.Popen",
+                    return_value=process,
+                ),
+                patch(
+                    "twin_guide.ui_jobs._WORKER_PROCESS",
+                    None,
+                ),
+                patch(
+                    "twin_guide.ui_jobs._WORKER_REQUEST_PATH",
+                    None,
+                ),
+            ):
+                start_background_job(
+                    blender_binary=Path("/Applications/Blender"),
+                    mode="plan",
+                    config_path=root / "case.yaml",
+                    output_directory=formal / "ui-plan",
+                    manifest_path=formal / "ui-plan" / "task.json",
+                    formal_output_directory=formal,
+                )
+
+            request = read_manifest(formal / ".cache" / "ui-worker" / "request.json")
+            self.assertEqual(request["formal_output_directory"], str(formal.resolve()))
 
     def test_ui_jobs_reuse_missing_stage_caches(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -68,9 +105,7 @@ class UiJobTests(unittest.TestCase):
             _seed_ui_cache(formal, preview)
 
             self.assertEqual(
-                (preview / ".cache" / "stage-01" / "candidates.json").read_text(
-                    encoding="utf-8"
-                ),
+                (preview / ".cache" / "stage-01" / "candidates.json").read_text(encoding="utf-8"),
                 "cached",
             )
 
@@ -132,10 +167,13 @@ class UiJobTests(unittest.TestCase):
                     raise OSError("simulated promotion failure")
                 original_replace(source, target)
 
-            with patch(
-                "twin_guide.ui_jobs.os.replace",
-                side_effect=fail_after_stl,
-            ), self.assertRaises(OSError):
+            with (
+                patch(
+                    "twin_guide.ui_jobs.os.replace",
+                    side_effect=fail_after_stl,
+                ),
+                self.assertRaises(OSError),
+            ):
                 promote_candidate(candidate, formal)
 
             self.assertEqual((formal / "twin_guide.stl").read_text(), "old")
@@ -200,30 +238,34 @@ class UiJobTests(unittest.TestCase):
                 return SimpleNamespace(model_path=model)
 
             def generate_preview(job_config):
-                return generate(job_config, preview=True), SimpleNamespace(
-                    context=object()
-                )
+                return generate(job_config, preview=True), SimpleNamespace(context=object())
 
             def write_snapshot(_context, _config_path, output, **_values):
                 path = output / "ui-editor-snapshot.json"
                 path.write_text("{}", encoding="utf-8")
                 return path
 
-            with patch(
-                "twin_guide.blender_ui_worker.CaseConfig.from_yaml",
-                return_value=config,
-            ), patch(
-                "twin_guide.blender_ui_worker.replace",
-                side_effect=lambda _config, **values: SimpleNamespace(**values),
-            ), patch(
-                "twin_guide.blender_ui_worker._generate_with_process",
-                side_effect=generate_preview,
-            ), patch(
-                "twin_guide.editor_plan.write_editor_plan",
-                side_effect=write_snapshot,
-            ), patch(
-                "twin_guide.editor_plan.editor_geometry_fingerprint",
-                return_value="geometry-12",
+            with (
+                patch(
+                    "twin_guide.blender_ui_worker.CaseConfig.from_yaml",
+                    return_value=config,
+                ),
+                patch(
+                    "twin_guide.blender_ui_worker.replace",
+                    side_effect=lambda _config, **values: SimpleNamespace(**values),
+                ),
+                patch(
+                    "twin_guide.blender_ui_worker._generate_with_process",
+                    side_effect=generate_preview,
+                ),
+                patch(
+                    "twin_guide.editor_plan.write_editor_plan",
+                    side_effect=write_snapshot,
+                ),
+                patch(
+                    "twin_guide.editor_plan.editor_geometry_fingerprint",
+                    return_value="geometry-12",
+                ),
             ):
                 run_job(
                     "preview",
@@ -248,29 +290,35 @@ class UiJobTests(unittest.TestCase):
             )
 
             failed = SimpleNamespace(name="topology", passed=False, metrics={})
-            def generate_final(job_config, *, preview=False):
-                return generate(job_config, preview=preview), SimpleNamespace(
-                    context=object()
-                )
 
-            with patch(
-                "twin_guide.blender_ui_worker.CaseConfig.from_yaml",
-                return_value=config,
-            ), patch(
-                "twin_guide.blender_ui_worker.replace",
-                side_effect=lambda _config, **values: SimpleNamespace(**values),
-            ), patch(
-                "twin_guide.blender_ui_worker._generate_with_process",
-                side_effect=generate_final,
-            ), patch(
-                "twin_guide.editor_plan.write_editor_plan",
-                side_effect=write_snapshot,
-            ), patch(
-                "twin_guide.editor_plan.editor_geometry_fingerprint",
-                return_value="geometry-final",
-            ), patch(
-                "twin_guide.blender_ui_worker._validate",
-                return_value=(failed,),
+            def generate_final(job_config, *, preview=False):
+                return generate(job_config, preview=preview), SimpleNamespace(context=object())
+
+            with (
+                patch(
+                    "twin_guide.blender_ui_worker.CaseConfig.from_yaml",
+                    return_value=config,
+                ),
+                patch(
+                    "twin_guide.blender_ui_worker.replace",
+                    side_effect=lambda _config, **values: SimpleNamespace(**values),
+                ),
+                patch(
+                    "twin_guide.blender_ui_worker._generate_with_process",
+                    side_effect=generate_final,
+                ),
+                patch(
+                    "twin_guide.editor_plan.write_editor_plan",
+                    side_effect=write_snapshot,
+                ),
+                patch(
+                    "twin_guide.editor_plan.editor_geometry_fingerprint",
+                    return_value="geometry-final",
+                ),
+                patch(
+                    "twin_guide.blender_ui_worker._validate",
+                    return_value=(failed,),
+                ),
             ):
                 run_job("final", root / "case.yaml", candidate, candidate / "task.json")
 
@@ -306,27 +354,33 @@ class UiJobTests(unittest.TestCase):
                 return path
 
             passed = SimpleNamespace(name="topology", passed=True, metrics={})
-            with patch(
-                "twin_guide.blender_ui_worker.CaseConfig.from_yaml",
-                return_value=config,
-            ), patch(
-                "twin_guide.blender_ui_worker.replace",
-                side_effect=lambda _config, **values: SimpleNamespace(**values),
-            ), patch(
-                "twin_guide.blender_ui_worker._generate_with_process",
-                side_effect=generate,
-            ), patch(
-                "twin_guide.editor_plan.write_editor_plan",
-                side_effect=write_snapshot,
-            ), patch(
-                "twin_guide.editor_plan.editor_geometry_fingerprint",
-                return_value="geometry-8",
-            ), patch(
-                "twin_guide.blender_ui_worker._validate",
-                return_value=(passed,),
-            ), patch(
-                "twin_guide.guide_generation._write_formal_artifacts_cache"
-            ) as write_cache:
+            with (
+                patch(
+                    "twin_guide.blender_ui_worker.CaseConfig.from_yaml",
+                    return_value=config,
+                ),
+                patch(
+                    "twin_guide.blender_ui_worker.replace",
+                    side_effect=lambda _config, **values: SimpleNamespace(**values),
+                ),
+                patch(
+                    "twin_guide.blender_ui_worker._generate_with_process",
+                    side_effect=generate,
+                ),
+                patch(
+                    "twin_guide.editor_plan.write_editor_plan",
+                    side_effect=write_snapshot,
+                ),
+                patch(
+                    "twin_guide.editor_plan.editor_geometry_fingerprint",
+                    return_value="geometry-8",
+                ),
+                patch(
+                    "twin_guide.blender_ui_worker._validate",
+                    return_value=(passed,),
+                ),
+                patch("twin_guide.guide_generation._write_formal_artifacts_cache") as write_cache,
+            ):
                 run_job(
                     "final",
                     root / "case.yaml",
@@ -367,9 +421,7 @@ class UiJobTests(unittest.TestCase):
                 job_config.output_directory.mkdir(parents=True, exist_ok=True)
                 model = job_config.output_directory / "twin_guide.stl"
                 model.write_text("candidate", encoding="utf-8")
-                return SimpleNamespace(model_path=model), SimpleNamespace(
-                    context=object()
-                )
+                return SimpleNamespace(model_path=model), SimpleNamespace(context=object())
 
             def write_snapshot(_context, _config_path, output, **_values):
                 path = output / "ui-editor-snapshot.json"
@@ -382,25 +434,33 @@ class UiJobTests(unittest.TestCase):
                 write_manifest(manifest, {"status": "cancel_requested"})
                 return (passed,)
 
-            with patch(
-                "twin_guide.blender_ui_worker.CaseConfig.from_yaml",
-                return_value=config,
-            ), patch(
-                "twin_guide.blender_ui_worker.replace",
-                side_effect=lambda _config, **values: SimpleNamespace(**values),
-            ), patch(
-                "twin_guide.blender_ui_worker._generate_with_process",
-                side_effect=generate,
-            ), patch(
-                "twin_guide.editor_plan.write_editor_plan",
-                side_effect=write_snapshot,
-            ), patch(
-                "twin_guide.editor_plan.editor_geometry_fingerprint",
-                return_value="geometry-cancelled",
-            ), patch(
-                "twin_guide.blender_ui_worker._validate",
-                side_effect=validate_then_cancel,
-            ), patch("twin_guide.blender_ui_worker.promote_candidate") as promote:
+            with (
+                patch(
+                    "twin_guide.blender_ui_worker.CaseConfig.from_yaml",
+                    return_value=config,
+                ),
+                patch(
+                    "twin_guide.blender_ui_worker.replace",
+                    side_effect=lambda _config, **values: SimpleNamespace(**values),
+                ),
+                patch(
+                    "twin_guide.blender_ui_worker._generate_with_process",
+                    side_effect=generate,
+                ),
+                patch(
+                    "twin_guide.editor_plan.write_editor_plan",
+                    side_effect=write_snapshot,
+                ),
+                patch(
+                    "twin_guide.editor_plan.editor_geometry_fingerprint",
+                    return_value="geometry-cancelled",
+                ),
+                patch(
+                    "twin_guide.blender_ui_worker._validate",
+                    side_effect=validate_then_cancel,
+                ),
+                patch("twin_guide.blender_ui_worker.promote_candidate") as promote,
+            ):
                 run_job("final", root / "case.yaml", candidate, manifest, revision=9)
 
             promote.assert_not_called()
@@ -418,26 +478,25 @@ class UiJobTests(unittest.TestCase):
             process.return_value = SimpleNamespace(context="context")
             write_plan = Mock(return_value=plan_path)
             fake_modules = {
-                "twin_guide.generation_process": SimpleNamespace(
-                    run_generation_process=process
-                ),
+                "twin_guide.generation_process": SimpleNamespace(run_generation_process=process),
                 "twin_guide.editor_plan": SimpleNamespace(
                     write_editor_plan=write_plan,
                     editor_geometry_fingerprint=Mock(return_value="geometry-7"),
                 ),
             }
 
-            with patch.dict(sys.modules, fake_modules), patch(
-                "twin_guide.blender_ui_worker.CaseConfig.from_yaml",
-                return_value=config,
-            ), patch(
-                "twin_guide.blender_ui_worker.replace",
-                side_effect=lambda source, **values: SimpleNamespace(
-                    **(vars(source) | values)
+            with (
+                patch.dict(sys.modules, fake_modules),
+                patch(
+                    "twin_guide.blender_ui_worker.CaseConfig.from_yaml",
+                    return_value=config,
                 ),
-            ), patch(
-                "twin_guide.blender_ui_worker._generate_with_process"
-            ) as generate:
+                patch(
+                    "twin_guide.blender_ui_worker.replace",
+                    side_effect=lambda source, **values: SimpleNamespace(**(vars(source) | values)),
+                ),
+                patch("twin_guide.blender_ui_worker._generate_with_process") as generate,
+            ):
                 run_job(
                     "plan",
                     root / "case.yaml",

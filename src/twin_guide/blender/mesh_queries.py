@@ -268,10 +268,7 @@ def build_local_aligned_bvh(
         u = relative.dot(unit_tangent)
         v = relative.dot(unit_bitangent)
         w = abs(relative.dot(unit_normal))
-        ellipse = (
-            (u / (major_radius_mm + 1.5)) ** 2
-            + (v / (minor_radius_mm + 1.5)) ** 2
-        )
+        ellipse = (u / (major_radius_mm + 1.5)) ** 2 + (v / (minor_radius_mm + 1.5)) ** 2
         if ellipse <= 1.0 and w <= 3.0 and polygon_normal.dot(unit_normal) >= 0.15:
             polygons.append(indices)
     if len(polygons) < 20:

@@ -75,9 +75,7 @@ class DocumentationTest(unittest.TestCase):
 
         single_cases = ("11", "12", "13", "14", "15", "16", "17", "47")
         multiple_cases = ("12-13", "14-15", "15-16", "16-17")
-        document = (PROJECT_ROOT / "docs/guide/case-results.md").read_text(
-            encoding="utf-8"
-        )
+        document = (PROJECT_ROOT / "docs/guide/case-results.md").read_text(encoding="utf-8")
         for case in single_cases:
             with self.subTest(case=f"single_{case}"):
                 self.assertIn(f"`single_{case}`", document)
@@ -89,10 +87,7 @@ class DocumentationTest(unittest.TestCase):
             with self.subTest(case=f"multiple_{case_id}"):
                 self.assertIn(f"`multiple_{case_id}`", document)
                 self.assertTrue(
-                    (
-                        PROJECT_ROOT
-                        / f"docs/images/case-results/multiple-{case}.png"
-                    ).is_file()
+                    (PROJECT_ROOT / f"docs/images/case-results/multiple-{case}.png").is_file()
                 )
 
     def test_process_pages_identify_current_code_branches(self) -> None:
@@ -112,9 +107,7 @@ class DocumentationTest(unittest.TestCase):
         linking_page = (process_root / "stage-6-linking.md").read_text(encoding="utf-8")
         self.assertIn("多种植位连续路径不走这段代理点算法", linking_page)
 
-        topology_page = (process_root / "special-topologies.md").read_text(
-            encoding="utf-8"
-        )
+        topology_page = (process_root / "special-topologies.md").read_text(encoding="utf-8")
         self.assertIn("末端牙的局部牙弓切向", topology_page)
         self.assertIn("## 代码对应", topology_page)
 

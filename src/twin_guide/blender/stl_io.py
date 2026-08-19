@@ -6,7 +6,6 @@ from pathlib import Path
 
 import bpy
 
-from twin_guide.blender.scene import set_active_object
 from twin_guide.errors import MeshIOError
 
 
@@ -63,9 +62,20 @@ def import_polygon_mesh(path: Path, name: str) -> bpy.types.Object:
 def export_stl_mesh(path: Path, mesh_object: bpy.types.Object) -> None:
     """将指定网格对象导出为 STL。"""
 
+    export_stl_meshes(path, (mesh_object,))
+
+
+def export_stl_meshes(path: Path, mesh_objects: tuple[bpy.types.Object, ...]) -> None:
+    """将多个独立网格合并写入一个 STL，不执行昂贵的布尔融合。"""
+
+    if not mesh_objects:
+        raise MeshIOError("导出 STL 至少需要一个网格对象")
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        set_active_object(mesh_object)
+        bpy.ops.object.select_all(action="DESELECT")
+        for mesh_object in mesh_objects:
+            mesh_object.select_set(True)
+        bpy.context.view_layer.objects.active = mesh_objects[0]
         bpy.ops.wm.stl_export(filepath=str(path), export_selected_objects=True)
     except Exception as error:
         raise MeshIOError(f"无法导出 STL {path}：{error}") from error

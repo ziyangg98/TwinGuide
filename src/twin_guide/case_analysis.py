@@ -6,20 +6,12 @@ import hashlib
 import json
 import math
 from dataclasses import asdict, dataclass, replace
+from typing import TYPE_CHECKING
 
-import bpy
 import numpy as np
 import trimesh
 
-from twin_guide.blender.mesh_queries import (
-    mesh_bounds,
-    sample_mesh_surface,
-    sample_mesh_surface_and_triangles,
-)
-from twin_guide.blender.scene import clear_scene, remove_object
-from twin_guide.blender.sleeve_reconstruction import create_closed_sleeve_object
-from twin_guide.blender.stl_io import import_stl_mesh
-from twin_guide.config import CaseConfig, case_occlusal_axis
+from twin_guide.config import CaseConfig, SleeveSiteOverride, case_occlusal_axis
 from twin_guide.config.loading import load_case_yaml
 from twin_guide.errors import GeometryError
 from twin_guide.geometry import (
@@ -44,6 +36,17 @@ from twin_guide.template_ring_estimation import (
 )
 from twin_guide.tooth_mapping.fdi import validate_anatomy
 from twin_guide.tooth_mapping.pipeline._core import estimate_frame_and_arch, local_arch_frame
+
+if TYPE_CHECKING:
+    import bpy
+
+
+def create_closed_sleeve_object(parameters: SleeveEstimate, name: str) -> object:
+    """延迟加载 Blender 重建器，使纯几何代码可在普通 Python 中导入。"""
+
+    from twin_guide.blender.sleeve_reconstruction import create_closed_sleeve_object as create
+
+    return create(parameters, name)
 
 
 @dataclass(slots=True)
@@ -89,16 +92,26 @@ def _case_with_overrides(
     """复用静态病例分析，并应用当前导柱高度覆盖值。"""
 
     base = cached.case
-    guides = tuple(_apply_sleeve_editor_override(config, guide) for guide in base.guide_sleeves)
+    guides: list[GuideSleeve] = []
+    for site_index, guide_post in enumerate(config.guide_posts):
+        pair = base.guide_sleeves[2 * site_index : 2 * site_index + 2]
+        if len(pair) != 2:
+            raise GeometryError("每个种植位必须对应两根导柱")
+        override = config.editor_overrides.sleeve_for(guide_post.ring_index)
+        guides.extend(_apply_sleeve_editor_override(pair, override))
     return replace(
         base,
         config=config,
-        guide_sleeves=guides,
+        guide_sleeves=tuple(guides),
     )
 
 
 def _clear_generated_scene_objects(cached: _CaseCache) -> None:
     """保留病例源网格和分量，删除上一次实体任务的临时对象。"""
+
+    import bpy
+
+    from twin_guide.blender.scene import remove_object
 
     case = cached.case
     preserved = {
@@ -111,33 +124,60 @@ def _clear_generated_scene_objects(cached: _CaseCache) -> None:
             remove_object(mesh_object)
 
 
-def _apply_sleeve_editor_override(
-    config: CaseConfig,
-    guide: GuideSleeve,
-) -> GuideSleeve:
-    """把图形编辑器的种植位成对高度覆盖值应用到导柱。"""
+def _rotate_about_axis(vector: Vec3, axis: Vec3, angle_radians: float) -> Vec3:
+    """使用 Rodrigues 公式绕单位轴旋转向量。"""
 
-    site_index = (guide.guide_index - 1) // 2
-    if site_index >= len(config.guide_posts):
-        return guide
-    ring_index = config.guide_posts[site_index].ring_index
-    override = config.editor_overrides.sleeve_for(ring_index)
+    unit = axis.normalized()
+    cosine = math.cos(angle_radians)
+    sine = math.sin(angle_radians)
+    return vector * cosine + unit.cross(vector) * sine + unit * (unit.dot(vector) * (1.0 - cosine))
+
+
+def _apply_sleeve_editor_override(
+    pair: tuple[GuideSleeve, ...],
+    override: SleeveSiteOverride | None,
+) -> tuple[GuideSleeve, ...]:
+    """同步应用一个种植位的高度和绕圆心旋转。"""
+
     if override is None:
-        return guide
-    return replace(
-        guide,
-        parameters=replace(
+        return pair
+    center = (pair[0].center + pair[1].center) * 0.5
+    common_axis = (pair[0].axis.normalized() + pair[1].axis.normalized()).normalized()
+    angle = math.radians(override.rotation_degrees)
+    result = []
+    for guide in pair:
+        parameters = replace(
             guide.parameters,
+            axis_origin=center + _rotate_about_axis(guide.center - center, common_axis, angle),
+            axis=_rotate_about_axis(guide.axis, common_axis, angle).normalized(),
+            c_opening_direction=_rotate_about_axis(
+                guide.parameters.c_opening_direction,
+                common_axis,
+                angle,
+            ).normalized(),
             height=override.height_mm,
             platform_height=override.platform_height_mm,
             closed_bore_height=override.closed_bore_height_mm,
-        ),
-        axial_max_mm=override.height_mm,
-    )
+        )
+        mesh = create_closed_sleeve_object(
+            parameters,
+            f"editor_override_guide_{guide.guide_index}",
+        )
+        result.append(
+            replace(
+                guide,
+                guide_mesh=mesh,
+                parameters=parameters,
+                axial_max_mm=override.height_mm,
+            )
+        )
+    return tuple(result)
 
 
 def _load_generation_meshes(config: CaseConfig) -> GenerationMeshes:
     """导入传统模板和患者牙列两个源 STL 网格。"""
+
+    from twin_guide.blender.stl_io import import_stl_mesh
 
     return GenerationMeshes(
         template_mesh=import_stl_mesh(config.inputs.template, "template_mesh"),
@@ -153,6 +193,8 @@ def _template_center(
     template_triangles: tuple[tuple[Vec3, Vec3, Vec3], ...],
 ) -> Vec3:
     """优先使用体积重心，重心异常时退化为表面样本均值。"""
+
+    from twin_guide.blender.mesh_queries import mesh_bounds
 
     center = volume_centroid(template_triangles)
     lower, upper = mesh_bounds(template_mesh)
@@ -321,6 +363,12 @@ def _build_template_only_guides(
 
 def analyze_case(config: CaseConfig, *, force_rebuild: bool = False) -> CaseAnalysis:
     """读取病例网格，并计算后续阶段共用的几何数据。"""
+
+    from twin_guide.blender.mesh_queries import (
+        sample_mesh_surface,
+        sample_mesh_surface_and_triangles,
+    )
+    from twin_guide.blender.scene import clear_scene
 
     global _CASE_CACHE
     fingerprint = _case_fingerprint(config)

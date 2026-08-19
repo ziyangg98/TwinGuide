@@ -22,9 +22,7 @@ import yaml
 EXPECTED_BLENDER = (5, 2, 0)
 
 if bpy.app.version[:3] != EXPECTED_BLENDER:
-    raise RuntimeError(
-        f"Expected Blender {EXPECTED_BLENDER}, found {bpy.app.version[:3]}"
-    )
+    raise RuntimeError(f"Expected Blender {EXPECTED_BLENDER}, found {bpy.app.version[:3]}")
 if sys.version_info[:2] != (3, 13):
     raise RuntimeError(f"Expected Python 3.13, found {sys.version}")
 if platform.machine() != "arm64":

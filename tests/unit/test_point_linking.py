@@ -113,9 +113,7 @@ class PointLinkingTests(unittest.TestCase):
         self.assertFalse(plan.press_beam_links_included)
         self.assertEqual(plan.connection_type, "continuous_sleeve_frame")
         default_routes = tuple(
-            route
-            for link in plan.links
-            for route in link.platform_avoidance_routes
+            route for link in plan.links for route in link.platform_avoidance_routes
         )
         self.assertEqual(
             {(route.guide_index, route.side) for route in default_routes},
@@ -124,9 +122,7 @@ class PointLinkingTests(unittest.TestCase):
         self.assertTrue(all(route.actual_offset_mm == 4.0 for route in default_routes))
         for route in default_routes:
             self.assertAlmostEqual(
-                (route.routing_point - route.tube_contact).dot(
-                    route.avoidance_direction
-                ),
+                (route.routing_point - route.tube_contact).dot(route.avoidance_direction),
                 4.0,
             )
         crowded_sleeves = tuple(
@@ -166,9 +162,7 @@ class PointLinkingTests(unittest.TestCase):
             crowded_config,
         )
         crowded_routes = tuple(
-            route
-            for link in crowded.links
-            for route in link.platform_avoidance_routes
+            route for link in crowded.links for route in link.platform_avoidance_routes
         )
         self.assertEqual(len(crowded_routes), 4)
         self.assertTrue(all(route.actual_offset_mm > 0.0 for route in crowded_routes))
@@ -220,8 +214,7 @@ class PointLinkingTests(unittest.TestCase):
             upper_link = next(
                 link
                 for link in avoided.links
-                if link.guide_index == selection.guide_index
-                and link.sleeve_label == "upper"
+                if link.guide_index == selection.guide_index and link.sleeve_label == "upper"
             )
             candidate_routing_points = (
                 Vec3(
@@ -256,9 +249,7 @@ class PointLinkingTests(unittest.TestCase):
             PointLinkingConfig(
                 radius_mm=1.2,
                 curve_resolution=30,
-                stop_platform_overrides=(
-                    ConnectorAvoidanceOverride(1, 0.6, 3.0, "left"),
-                ),
+                stop_platform_overrides=(ConnectorAvoidanceOverride(1, 0.6, 3.0, "left"),),
             ),
             stop_platform_avoidance_direction=Vec3(0.0, 0.0, -1.0),
         )
@@ -346,10 +337,7 @@ class PointLinkingTests(unittest.TestCase):
         from dataclasses import replace
         from types import SimpleNamespace
 
-        raw_sleeves = tuple(
-            _sleeve(index, x)
-            for index, x in enumerate((-9.0, -6.0, 2.0, 5.0), 1)
-        )
+        raw_sleeves = tuple(_sleeve(index, x) for index, x in enumerate((-9.0, -6.0, 2.0, 5.0), 1))
         c_opening_directions = (
             Vec3(1.0, 0.0, 0.0),
             Vec3(-1.0, 0.0, 0.0),
@@ -364,9 +352,7 @@ class PointLinkingTests(unittest.TestCase):
                     c_opening_direction=direction,
                 ),
             )
-            for sleeve, direction in zip(
-                raw_sleeves, c_opening_directions, strict=True
-            )
+            for sleeve, direction in zip(raw_sleeves, c_opening_directions, strict=True)
         )
         frame = TemplateFrame(
             Vec3(0.0, 0.0, 0.0),
@@ -437,12 +423,13 @@ class PointLinkingTests(unittest.TestCase):
             {(1, 3), (2, 4)},
         )
         self.assertTrue(
-            all(link.right_source is ConnectorEndpointSource.DISTAL_COMMON_NODE for link in plan.links)
+            all(
+                link.right_source is ConnectorEndpointSource.DISTAL_COMMON_NODE
+                for link in plan.links
+            )
         )
         multi_routes = tuple(
-            route
-            for link in plan.links
-            for route in link.platform_avoidance_routes
+            route for link in plan.links for route in link.platform_avoidance_routes
         )
         self.assertEqual(len(multi_routes), 8)
         self.assertEqual(
@@ -585,8 +572,7 @@ class PointLinkingTests(unittest.TestCase):
         noisy_link = replace(
             old_link,
             centerline=tuple(
-                Vec3(point.x + 1e-5, point.y, point.z)
-                for point in old_link.centerline
+                Vec3(point.x + 1e-5, point.y, point.z) for point in old_link.centerline
             ),
         )
         current = replace(old_plan, links=(noisy_link,))

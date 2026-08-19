@@ -36,41 +36,54 @@ def _merge_pair(
     planar_distance_mm: float,
 ) -> CrownCoreCandidate:
     """内部算法说明。"""
-    weights = np.asarray([
-        max(first.maximum_depth_mm, 0.1) ** 2,
-        max(second.maximum_depth_mm, 0.1) ** 2,
-    ])
-    centres = np.asarray([
-        first.center_lr_ap_mm,
-        second.center_lr_ap_mm,
-    ], dtype=float)
+    weights = np.asarray(
+        [
+            max(first.maximum_depth_mm, 0.1) ** 2,
+            max(second.maximum_depth_mm, 0.1) ** 2,
+        ]
+    )
+    centres = np.asarray(
+        [
+            first.center_lr_ap_mm,
+            second.center_lr_ap_mm,
+        ],
+        dtype=float,
+    )
     merged_center = np.average(centres, axis=0, weights=weights)
     return CrownCoreCandidate(
         candidate_id=min(first.member_candidate_ids + second.member_candidate_ids),
         center_lr_ap_mm=(float(merged_center[0]), float(merged_center[1])),
-        maximum_depth_mm=float(max(
-            first.maximum_depth_mm,
-            second.maximum_depth_mm,
-        )),
-        directed_arch_position_mm=float(np.average(
-            [
-                first.directed_arch_position_mm,
-                second.directed_arch_position_mm,
-            ],
-            weights=weights,
-        )),
-        crown_core_quality=float(max(
-            first.crown_core_quality,
-            second.crown_core_quality,
-        )),
-        member_candidate_ids=tuple(sorted(
-            first.member_candidate_ids + second.member_candidate_ids
-        )),
-        maximum_merge_step_mm=float(max(
-            first.maximum_merge_step_mm,
-            second.maximum_merge_step_mm,
-            planar_distance_mm,
-        )),
+        maximum_depth_mm=float(
+            max(
+                first.maximum_depth_mm,
+                second.maximum_depth_mm,
+            )
+        ),
+        directed_arch_position_mm=float(
+            np.average(
+                [
+                    first.directed_arch_position_mm,
+                    second.directed_arch_position_mm,
+                ],
+                weights=weights,
+            )
+        ),
+        crown_core_quality=float(
+            max(
+                first.crown_core_quality,
+                second.crown_core_quality,
+            )
+        ),
+        member_candidate_ids=tuple(
+            sorted(first.member_candidate_ids + second.member_candidate_ids)
+        ),
+        maximum_merge_step_mm=float(
+            max(
+                first.maximum_merge_step_mm,
+                second.maximum_merge_step_mm,
+                planar_distance_mm,
+            )
+        ),
         merge_evidence_sufficient=bool(
             first.merge_evidence_sufficient
             and second.merge_evidence_sufficient
@@ -89,21 +102,22 @@ def group_candidates_by_arch_progress(
     while len(grouped) > target_count:
         eligible: list[tuple[float, float, int]] = []
         for pair_index, (first, second) in enumerate(itertools.pairwise(grouped)):
-            planar_distance = float(np.linalg.norm(
-                np.asarray(second.center_lr_ap_mm, dtype=float)
-                - np.asarray(first.center_lr_ap_mm, dtype=float)
-            ))
+            planar_distance = float(
+                np.linalg.norm(
+                    np.asarray(second.center_lr_ap_mm, dtype=float)
+                    - np.asarray(first.center_lr_ap_mm, dtype=float)
+                )
+            )
             if planar_distance > MAXIMUM_PLANAR_MERGE_DISTANCE_MM:
                 continue
             arch_separation = abs(
-                second.directed_arch_position_mm
-                - first.directed_arch_position_mm
+                second.directed_arch_position_mm - first.directed_arch_position_mm
             )
             eligible.append((float(arch_separation), planar_distance, pair_index))
         if not eligible:
             break
         _, planar_distance, pair_index = min(eligible)
-        grouped[pair_index:pair_index + 2] = [
+        grouped[pair_index : pair_index + 2] = [
             _merge_pair(
                 grouped[pair_index],
                 grouped[pair_index + 1],
@@ -152,14 +166,14 @@ def core_groups_to_seeds(
         CrownSeed(
             instance_id=int(instance.instance_id),
             center_lr_ap_mm=tuple(float(value) for value in group.center_lr_ap_mm),
-            initial_center_lr_ap_mm=tuple(
-                float(value) for value in instance.center_lr_ap_mm
-            ),
+            initial_center_lr_ap_mm=tuple(float(value) for value in instance.center_lr_ap_mm),
             core_pixel_count=0,
-            refinement_distance_mm=float(np.linalg.norm(
-                np.asarray(group.center_lr_ap_mm, dtype=float)
-                - np.asarray(instance.center_lr_ap_mm, dtype=float)
-            )),
+            refinement_distance_mm=float(
+                np.linalg.norm(
+                    np.asarray(group.center_lr_ap_mm, dtype=float)
+                    - np.asarray(instance.center_lr_ap_mm, dtype=float)
+                )
+            ),
         )
         for instance, group in zip(ordered_instances, selected_groups, strict=False)
     ]

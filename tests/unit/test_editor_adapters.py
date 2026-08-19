@@ -38,9 +38,7 @@ class EditorAdapterTests(unittest.TestCase):
             changed.connector_for(1, "left"),
             ConnectorAvoidanceOverride(1, 0.6, 3.0, "left"),
         )
-        self.assertEqual(
-            changed.connector_for(2, "left"), original.connector_for(2, "left")
-        )
+        self.assertEqual(changed.connector_for(2, "left"), original.connector_for(2, "left"))
         self.assertEqual(changed.operation_windows, original.operation_windows)
         self.assertEqual(changed.sleeve_sites, original.sleeve_sites)
 

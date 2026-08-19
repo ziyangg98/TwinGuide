@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import re
 import subprocess
 import sys
 import time
@@ -14,6 +15,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATA_ROOT = ROOT.parent / "data" / "cases"
 DEFAULT_OUTPUT_ROOT = ROOT / "output" / "all-cases"
+EXCEPTION_LINE = re.compile(
+    r"^(?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*(?:Error|Exception):\s*.+$"
+)
 
 
 def _arguments() -> argparse.Namespace:
@@ -47,9 +51,7 @@ def _arguments() -> argparse.Namespace:
 
 
 def _discover(data_root: Path, selected: set[str]) -> tuple[list[Path], list[str]]:
-    case_directories = sorted(
-        path for path in data_root.glob("case-*") if path.is_dir()
-    )
+    case_directories = sorted(path for path in data_root.glob("case-*") if path.is_dir())
     if selected:
         missing = sorted(selected - {path.name for path in case_directories})
         if missing:
@@ -106,9 +108,7 @@ def _write_html(
     for record in records:
         case_id = str(record["case_id"])
         status = str(record["status"])
-        status_label = {"passed": "通过", "failed": "失败", "pending": "等待"}.get(
-            status, status
-        )
+        status_label = {"passed": "通过", "failed": "失败", "pending": "等待"}.get(status, status)
         output_relative = f"cases/{case_id}"
         image_path = output_root / output_relative / "guide_iso.png"
         image = (
@@ -122,7 +122,7 @@ def _write_html(
         cards.append(
             f'<article class="card {status}">{image}<h2>{html.escape(case_id)}</h2>'
             f'<p><span class="badge">{status_label}</span> '
-            f'{record.get("elapsed_seconds", 0)} 秒</p>{details}'
+            f"{record.get('elapsed_seconds', 0)} 秒</p>{details}"
             f'<p><a href="{output_relative}/twin_guide.stl">STL</a> · '
             f'<a href="logs/{case_id}.log">日志</a></p></article>'
         )
@@ -144,7 +144,7 @@ a{{color:#175cd3}}code{{word-break:break-all}}
 <section class="summary"><h1>TwinGuide 全病例运行结果</h1>
 <p>已配置 {len(records)} 例：通过 {passed}，失败 {failed}；缺少 case.yaml、未运行 {len(unconfigured)} 例。</p>
 <p>机器可读汇总：<a href="summary.json">summary.json</a></p></section>
-<main class="grid">{''.join(cards)}</main>
+<main class="grid">{"".join(cards)}</main>
 </body></html>"""
     (output_root / "report.html").write_text(document, encoding="utf-8")
 
@@ -174,6 +174,7 @@ def _run_case(
     validation_passed = 0
     validation_failed = 0
     last_error = ""
+    exception_error = ""
     with log_path.open("w", encoding="utf-8") as log:
         log.write("COMMAND " + " ".join(command) + "\n")
         process = subprocess.Popen(
@@ -196,6 +197,8 @@ def _run_case(
                 validation_failed += 1
             elif line.strip():
                 last_error = line.strip()
+                if not exception_error and EXCEPTION_LINE.match(last_error):
+                    exception_error = last_error
         return_code = process.wait()
     elapsed = round(time.monotonic() - started, 3)
     model_path = case_output / "twin_guide.stl"
@@ -212,7 +215,7 @@ def _run_case(
         "validation_passed_count": validation_passed,
         "validation_failed_count": validation_failed,
         "log": str(log_path),
-        "error": "" if status == "passed" else last_error,
+        "error": "" if status == "passed" else exception_error or last_error,
     }
 
 

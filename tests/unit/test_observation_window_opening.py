@@ -19,14 +19,16 @@ class ObservationWindowOpeningTests(unittest.TestCase):
         template.write_bytes(b"template")
         dental.write_bytes(b"dental")
         mapping = {
-            "observation_windows": [{
-                "id": "right",
-                "opening_geometry": "axis_sweep",
-                "axis_sweep": {
-                    "axis_drop_mm": 0.2,
-                    "sweep_angle_deg": 90.0,
-                },
-            }],
+            "observation_windows": [
+                {
+                    "id": "right",
+                    "opening_geometry": "axis_sweep",
+                    "axis_sweep": {
+                        "axis_drop_mm": 0.2,
+                        "sweep_angle_deg": 90.0,
+                    },
+                }
+            ],
         }
         mapping_path.write_text(json.dumps(mapping), encoding="utf-8")
         config = SimpleNamespace(
@@ -40,6 +42,7 @@ class ObservationWindowOpeningTests(unittest.TestCase):
                 observation_sweep_angle_degrees=90.0,
                 observation_local_failure_drop_targets_mm=(0.5, 1.0, 2.0),
                 observation_local_failure_transition_rows=1,
+                observation_adaptive_fallback_enabled=False,
             ),
         )
         identification = SimpleNamespace(
@@ -62,12 +65,15 @@ class ObservationWindowOpeningTests(unittest.TestCase):
             }
             sentinel = object()
 
-            with patch(
-                "twin_guide.observation_window_engine.run",
-                return_value=failed_report,
-            ), patch(
-                "twin_guide.observation_window_opening._profile_from_report",
-                return_value=sentinel,
+            with (
+                patch(
+                    "twin_guide.observation_window_engine.run",
+                    return_value=failed_report,
+                ),
+                patch(
+                    "twin_guide.observation_window_opening._profile_from_report",
+                    return_value=sentinel,
+                ),
             ):
                 result = build_observation_window_opening(
                     config,
@@ -77,8 +83,7 @@ class ObservationWindowOpeningTests(unittest.TestCase):
 
             manifest = json.loads(
                 (
-                    config.output_directory
-                    / ".cache/stage-03-cutout-planning/manifest.json"
+                    config.output_directory / ".cache/stage-03-cutout-planning/manifest.json"
                 ).read_text(encoding="utf-8")
             )
             self.assertIs(result, sentinel)
@@ -94,10 +99,13 @@ class ObservationWindowOpeningTests(unittest.TestCase):
                 "outputs": {},
             }
 
-            with patch(
-                "twin_guide.observation_window_engine.run",
-                return_value=failed_report,
-            ) as mocked_run, self.assertRaisesRegex(GeometryError, "未通过最终 QA"):
+            with (
+                patch(
+                    "twin_guide.observation_window_engine.run",
+                    return_value=failed_report,
+                ) as mocked_run,
+                self.assertRaisesRegex(GeometryError, "未通过最终 QA"),
+            ):
                 build_observation_window_opening(config, identification)
 
             request = mocked_run.call_args.args[0]
@@ -108,6 +116,65 @@ class ObservationWindowOpeningTests(unittest.TestCase):
             )
             self.assertEqual(request.volume_identity_tolerance_mm3, 0.05)
             self.assertEqual(request.volume_identity_relative_tolerance, 1e-4)
+
+    def test_expected_solver_failure_uses_enabled_fallback_and_records_diagnostics(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, identification = self._inputs(root)
+            config.windows.observation_adaptive_fallback_enabled = True
+            final_report = root / "fallback-report.json"
+            final_report.write_text("{}", encoding="utf-8")
+            fallback_report = {
+                "QA": {"all_constraints": True},
+                "outputs": {
+                    "report_json": str(final_report),
+                    "combined_cutter_ply": str(root / "fallback-cutter.ply"),
+                },
+                "local_failure_adaptation": {"local_axis_drop_additions_mm": [0.0, 0.5, 0.0]},
+            }
+
+            with (
+                patch(
+                    "twin_guide.observation_window_engine.run",
+                    side_effect=GeometryError("deterministic failed"),
+                ),
+                patch(
+                    "twin_guide.observation_window_opening._run_adaptive_fallback",
+                    return_value=fallback_report,
+                ),
+                patch(
+                    "twin_guide.observation_window_opening._profile_from_report",
+                    return_value=object(),
+                ),
+            ):
+                build_observation_window_opening(config, identification)
+
+            manifest = json.loads(
+                (
+                    config.output_directory / ".cache/stage-03-cutout-planning/manifest.json"
+                ).read_text(encoding="utf-8")
+            )
+            self.assertEqual(manifest["solver_mode"], "adaptive_local_drop_fallback")
+            self.assertEqual(manifest["deterministic"]["error_type"], "GeometryError")
+            self.assertTrue(manifest["fallback"]["used"])
+
+    def test_unexpected_programming_error_does_not_trigger_fallback(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, identification = self._inputs(root)
+            config.windows.observation_adaptive_fallback_enabled = True
+
+            with (
+                patch(
+                    "twin_guide.observation_window_engine.run",
+                    side_effect=TypeError("programming defect"),
+                ),
+                patch("twin_guide.observation_window_opening._run_adaptive_fallback") as fallback,
+                self.assertRaisesRegex(TypeError, "programming defect"),
+            ):
+                build_observation_window_opening(config, identification)
+
+            fallback.assert_not_called()
 
     def test_fast_preview_skips_full_observation_run(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -122,14 +189,16 @@ class ObservationWindowOpeningTests(unittest.TestCase):
             }
             sentinel = object()
 
-            with patch(
-                "twin_guide.observation_window_engine.build_preview",
-                return_value=preview_report,
-            ) as build_preview, patch(
-                "twin_guide.observation_window_engine.run"
-            ) as full_run, patch(
-                "twin_guide.observation_window_opening._profile_from_report",
-                return_value=sentinel,
+            with (
+                patch(
+                    "twin_guide.observation_window_engine.build_preview",
+                    return_value=preview_report,
+                ) as build_preview,
+                patch("twin_guide.observation_window_engine.run") as full_run,
+                patch(
+                    "twin_guide.observation_window_opening._profile_from_report",
+                    return_value=sentinel,
+                ),
             ):
                 result = build_observation_window_opening(
                     config,
@@ -166,12 +235,15 @@ class ObservationWindowOpeningTests(unittest.TestCase):
             }
             sentinel = object()
 
-            with patch(
-                "twin_guide.observation_window_engine.run",
-                return_value=failed_report,
-            ) as mocked_run, patch(
-                "twin_guide.observation_window_opening._profile_from_report",
-                return_value=sentinel,
+            with (
+                patch(
+                    "twin_guide.observation_window_engine.run",
+                    return_value=failed_report,
+                ) as mocked_run,
+                patch(
+                    "twin_guide.observation_window_opening._profile_from_report",
+                    return_value=sentinel,
+                ),
             ):
                 first = build_observation_window_opening(
                     config,
@@ -219,12 +291,15 @@ class ObservationWindowOpeningTests(unittest.TestCase):
                     "combined_cutter_ply": str(root / "formal-cutter.ply"),
                 },
             }
-            with patch(
-                "twin_guide.observation_window_engine.run",
-                side_effect=(preview_result, formal_result),
-            ) as mocked_run, patch(
-                "twin_guide.observation_window_opening._profile_from_report",
-                return_value=object(),
+            with (
+                patch(
+                    "twin_guide.observation_window_engine.run",
+                    side_effect=(preview_result, formal_result),
+                ) as mocked_run,
+                patch(
+                    "twin_guide.observation_window_opening._profile_from_report",
+                    return_value=object(),
+                ),
             ):
                 build_observation_window_opening(
                     config,

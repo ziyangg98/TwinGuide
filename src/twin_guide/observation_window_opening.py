@@ -6,23 +6,27 @@ import argparse
 import hashlib
 import json
 from copy import deepcopy
+from dataclasses import asdict
 from pathlib import Path
 
-from twin_guide.config import CaseConfig
+from twin_guide.config import CaseConfig, ObservationSolverParameters
 from twin_guide.errors import GeometryError
 from twin_guide.geometry import Vec3
 from twin_guide.models import ProfileWindowCutout
 from twin_guide.tooth_identification import ToothIdentificationResult
 
 INTEGRATION_REPORT_NAME = "manifest.json"
-OBSERVATION_OPENING_ALGORITHM_VERSION = (
-    "axis_sweep_direct_v4_with_controlled_adaptive_fallback_v1"
-)
+OBSERVATION_OPENING_ALGORITHM_VERSION = "axis_sweep_direct_v4_with_controlled_adaptive_fallback_v1"
+EXPECTED_SOLVER_ERRORS = (GeometryError, RuntimeError, ValueError, OSError)
 
 
-def _validate_axis_sweep_contract(
-    mapping: dict[str, object], config: CaseConfig
-) -> None:
+def _solver_parameters(config: CaseConfig) -> ObservationSolverParameters:
+    """返回当前求解参数，并兼容只构造旧窗口字段的轻量调用方。"""
+
+    return getattr(config.windows, "observation_solver", ObservationSolverParameters())
+
+
+def _validate_axis_sweep_contract(mapping: dict[str, object], config: CaseConfig) -> None:
     """要求映射只提供当前统一的 0.2 mm/90° 轴扫掠定义。"""
 
     windows = mapping.get("observation_windows")
@@ -41,14 +45,10 @@ def _validate_axis_sweep_contract(
             raise GeometryError(f"观察窗 {window_id!r} 缺少 axis_sweep 定义")
         editor_overrides = getattr(config, "editor_overrides", None)
         override = (
-            None
-            if editor_overrides is None
-            else editor_overrides.observation_window_for(window_id)
+            None if editor_overrides is None else editor_overrides.observation_window_for(window_id)
         )
         expected_drop = (
-            config.windows.observation_axis_drop_mm
-            if override is None
-            else override.axis_drop_mm
+            config.windows.observation_axis_drop_mm if override is None else override.axis_drop_mm
         )
         expected_angle = (
             config.windows.observation_sweep_angle_degrees
@@ -98,9 +98,7 @@ def _mapping_with_editor_overrides(
             start_position = positions[override.start_fdi]
             end_position = positions[override.end_fdi]
         except KeyError as error:
-            raise GeometryError(
-                f"观察窗 {window_id!r} 端点必须吸附到当前病例的有效 FDI"
-            ) from error
+            raise GeometryError(f"观察窗 {window_id!r} 端点必须吸附到当前病例的有效 FDI") from error
         definition = raw_window.get("axis_sweep")
         if not isinstance(definition, dict):
             raise GeometryError(f"观察窗 {window_id!r} 缺少 axis_sweep 定义")
@@ -173,6 +171,7 @@ def _fingerprint(config: CaseConfig, mapping: dict[str, object]) -> dict[str, ob
             "observation_adaptive_fallback_enabled",
             False,
         ),
+        "solver": asdict(_solver_parameters(config)),
     }
 
 
@@ -209,9 +208,7 @@ def _axis_points(definition: dict[str, object]) -> tuple[Vec3, ...]:
         else Vec3(0.0, 0.0, 0.0)
     )
     return tuple(
-        start
-        + (end - start) * (index / (count - 1))
-        - zero * additions[index]
+        start + (end - start) * (index / (count - 1)) - zero * additions[index]
         for index in range(count)
     )
 
@@ -225,6 +222,7 @@ def _run_adaptive_fallback(
 
     from twin_guide.observation_window_engine_adaptive import run
 
+    solver = _solver_parameters(config)
     return run(
         argparse.Namespace(
             case=mapping_path,
@@ -232,23 +230,23 @@ def _run_adaptive_fallback(
             source=config.inputs.template,
             output_dir=output_root / "adaptive-fallback",
             window_id=None,
-            top_extension_mm=0.4,
-            side_extension_mm=0.4,
-            outward_margin_mm=0.4,
-            wall_overcut_mm=0.4,
+            top_extension_mm=solver.top_extension_mm,
+            side_extension_mm=solver.side_extension_mm,
+            outward_margin_mm=solver.outward_margin_mm,
+            wall_overcut_mm=solver.wall_overcut_mm,
             window_wall_overcut_mm=None,
-            maximum_wall_thickness_mm=5.0,
-            ray_entry_tolerance_mm=0.65,
-            following_wall_safety_mm=0.10,
-            axis_core_overcut_mm=0.30,
-            minimum_axis_visibility_row_fraction=0.50,
-            minimum_axis_clear_corridor_fraction=0.95,
-            union_batch_size=16,
-            fragment_volume_tolerance_mm3=2.0,
-            minimum_removed_volume_mm3=1.0,
-            residual_volume_tolerance_mm3=1.0e-4,
-            volume_identity_tolerance_mm3=5.0e-3,
-            volume_identity_relative_tolerance=1.0e-4,
+            maximum_wall_thickness_mm=solver.maximum_wall_thickness_mm,
+            ray_entry_tolerance_mm=solver.ray_entry_tolerance_mm,
+            following_wall_safety_mm=solver.following_wall_safety_mm,
+            axis_core_overcut_mm=solver.axis_core_overcut_mm,
+            minimum_axis_visibility_row_fraction=(solver.minimum_axis_visibility_row_fraction),
+            minimum_axis_clear_corridor_fraction=(solver.minimum_axis_clear_corridor_fraction),
+            union_batch_size=solver.union_batch_size,
+            fragment_volume_tolerance_mm3=solver.fragment_volume_tolerance_mm3,
+            minimum_removed_volume_mm3=solver.minimum_removed_volume_mm3,
+            residual_volume_tolerance_mm3=solver.residual_volume_tolerance_mm3,
+            volume_identity_tolerance_mm3=(solver.adaptive_volume_identity_tolerance_mm3),
+            volume_identity_relative_tolerance=solver.volume_identity_relative_tolerance,
             write_failed_qa_artifacts=True,
             local_failure_drop_increment_mm=0.0,
             local_failure_drop_target_mm=list(
@@ -318,9 +316,7 @@ def build_observation_window_opening(
     本函数不调用牙位识别或牙位编号逻辑，映射报告是只读输入。
     """
 
-    output_root = (
-        config.output_directory / ".cache" / "stage-03-cutout-planning"
-    )
+    output_root = config.output_directory / ".cache" / "stage-03-cutout-planning"
     output_root.mkdir(parents=True, exist_ok=True)
     mapping, mapping_path = _mapping_with_editor_overrides(
         config,
@@ -337,9 +333,7 @@ def build_observation_window_opening(
             if cached.get("fingerprint") == fingerprint and cached_report.is_file():
                 cached_qa = cached.get("QA")
                 qa_passed = bool(
-                    isinstance(cached_qa, dict)
-                    and cached_qa
-                    and all(cached_qa.values())
+                    isinstance(cached_qa, dict) and cached_qa and all(cached_qa.values())
                 )
                 if not require_qa or qa_passed:
                     return _profile_from_report(cached_report)
@@ -354,38 +348,20 @@ def build_observation_window_opening(
             run,
         )
     except ImportError as error:
-        raise GeometryError(
-            "无法加载 TwinGuide 内部观察窗算法；请检查项目依赖安装"
-        ) from error
+        raise GeometryError("无法加载 TwinGuide 内部观察窗算法；请检查项目依赖安装") from error
 
-    request = ObservationWindowRequest(
+    solver = _solver_parameters(config)
+    request = ObservationWindowRequest.from_solver(
         case=mapping_path,
         mapping_report=mapping_path,
         source=config.inputs.template,
         output_dir=output_root,
-        side_extension_mm=0.4,
-        wall_overcut_mm=0.4,
-        following_wall_safety_mm=0.10,
-        axis_core_overcut_mm=0.30,
-        minimum_axis_visibility_row_fraction=0.50,
-        minimum_axis_clear_corridor_fraction=0.95,
-        union_batch_size=16,
-        fragment_volume_tolerance_mm3=2.0,
-        minimum_removed_volume_mm3=1.0,
-        residual_volume_tolerance_mm3=1e-4,
-        # difference 与 intersection 是两次独立的浮点网格布尔运算。
-        # 0.05 mm³ 是 12 病例回归覆盖的绝对数值底线；大切割仍受 0.01% 限制。
-        volume_identity_tolerance_mm3=5e-2,
-        volume_identity_relative_tolerance=1e-4,
+        solver=solver,
     )
     deterministic_error: Exception | None = None
     try:
-        report = (
-            build_preview(request, force_rebuild=regenerate)
-            if fast_preview
-            else run(request)
-        )
-    except Exception as error:
+        report = build_preview(request, force_rebuild=regenerate) if fast_preview else run(request)
+    except EXPECTED_SOLVER_ERRORS as error:
         deterministic_error = error
         fallback_enabled = bool(
             getattr(
@@ -399,9 +375,7 @@ def build_observation_window_opening(
         report = {}
     deterministic_qa = report.get("QA")
     deterministic_passed = bool(
-        isinstance(deterministic_qa, dict)
-        and deterministic_qa
-        and all(deterministic_qa.values())
+        isinstance(deterministic_qa, dict) and deterministic_qa and all(deterministic_qa.values())
     )
     solver_mode = "deterministic_constraint"
     fallback_enabled = bool(
@@ -415,21 +389,82 @@ def build_observation_window_opening(
         try:
             report = _run_adaptive_fallback(config, mapping_path, output_root)
             solver_mode = "adaptive_local_drop_fallback"
-        except Exception as fallback_error:
+        except EXPECTED_SOLVER_ERRORS as fallback_error:
             detail = (
                 f"确定性求解异常：{deterministic_error}；"
                 if deterministic_error is not None
                 else "确定性求解未通过 QA；"
             )
+            integration_path.write_text(
+                json.dumps(
+                    {
+                        "status": "failed",
+                        "fingerprint": fingerprint,
+                        "mapping_report": str(mapping_path),
+                        "solver_mode": "adaptive_local_drop_fallback",
+                        "deterministic": {
+                            "error_type": (
+                                type(deterministic_error).__name__
+                                if deterministic_error is not None
+                                else None
+                            ),
+                            "error": (
+                                str(deterministic_error)
+                                if deterministic_error is not None
+                                else None
+                            ),
+                            "QA": deterministic_qa,
+                        },
+                        "fallback": {
+                            "error_type": type(fallback_error).__name__,
+                            "error": str(fallback_error),
+                        },
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
             raise GeometryError(
                 f"轴扫掠观察窗生成失败：{detail}自适应 fallback 失败：{fallback_error}"
             ) from fallback_error
-    qa_passed = bool(report["QA"]) and all(report["QA"].values())
+    final_qa = report.get("QA")
+    if not isinstance(final_qa, dict):
+        raise GeometryError("观察窗求解报告缺少 QA 对象")
+    qa_passed = bool(final_qa) and all(final_qa.values())
     if require_qa and not qa_passed:
-        failed_checks = [name for name, passed in report["QA"].items() if not passed]
-        raise GeometryError(
-            "轴扫观察窗未通过最终 QA：" + "、".join(failed_checks)
+        failed_checks = [name for name, passed in final_qa.items() if not passed]
+        integration_path.write_text(
+            json.dumps(
+                {
+                    "status": "failed",
+                    "fingerprint": fingerprint,
+                    "mapping_report": str(mapping_path),
+                    "solver_mode": solver_mode,
+                    "deterministic": {
+                        "error_type": (
+                            type(deterministic_error).__name__
+                            if deterministic_error is not None
+                            else None
+                        ),
+                        "error": (
+                            str(deterministic_error) if deterministic_error is not None else None
+                        ),
+                        "QA": deterministic_qa,
+                    },
+                    "fallback": {
+                        "QA": final_qa,
+                        "local_failure_adaptation": report.get("local_failure_adaptation"),
+                    }
+                    if solver_mode == "adaptive_local_drop_fallback"
+                    else None,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
         )
+        raise GeometryError("轴扫观察窗未通过最终 QA：" + "、".join(failed_checks))
     final_report = Path(str(report["outputs"]["report_json"])).resolve()
     integration = {
         "status": "complete" if qa_passed else "preview_qa_failed",
@@ -437,8 +472,19 @@ def build_observation_window_opening(
         "mapping_report": str(mapping_path),
         "final_report": str(final_report),
         "final_cutter": str(report["outputs"]["combined_cutter_ply"]),
-        "QA": report["QA"],
+        "QA": final_qa,
         "solver_mode": solver_mode,
+        "deterministic": {
+            "error_type": (
+                type(deterministic_error).__name__ if deterministic_error is not None else None
+            ),
+            "error": (str(deterministic_error) if deterministic_error is not None else None),
+            "QA": deterministic_qa,
+        },
+        "fallback": {
+            "used": solver_mode == "adaptive_local_drop_fallback",
+            "QA": final_qa if solver_mode == "adaptive_local_drop_fallback" else None,
+        },
         "constraint_solution": report.get("constraint_solution"),
         "local_failure_adaptation": report.get("local_failure_adaptation"),
     }

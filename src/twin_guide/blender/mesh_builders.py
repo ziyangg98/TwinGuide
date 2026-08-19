@@ -162,16 +162,12 @@ def _create_centerline_tube_with_radii(
         raise GeometryError("连续梁半径必须为正且截面细分数不得小于 8")
     frames = _transported_frames(centerline)
     vertices = []
-    for point, radius_mm, (_, normal, binormal) in zip(
-        centerline, radii_mm, frames, strict=True
-    ):
+    for point, radius_mm, (_, normal, binormal) in zip(centerline, radii_mm, frames, strict=True):
         for segment in range(ring_segments):
             angle = 2.0 * pi * segment / ring_segments
             vertices.append(
                 (
-                    point
-                    + normal * (radius_mm * cos(angle))
-                    + binormal * (radius_mm * sin(angle))
+                    point + normal * (radius_mm * cos(angle)) + binormal * (radius_mm * sin(angle))
                 ).as_tuple()
             )
     faces = []
@@ -243,10 +239,7 @@ def create_root_tapered_centerline_tube(
     for distance in cumulative:
         u = max(0.0, min(1.0, distance / effective))
         smoothstep = 3.0 * u * u - 2.0 * u * u * u
-        radii.append(
-            root_radius_mm
-            + (beam_radius_mm - root_radius_mm) * smoothstep
-        )
+        radii.append(root_radius_mm + (beam_radius_mm - root_radius_mm) * smoothstep)
     return _create_centerline_tube_with_radii(
         name,
         centerline,
@@ -390,12 +383,8 @@ def create_conformal_fusion_foot(
             surface = Vec3(float(location.x), float(location.y), float(location.z))
             rho_squared = u * u + v * v
             height = peak_height_mm * max(0.0, 1.0 - rho_squared) ** 2
-            candidate_top.append(
-                (surface + projected_normal * height).as_tuple()
-            )
-            candidate_bottom.append(
-                (surface - projected_normal * embed_depth_mm).as_tuple()
-            )
+            candidate_top.append((surface + projected_normal * height).as_tuple())
+            candidate_bottom.append((surface - projected_normal * embed_depth_mm).as_tuple())
         maximum_projection = candidate_maximum_projection
         if maximum_projection <= (
             FOOT_PROJECTION_LIMIT_MM + FOOT_PROJECTION_NUMERICAL_TOLERANCE_MM
@@ -431,13 +420,10 @@ def create_conformal_fusion_foot(
         outer = ring_indices[ring_index]
         for segment in range(angular_segments):
             following = (segment + 1) % angular_segments
-            faces.append(
-                (inner[segment], outer[segment], outer[following], inner[following])
-            )
+            faces.append((inner[segment], outer[segment], outer[following], inner[following]))
     top_faces = tuple(faces)
     faces.extend(
-        tuple(reversed(tuple(vertex + vertex_count for vertex in face)))
-        for face in top_faces
+        tuple(reversed(tuple(vertex + vertex_count for vertex in face))) for face in top_faces
     )
     outer = ring_indices[-1]
     for segment in range(angular_segments):

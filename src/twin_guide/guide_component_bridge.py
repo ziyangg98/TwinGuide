@@ -56,10 +56,7 @@ def _load_meaningful_components(
     mesh.remove_unreferenced_vertices()
     mesh.fix_normals()
     ranked = sorted(
-        (
-            (component, float(component.area))
-            for component in mesh.split(only_watertight=False)
-        ),
+        ((component, float(component.area)) for component in mesh.split(only_watertight=False)),
         key=lambda item: item[1],
         reverse=True,
     )
@@ -78,8 +75,7 @@ def _straight_centerline(start: Vec3, end: Vec3, spacing_mm: float = 0.30) -> tu
 
     sample_count = max(2, math.ceil(start.distance_to(end) / spacing_mm) + 1)
     return tuple(
-        start + (end - start) * (index / (sample_count - 1))
-        for index in range(sample_count)
+        start + (end - start) * (index / (sample_count - 1)) for index in range(sample_count)
     )
 
 
@@ -114,11 +110,7 @@ def select_guide_component_bridge(
             "断裂导板主体分量数量不符："
             f"要求 {config.required_guide_component_count}，实际 {len(component_areas)}"
         )
-    assignments = (
-        ((1, 2), (2, 1))
-        if config.require_different_guide_components
-        else ((None, None),)
-    )
+    assignments = ((1, 2), (2, 1)) if config.require_different_guide_components else ((None, None),)
     candidates = []
     failures = []
     for assignment in assignments:
@@ -131,9 +123,7 @@ def select_guide_component_bridge(
                 station_meshes=(
                     None
                     if assignment[0] is None
-                    else tuple(
-                        component_meshes[rank - 1] for rank in assignment
-                    )
+                    else tuple(component_meshes[rank - 1] for rank in assignment)
                 ),
             )
         except GeometryError as error:
@@ -147,8 +137,7 @@ def select_guide_component_bridge(
         candidates.append((score, selection, assignment))
     if not candidates:
         raise GeometryError(
-            "两个牙位站位无法按不同导板分量完成同侧双射线选点："
-            + "; ".join(failures)
+            "两个牙位站位无法按不同导板分量完成同侧双射线选点：" + "; ".join(failures)
         )
     _, selections, selected_assignment = min(candidates, key=lambda item: item[0])
     station_component_ranks = list(selected_assignment)
@@ -156,9 +145,7 @@ def select_guide_component_bridge(
         config.require_different_guide_components
         and station_component_ranks[0] == station_component_ranks[1]
     ):
-        raise GeometryError(
-            "两个预连接牙位站位落在同一导板分量，不能跨接断裂导板"
-        )
+        raise GeometryError("两个预连接牙位站位落在同一导板分量，不能跨接断裂导板")
     links = []
     for side, attribute in (("u_side", "first"), ("back_u_side", "second")):
         start_anchor = getattr(selections[0], attribute)
@@ -182,9 +169,7 @@ def select_guide_component_bridge(
         config.dental_clearance_mm,
         config.endpoint_reinforcement,
         tuple(
-            trajectory
-            for selection in selections
-            for trajectory in selection.support_trajectories
+            trajectory for selection in selections for trajectory in selection.support_trajectories
         ),
         component_areas,
     )

@@ -6,14 +6,20 @@ import tempfile
 import unittest
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
+import numpy as np
 import trimesh
 
 from twin_guide.tooth_mapping import tooth_recognition
+from twin_guide.tooth_mapping.contact_guide_mapping import ContactToothLocation
 from twin_guide.tooth_mapping.guide_mapping import (
     GuideMappingProfile,
     GuideMappingResult,
+)
+from twin_guide.tooth_mapping.map_contact_chord_teeth_to_guide import (
+    _preview_instance_records,
 )
 from twin_guide.tooth_mapping.pipeline import _core
 from twin_guide.tooth_mapping.tooth_recognition import (
@@ -110,6 +116,68 @@ class ToothMappingWorkflowTests(unittest.TestCase):
             self.assertIs(first, second)
             loader.assert_called_once()
             _core._load_mesh_cached.cache_clear()
+
+    def test_preview_instances_include_shared_lr_ap_geometry(self) -> None:
+        """fdi_new 预览记录必须满足公共渲染器的字段契约。"""
+
+        locations = [
+            ContactToothLocation(
+                fdi=14,
+                centroid_lr_ap_mm=(1.5, 2.5),
+                arch_s_mm=3.0,
+                arch_lr_ap_mm=(1.25, 2.0),
+                contour_interval_s_mm=(2.0, 4.0),
+                crown_height_mm=8.0,
+                crown_point_global_mm=(1.5, 2.5, 8.0),
+                lift_method="authoritative_v2_component_crown_point",
+                lift_distance_mm=0.0,
+            )
+        ]
+        contour_records = [
+            {
+                "FDI": 14,
+                "contour_LR_AP_mm": [[1.0, 2.0], [2.0, 2.0], [1.5, 3.0]],
+            }
+        ]
+        frame = {
+            "curve": SimpleNamespace(
+                lr=np.asarray([1.0, 2.0]),
+                ap=np.asarray([2.0, 2.0]),
+                s=np.asarray([2.0, 4.0]),
+            )
+        }
+
+        records = _preview_instance_records(locations, contour_records, frame)
+
+        self.assertEqual(records[0]["area_centroid_lr_ap_mm"], [1.5, 2.5])
+        self.assertEqual(
+            records[0]["contour_lr_ap_mm"],
+            contour_records[0]["contour_LR_AP_mm"],
+        )
+        self.assertEqual(records[0]["crown_point_global_mm"], [1.5, 2.5, 8.0])
+
+    def test_preview_contract_rejects_missing_contour(self) -> None:
+        location = ContactToothLocation(
+            fdi=14,
+            centroid_lr_ap_mm=(1.5, 2.5),
+            arch_s_mm=3.0,
+            arch_lr_ap_mm=(1.25, 2.0),
+            contour_interval_s_mm=(2.0, 4.0),
+            crown_height_mm=8.0,
+            crown_point_global_mm=(1.5, 2.5, 8.0),
+            lift_method="test",
+            lift_distance_mm=0.0,
+        )
+        frame = {
+            "curve": SimpleNamespace(
+                lr=np.asarray([1.0, 2.0]),
+                ap=np.asarray([2.0, 2.0]),
+                s=np.asarray([2.0, 4.0]),
+            )
+        }
+
+        with self.assertRaisesRegex(RuntimeError, "FDI 14.*牙冠轮廓"):
+            _preview_instance_records([location], [], frame)
 
 
 if __name__ == "__main__":

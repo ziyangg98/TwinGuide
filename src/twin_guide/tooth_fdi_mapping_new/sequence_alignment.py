@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import itertools
 import math
+from dataclasses import dataclass
 from types import SimpleNamespace
 
 import numpy as np
@@ -30,16 +31,13 @@ from .models import (
     CrownHypothesis,
 )
 
-
 EPS = 1.0e-6
 
 
 def _physical_crownness(track: CoreTrack) -> float:
     """算法说明。 One-sided crownness adjusted only for jointly flat 3-D support."""
 
-    return float(np.clip(
-        track.crownness * track.relative_3d_tooth_support, EPS, 0.9999
-    ))
+    return float(np.clip(track.crownness * track.relative_3d_tooth_support, EPS, 0.9999))
 
 
 def _persistent_subbasin_evidence(
@@ -69,9 +67,7 @@ def _persistent_subbasin_evidence(
                 (observation, candidate.track_id)
             )
 
-    simultaneous_pairs: list[
-        tuple[tuple[float, float], tuple[float, float], int, int]
-    ] = []
+    simultaneous_pairs: list[tuple[tuple[float, float], tuple[float, float], int, int]] = []
     for scale_index, maps in enumerate(maps_by_quantile.values()):
         mask = np.asarray(maps["silhouette"], dtype=bool)
         lr = np.asarray(maps["lr_centres"], dtype=float)
@@ -105,9 +101,8 @@ def _persistent_subbasin_evidence(
         ):
             point = np.asarray(candidate[0].center_lr_ap_mm, dtype=float)
             if any(
-                np.linalg.norm(
-                    point - np.asarray(existing[0].center_lr_ap_mm, dtype=float)
-                ) <= 0.12 * local_scale
+                np.linalg.norm(point - np.asarray(existing[0].center_lr_ap_mm, dtype=float))
+                <= 0.12 * local_scale
                 for existing in unique
             ):
                 continue
@@ -115,12 +110,10 @@ def _persistent_subbasin_evidence(
 
         possible_pairs = []
         for first_index, first in enumerate(unique):
-            for second in unique[first_index + 1:]:
+            for second in unique[first_index + 1 :]:
                 s_separation = abs(first[0].s_mm - second[0].s_mm)
                 if not (
-                    minimum_separation_scale * local_scale
-                    <= s_separation
-                    <= 1.25 * local_scale
+                    minimum_separation_scale * local_scale <= s_separation <= 1.25 * local_scale
                 ):
                     continue
                 # Prefer two deep, similarly supported basins.  The ordering is
@@ -135,12 +128,14 @@ def _persistent_subbasin_evidence(
         _, first, second = max(possible_pairs, key=lambda item: item[0])
         if first[0].s_mm > second[0].s_mm:
             first, second = second, first
-        simultaneous_pairs.append((
-            first[0].center_lr_ap_mm,
-            second[0].center_lr_ap_mm,
-            first[1],
-            second[1],
-        ))
+        simultaneous_pairs.append(
+            (
+                first[0].center_lr_ap_mm,
+                second[0].center_lr_ap_mm,
+                first[1],
+                second[1],
+            )
+        )
 
     persistence = len(simultaneous_pairs) / scale_count
     if persistence + EPS < minimum_persistence:
@@ -150,7 +145,8 @@ def _persistent_subbasin_evidence(
     # geometry already contains two consumable objects.  Creating a split on
     # top of them is the exact split+merge cardinality compensation failure.
     stable_ids = {
-        item.track_id for item in tracks
+        item.track_id
+        for item in tracks
         if item.track_id != track.track_id
         and item.persistence >= minimum_persistence
         and item.relative_3d_tooth_support >= 1.0 - EPS
@@ -187,9 +183,11 @@ def build_crown_hypotheses(
 
     hypotheses: list[CrownHypothesis] = []
     median_scale = float(np.median([track.local_scale_mm for track in tracks])) if tracks else 8.0
-    total_scale_count = len(maps_by_quantile) if maps_by_quantile else max(
-        (max(track.support_scale_indices, default=-1) for track in tracks), default=4
-    ) + 1
+    total_scale_count = (
+        len(maps_by_quantile)
+        if maps_by_quantile
+        else max((max(track.support_scale_indices, default=-1) for track in tracks), default=4) + 1
+    )
     total_scale_count = max(total_scale_count, 1)
 
     # Determine physical crown groups before generating label hypotheses.  Two
@@ -218,7 +216,7 @@ def build_crown_hypotheses(
     # segmentation and is not an admissibility constraint for the global path.
     # Pre-clustering here caused one uncertain local measurement to rewrite the
     # whole-arch FDI assignment (notably WHL-26).
-    if False and maps_by_quantile and len(tracks) > 1:
+    if False:
         # The highest crown slice is the least contaminated by gingival bridges
         # and therefore the authoritative topology for deciding whether two
         # tracks are distinct crowns.  Lower slices remain available to track
@@ -248,9 +246,7 @@ def build_crown_hypotheses(
                     "component_id": component_id,
                     "assignment": SimpleNamespace(
                         fdi=1,
-                        center_lr_ap_mm=(
-                            float(first_center[0]), float(first_center[1])
-                        ),
+                        center_lr_ap_mm=(float(first_center[0]), float(first_center[1])),
                         s_mm=float(first_s),
                     ),
                 },
@@ -258,9 +254,7 @@ def build_crown_hypotheses(
                     "component_id": component_id,
                     "assignment": SimpleNamespace(
                         fdi=2,
-                        center_lr_ap_mm=(
-                            float(second_center[0]), float(second_center[1])
-                        ),
+                        center_lr_ap_mm=(float(second_center[0]), float(second_center[1])),
                         s_mm=float(second_s),
                     ),
                 },
@@ -289,23 +283,15 @@ def build_crown_hypotheses(
             seeds = [
                 CrownSeed(
                     instance_id=1,
-                    center_lr_ap_mm=(
-                        float(first_center[0]), float(first_center[1])
-                    ),
-                    initial_center_lr_ap_mm=(
-                        float(first_center[0]), float(first_center[1])
-                    ),
+                    center_lr_ap_mm=(float(first_center[0]), float(first_center[1])),
+                    initial_center_lr_ap_mm=(float(first_center[0]), float(first_center[1])),
                     core_pixel_count=1,
                     refinement_distance_mm=0.0,
                 ),
                 CrownSeed(
                     instance_id=2,
-                    center_lr_ap_mm=(
-                        float(second_center[0]), float(second_center[1])
-                    ),
-                    initial_center_lr_ap_mm=(
-                        float(second_center[0]), float(second_center[1])
-                    ),
+                    center_lr_ap_mm=(float(second_center[0]), float(second_center[1])),
+                    initial_center_lr_ap_mm=(float(second_center[0]), float(second_center[1])),
                     core_pixel_count=1,
                     refinement_distance_mm=0.0,
                 ),
@@ -334,45 +320,27 @@ def build_crown_hypotheses(
                     component=basin_components == component_id,
                     local_scale_mm=local_scale_mm,
                 )
-                if bool(
-                    support.get("surface_valley_contrast", {}).get(
-                        "accepted"
-                    )
-                ):
+                if bool(support.get("surface_valley_contrast", {}).get("accepted")):
                     return True
             return False
 
-        for index, (first_track, second_track) in enumerate(
-            zip(tracks, tracks[1:])
-        ):
+        for index, (first_track, second_track) in enumerate(itertools.pairwise(tracks)):
             component_id = component_at(first_track)
             if component_id <= 0 or component_id != component_at(second_track):
                 independent_adjacent_pairs.add((index, index + 1))
                 continue
             support = _independent_crown_basin_support(
-                first_center_lr_ap_mm=np.asarray(
-                    first_track.center_lr_ap_mm, dtype=float
-                ),
-                second_center_lr_ap_mm=np.asarray(
-                    second_track.center_lr_ap_mm, dtype=float
-                ),
+                first_center_lr_ap_mm=np.asarray(first_track.center_lr_ap_mm, dtype=float),
+                second_center_lr_ap_mm=np.asarray(second_track.center_lr_ap_mm, dtype=float),
                 maps=basin_maps,
                 component=basin_components == component_id,
-                local_scale_mm=0.5 * (
-                    first_track.local_scale_mm + second_track.local_scale_mm
-                ),
+                local_scale_mm=0.5 * (first_track.local_scale_mm + second_track.local_scale_mm),
             )
             if not bool(support.get("available")):
                 continue
-            first_center = np.asarray(
-                first_track.center_lr_ap_mm, dtype=float
-            )
-            second_center = np.asarray(
-                second_track.center_lr_ap_mm, dtype=float
-            )
-            local_scale = 0.5 * (
-                first_track.local_scale_mm + second_track.local_scale_mm
-            )
+            first_center = np.asarray(first_track.center_lr_ap_mm, dtype=float)
+            second_center = np.asarray(second_track.center_lr_ap_mm, dtype=float)
+            local_scale = 0.5 * (first_track.local_scale_mm + second_track.local_scale_mm)
             if (
                 bool(support.get("accepted"))
                 or surface_boundary_separates(
@@ -408,18 +376,16 @@ def build_crown_hypotheses(
                     ordered_groups.append([index])
                 else:
                     ordered_groups[-1].append(index)
-            for first_group, second_group in zip(
-                ordered_groups, ordered_groups[1:]
-            ):
+            for first_group, second_group in itertools.pairwise(ordered_groups):
+
                 def group_center(indices: list[int]) -> np.ndarray:
                     """内部算法说明。"""
-                    weights = np.asarray([
-                        max(_physical_crownness(tracks[index]), 0.05)
-                        for index in indices
-                    ])
-                    centers = np.asarray([
-                        tracks[index].center_lr_ap_mm for index in indices
-                    ], dtype=float)
+                    weights = np.asarray(
+                        [max(_physical_crownness(tracks[index]), 0.05) for index in indices]
+                    )
+                    centers = np.asarray(
+                        [tracks[index].center_lr_ap_mm for index in indices], dtype=float
+                    )
                     return np.average(centers, axis=0, weights=weights)
 
                 first_center = group_center(first_group)
@@ -429,16 +395,13 @@ def build_crown_hypotheses(
                 second_row = int(np.argmin(np.abs(basin_lr - second_center[0])))
                 second_column = int(np.argmin(np.abs(basin_ap - second_center[1])))
                 component_id = int(basin_components[first_row, first_column])
-                if (
-                    component_id <= 0
-                    or component_id
-                    != int(basin_components[second_row, second_column])
+                if component_id <= 0 or component_id != int(
+                    basin_components[second_row, second_column]
                 ):
                     continue
-                group_scale = float(np.mean([
-                    tracks[index].local_scale_mm
-                    for index in first_group + second_group
-                ]))
+                group_scale = float(
+                    np.mean([tracks[index].local_scale_mm for index in first_group + second_group])
+                )
                 support = _independent_crown_basin_support(
                     first_center_lr_ap_mm=first_center,
                     second_center_lr_ap_mm=second_center,
@@ -446,12 +409,8 @@ def build_crown_hypotheses(
                     component=basin_components == component_id,
                     local_scale_mm=group_scale,
                 )
-                first_s = float(np.mean([
-                    tracks[index].s_mm for index in first_group
-                ]))
-                second_s = float(np.mean([
-                    tracks[index].s_mm for index in second_group
-                ]))
+                first_s = float(np.mean([tracks[index].s_mm for index in first_group]))
+                second_s = float(np.mean([tracks[index].s_mm for index in second_group]))
                 if (
                     bool(support.get("available"))
                     and not bool(support.get("accepted"))
@@ -474,21 +433,15 @@ def build_crown_hypotheses(
                     break
 
         independent_adjacent_pairs = {
-            (index, index + 1)
-            for index in range(len(tracks) - 1)
-            if find(index) != find(index + 1)
+            (index, index + 1) for index in range(len(tracks) - 1) if find(index) != find(index + 1)
         }
 
-    basin_group_by_index = {
-        index: find(index) for index in range(len(tracks))
-    }
+    basin_group_by_index = {index: find(index) for index in range(len(tracks))}
     basin_group_members: dict[int, list[int]] = {}
     for index, group_id in basin_group_by_index.items():
         basin_group_members.setdefault(group_id, []).append(index)
     single_basin_indices = {
-        members[0]
-        for members in basin_group_members.values()
-        if len(members) == 1
+        members[0] for members in basin_group_members.values() if len(members) == 1
     }
 
     depth_maps: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
@@ -496,23 +449,23 @@ def build_crown_hypotheses(
         for maps in maps_by_quantile.values():
             mask = np.asarray(maps["silhouette"], dtype=bool)
             resolution = float(maps["resolution_mm"])
-            depth_maps.append((
-                distance_transform_edt(mask) * resolution,
-                np.asarray(maps["lr_centres"], dtype=float),
-                np.asarray(maps["ap_centres"], dtype=float),
-            ))
+            depth_maps.append(
+                (
+                    distance_transform_edt(mask) * resolution,
+                    np.asarray(maps["lr_centres"], dtype=float),
+                    np.asarray(maps["ap_centres"], dtype=float),
+                )
+            )
 
-    def projection_persistence(
-        centers: tuple[tuple[float, float], ...], width_mm: float
-    ) -> float:
+    def projection_persistence(centers: tuple[tuple[float, float], ...], width_mm: float) -> float:
         """算法说明。
 
-Count a scale when every proposed center has physical core support.
+        Count a scale when every proposed center has physical core support.
 
-        A crown that is merged with its neighbour at one height may lose its
-        own local maximum while a deep support region remains.  This geometric
-        support is the one-to-many/many-to-one relation required by the
-        multi-scale model; it does not create another atomic core.
+                A crown that is merged with its neighbour at one height may lose its
+                own local maximum while a deep support region remains.  This geometric
+                support is the one-to-many/many-to-one relation required by the
+                multi-scale model; it does not create another atomic core.
         """
 
         if not depth_maps:
@@ -540,45 +493,38 @@ Count a scale when every proposed center has physical core support.
         # projection support as supplementary evidence only.  Admission of a
         # single crown is controlled by the actual linked core trajectory.
         single_persistence = track.persistence
-        single_projection_support = projection_persistence(
-            single_centers, track.local_scale_mm
-        )
-        if (
-            single_persistence >= minimum_single_persistence
-            and index in single_basin_indices
-        ):
-            hypotheses.append(CrownHypothesis(
-                hypothesis_id=f"single:{track.track_id}",
-                kind="single",
-                first_core_index=index,
-                last_core_index=index,
-                core_ids=(track.track_id,),
-                fdi_count=1,
-                centers_lr_ap_mm=single_centers,
-                centers_s_mm=(track.s_mm,),
-                width_mm=track.local_scale_mm,
-                crownness=track.crownness,
-                persistence=single_persistence,
-                evidence_probability=float(np.clip(
-                    _physical_crownness(track)
-                    * single_persistence
-                    * (0.80 + 0.20 * single_projection_support),
-                    0.01,
-                    0.99,
-                )),
-            ))
+        single_projection_support = projection_persistence(single_centers, track.local_scale_mm)
+        if single_persistence >= minimum_single_persistence and index in single_basin_indices:
+            hypotheses.append(
+                CrownHypothesis(
+                    hypothesis_id=f"single:{track.track_id}",
+                    kind="single",
+                    first_core_index=index,
+                    last_core_index=index,
+                    core_ids=(track.track_id,),
+                    fdi_count=1,
+                    centers_lr_ap_mm=single_centers,
+                    centers_s_mm=(track.s_mm,),
+                    width_mm=track.local_scale_mm,
+                    crownness=track.crownness,
+                    persistence=single_persistence,
+                    evidence_probability=float(
+                        np.clip(
+                            _physical_crownness(track)
+                            * single_persistence
+                            * (0.80 + 0.20 * single_projection_support),
+                            0.01,
+                            0.99,
+                        )
+                    ),
+                )
+            )
         # A split exists only after two simultaneous crown basins persist over
         # height.  Surface valleys and multiview curves validate their mutual
         # boundary later; they are not allowed to manufacture a second tooth.
         observation_s = np.asarray([item.s_mm for item in track.observations])
-        observation_span = (
-            float(np.ptp(observation_s)) if len(observation_s) else 0.0
-        )
-        broad = track.local_scale_mm >= 1.20 * median_scale
-        multi_position = (
-            len(observation_s) >= 2
-            and observation_span >= 0.45 * median_scale
-        )
+        observation_span = float(np.ptp(observation_s)) if len(observation_s) else 0.0
+        multi_position = len(observation_s) >= 2 and observation_span >= 0.45 * median_scale
         # Every stable physical support may participate in a *candidate* split
         # during global fusion reconciliation.  Broadness remains a prior on
         # its cost, never proof that the split exists.  The component-local
@@ -594,10 +540,8 @@ Count a scale when every proposed center has physical core support.
         )
         curve_anchor = frame.at_s(track.s_mm)
         track_center = np.asarray(track.center_lr_ap_mm, dtype=float)
-        proposed_centers = tuple(
-            tuple(float(value) for value in (
-                track_center + frame.at_s(s_mm) - curve_anchor
-            ))
+        tuple(
+            tuple(float(value) for value in (track_center + frame.at_s(s_mm) - curve_anchor))
             for s_mm in proposed_s_values
         )
         subbasin_persistence, subbasin_centers = _persistent_subbasin_evidence(
@@ -614,7 +558,7 @@ Count a scale when every proposed center has physical core support.
         ):
             centers = subbasin_centers
             s_values = tuple(frame.project_lr_ap(np.asarray(center))[0] for center in centers)
-            separation = float(abs(s_values[1] - s_values[0]))
+            float(abs(s_values[1] - s_values[0]))
             width_ratio = track.local_scale_mm / max(median_scale, EPS)
             # Broadness is only permissive candidate evidence.  A crown just
             # above the broad threshold must not make splitting almost free;
@@ -627,47 +571,47 @@ Count a scale when every proposed center has physical core support.
                 track.persistence,
                 subbasin_persistence,
             )
-            evidence = float(np.clip(
-                _physical_crownness(track)
-                * broad_score * split_persistence, 0.01, 0.95
-            ))
-            hypotheses.append(CrownHypothesis(
-                hypothesis_id=f"split:{track.track_id}",
-                kind="split",
-                first_core_index=index,
-                last_core_index=index,
-                core_ids=(track.track_id,),
-                fdi_count=2,
-                centers_lr_ap_mm=centers,
-                centers_s_mm=s_values,
-                width_mm=track.local_scale_mm,
-                crownness=track.crownness,
-                persistence=split_persistence,
-                evidence_probability=evidence,
-                subbasin_persistence=subbasin_persistence,
-                independent_subbasin_count=2,
-            ))
+            evidence = float(
+                np.clip(_physical_crownness(track) * broad_score * split_persistence, 0.01, 0.95)
+            )
+            hypotheses.append(
+                CrownHypothesis(
+                    hypothesis_id=f"split:{track.track_id}",
+                    kind="split",
+                    first_core_index=index,
+                    last_core_index=index,
+                    core_ids=(track.track_id,),
+                    fdi_count=2,
+                    centers_lr_ap_mm=centers,
+                    centers_s_mm=s_values,
+                    width_mm=track.local_scale_mm,
+                    crownness=track.crownness,
+                    persistence=split_persistence,
+                    evidence_probability=evidence,
+                    subbasin_persistence=subbasin_persistence,
+                    independent_subbasin_count=2,
+                )
+            )
 
-    merge_sizes = sorted({
-        2,
-        3,
-        *(len(members) for members in basin_group_members.values()
-          if len(members) > 1),
-    })
+    merge_sizes = sorted(
+        {
+            2,
+            3,
+            *(len(members) for members in basin_group_members.values() if len(members) > 1),
+        }
+    )
     for size in merge_sizes:
         for first_index in range(0, len(tracks) - size + 1):
-            selected = tracks[first_index:first_index + size]
+            selected = tracks[first_index : first_index + size]
             gaps = np.diff([item.s_mm for item in selected])
             local_scale = float(np.mean([item.local_scale_mm for item in selected]))
             transverse_span = float(np.ptp([item.u_mm for item in selected]))
             selected_indices = range(first_index, first_index + size)
-            same_physical_basin = len({
-                basin_group_by_index[index] for index in selected_indices
-            }) == 1
+            same_physical_basin = (
+                len({basin_group_by_index[index] for index in selected_indices}) == 1
+            )
             if same_physical_basin:
-                group_members = basin_group_members[
-                    basin_group_by_index[first_index]
-                ]
+                group_members = basin_group_members[basin_group_by_index[first_index]]
                 if list(selected_indices) != group_members:
                     continue
             contains_independent_basin_boundary = any(
@@ -676,15 +620,9 @@ Count a scale when every proposed center has physical core support.
             )
             if contains_independent_basin_boundary:
                 continue
-            if (
-                not same_physical_basin
-                and np.max(gaps, initial=0.0) / max(local_scale, EPS) > 1.05
-            ):
+            if not same_physical_basin and np.max(gaps, initial=0.0) / max(local_scale, EPS) > 1.05:
                 continue
-            if (
-                not same_physical_basin
-                and transverse_span / max(local_scale, EPS) > 1.05
-            ):
+            if not same_physical_basin and transverse_span / max(local_scale, EPS) > 1.05:
                 continue
             # A merge may absorb duplicate/fragmentary peaks belonging to one
             # crown, but it must not erase two independently persistent
@@ -693,21 +631,18 @@ Count a scale when every proposed center has physical core support.
             # persistence and separated along the arch are independent tooth
             # evidence.  This is a dimensionless, case-local topology test.
             persistent = [
-                item for item in selected
-                if item.persistence >= minimum_single_persistence
+                item for item in selected if item.persistence >= minimum_single_persistence
             ]
             independent_persistent_pair = any(
                 abs(second.s_mm - first.s_mm)
                 / max(0.5 * (first.local_scale_mm + second.local_scale_mm), EPS)
                 >= minimum_independent_core_separation_scale
                 for first_index_in_group, first in enumerate(persistent)
-                for second in persistent[first_index_in_group + 1:]
+                for second in persistent[first_index_in_group + 1 :]
             )
             if independent_persistent_pair and not same_physical_basin:
                 continue
-            weights = np.asarray([
-                max(_physical_crownness(item), 0.05) for item in selected
-            ])
+            weights = np.asarray([max(_physical_crownness(item), 0.05) for item in selected])
             centers = np.asarray([item.center_lr_ap_mm for item in selected])
             center = np.average(centers, axis=0, weights=weights)
             s_mm = float(np.average([item.s_mm for item in selected], weights=weights))
@@ -715,21 +650,20 @@ Count a scale when every proposed center has physical core support.
             common_scales = set(selected[0].support_scale_indices)
             for track in selected[1:]:
                 common_scales &= set(track.support_scale_indices)
-            union_scales = set().union(*(
-                set(item.support_scale_indices) for item in selected
-            ))
-            common_support = len(common_scales) / max(
-                len(union_scales), 1
+            union_scales = set().union(*(set(item.support_scale_indices) for item in selected))
+            common_support = len(common_scales) / max(len(union_scales), 1)
+            evidence = float(
+                np.clip(
+                    np.mean([_physical_crownness(item) for item in selected])
+                    * math.exp(-(gap_norm**2))
+                    * (0.70 + 0.30 * common_support),
+                    0.02,
+                    0.98,
+                )
             )
-            evidence = float(np.clip(
-                np.mean([_physical_crownness(item) for item in selected])
-                * math.exp(-gap_norm**2)
-                * (0.70 + 0.30 * common_support),
-                0.02,
-                0.98,
-            ))
             merge_width = float(
-                selected[-1].s_mm - selected[0].s_mm
+                selected[-1].s_mm
+                - selected[0].s_mm
                 + 0.5 * selected[0].local_scale_mm
                 + 0.5 * selected[-1].local_scale_mm
             )
@@ -743,35 +677,36 @@ Count a scale when every proposed center has physical core support.
             merge_persistence = float(len(union_scales) / total_scale_count)
             if merge_persistence < minimum_single_persistence:
                 continue
-            evidence = float(np.clip(
-                evidence
-                * merge_persistence
-                * (0.70 ** (size - 1)),
-                0.01,
-                0.98,
-            ))
-            hypotheses.append(CrownHypothesis(
-                hypothesis_id="merge:" + "+".join(str(item.track_id) for item in selected),
-                kind="merge",
-                first_core_index=first_index,
-                last_core_index=first_index + size - 1,
-                core_ids=tuple(item.track_id for item in selected),
-                fdi_count=1,
-                centers_lr_ap_mm=((float(center[0]), float(center[1])),),
-                centers_s_mm=(s_mm,),
-                width_mm=merge_width,
-                crownness=float(np.mean([
-                    _physical_crownness(item) for item in selected
-                ])),
-                persistence=merge_persistence,
-                evidence_probability=evidence,
-            ))
+            evidence = float(
+                np.clip(
+                    evidence * merge_persistence * (0.70 ** (size - 1)),
+                    0.01,
+                    0.98,
+                )
+            )
+            hypotheses.append(
+                CrownHypothesis(
+                    hypothesis_id="merge:" + "+".join(str(item.track_id) for item in selected),
+                    kind="merge",
+                    first_core_index=first_index,
+                    last_core_index=first_index + size - 1,
+                    core_ids=tuple(item.track_id for item in selected),
+                    fdi_count=1,
+                    centers_lr_ap_mm=((float(center[0]), float(center[1])),),
+                    centers_s_mm=(s_mm,),
+                    width_mm=merge_width,
+                    crownness=float(np.mean([_physical_crownness(item) for item in selected])),
+                    persistence=merge_persistence,
+                    evidence_probability=evidence,
+                )
+            )
     return hypotheses
 
 
 @dataclass(frozen=True)
 class _PartialPath:
     """算法说明。"""
+
     cost: float
     assignments: tuple[AlignmentAssignment, ...]
     artifact_core_ids: tuple[int, ...]
@@ -812,9 +747,7 @@ def _match_hypothesis(
         # global robust position scale so missing-slot semantics can disambiguate
         # otherwise plausible shifted paths.
         position_residual = (s_mm - expected) / max(0.35 * tooth_width, 1.2)
-        match_cost = min(position_residual**2, 16.0) - math.log(
-            max(hypothesis.crownness, EPS)
-        )
+        match_cost = min(position_residual**2, 16.0) - math.log(max(hypothesis.crownness, EPS))
         if previous_s is not None and previous_fdi is not None:
             actual_spacing = s_mm - previous_s
             expected_spacing = expected - _expected_s(previous_fdi, jaw, scale, offset)
@@ -830,18 +763,20 @@ def _match_hypothesis(
             )
             match_cost += min(spacing_residual**2, 9.0)
         cost += match_cost
-        assignments.append(AlignmentAssignment(
-            fdi=int(fdi),
-            hypothesis_id=hypothesis.hypothesis_id,
-            kind=hypothesis.kind,
-            core_ids=hypothesis.core_ids,
-            center_lr_ap_mm=center,
-            s_mm=float(s_mm),
-            persistence=hypothesis.persistence,
-            match_cost=float(match_cost),
-            subbasin_persistence=hypothesis.subbasin_persistence,
-            independent_subbasin_count=hypothesis.independent_subbasin_count,
-        ))
+        assignments.append(
+            AlignmentAssignment(
+                fdi=int(fdi),
+                hypothesis_id=hypothesis.hypothesis_id,
+                kind=hypothesis.kind,
+                core_ids=hypothesis.core_ids,
+                center_lr_ap_mm=center,
+                s_mm=float(s_mm),
+                persistence=hypothesis.persistence,
+                match_cost=float(match_cost),
+                subbasin_persistence=hypothesis.subbasin_persistence,
+                independent_subbasin_count=hypothesis.independent_subbasin_count,
+            )
+        )
         previous_s = float(s_mm)
         previous_fdi = int(fdi)
     return _PartialPath(
@@ -851,7 +786,7 @@ def _match_hypothesis(
         consumed_core_ids=tuple(sorted(set(path.consumed_core_ids + hypothesis.core_ids))),
         last_matched_s=previous_s,
         last_matched_fdi=previous_fdi,
-        operations=path.operations + (hypothesis.hypothesis_id,),
+        operations=(*path.operations, hypothesis.hypothesis_id),
     )
 
 
@@ -912,9 +847,7 @@ def _solve_one_configuration(
                 continue
             if core_index < len(tracks):
                 track = tracks[core_index]
-                artifact_probability = max(
-                    1.0 - _physical_crownness(track), EPS
-                )
+                artifact_probability = max(1.0 - _physical_crownness(track), EPS)
                 # Missing/excluded semantics are labels on geometry, not
                 # geometric evidence.  In particular, a persistent crown-like
                 # core cannot become a cheap artifact only because its expected
@@ -923,21 +856,23 @@ def _solve_one_configuration(
                 artifact_penalty = -math.log(max(artifact_probability, EPS))
                 next_paths = cells.setdefault((core_index + 1, fdi_index), [])
                 for path in paths:
-                    next_paths.append(_PartialPath(
-                        cost=path.cost + artifact_penalty,
-                        assignments=path.assignments,
-                        artifact_core_ids=path.artifact_core_ids + (track.track_id,),
-                        consumed_core_ids=path.consumed_core_ids + (track.track_id,),
-                        last_matched_s=path.last_matched_s,
-                        last_matched_fdi=path.last_matched_fdi,
-                        operations=path.operations + (f"artifact:{track.track_id}",),
-                    ))
+                    next_paths.append(
+                        _PartialPath(
+                            cost=path.cost + artifact_penalty,
+                            assignments=path.assignments,
+                            artifact_core_ids=(*path.artifact_core_ids, track.track_id),
+                            consumed_core_ids=(*path.consumed_core_ids, track.track_id),
+                            last_matched_s=path.last_matched_s,
+                            last_matched_fdi=path.last_matched_fdi,
+                            operations=(*path.operations, f"artifact:{track.track_id}"),
+                        )
+                    )
                 cells[(core_index + 1, fdi_index)] = _retain(next_paths)
                 for hypothesis in by_start.get(core_index, []):
                     if fdi_index + hypothesis.fdi_count > len(present_fdis):
                         continue
                     next_core = hypothesis.last_core_index + 1
-                    fdis = present_fdis[fdi_index:fdi_index + hypothesis.fdi_count]
+                    fdis = present_fdis[fdi_index : fdi_index + hypothesis.fdi_count]
                     target = cells.setdefault((next_core, fdi_index + hypothesis.fdi_count), [])
                     target.extend(
                         _match_hypothesis(path, hypothesis, fdis, jaw, scale, offset)
@@ -948,24 +883,29 @@ def _solve_one_configuration(
                 fdi = present_fdis[fdi_index]
                 target = cells.setdefault((core_index, fdi_index + 1), [])
                 for path in paths:
-                    target.append(_PartialPath(
-                        cost=path.cost + 12.0,
-                        assignments=path.assignments + (AlignmentAssignment(
-                            fdi=fdi,
-                            hypothesis_id=None,
-                            kind="undetected",
-                            core_ids=(),
-                            center_lr_ap_mm=None,
-                            s_mm=None,
-                            persistence=0.0,
-                            match_cost=12.0,
-                        ),),
-                        artifact_core_ids=path.artifact_core_ids,
-                        consumed_core_ids=path.consumed_core_ids,
-                        last_matched_s=path.last_matched_s,
-                        last_matched_fdi=path.last_matched_fdi,
-                        operations=path.operations + (f"undetected:{fdi}",),
-                    ))
+                    target.append(
+                        _PartialPath(
+                            cost=path.cost + 12.0,
+                            assignments=(
+                                *path.assignments,
+                                AlignmentAssignment(
+                                    fdi=fdi,
+                                    hypothesis_id=None,
+                                    kind="undetected",
+                                    core_ids=(),
+                                    center_lr_ap_mm=None,
+                                    s_mm=None,
+                                    persistence=0.0,
+                                    match_cost=12.0,
+                                ),
+                            ),
+                            artifact_core_ids=path.artifact_core_ids,
+                            consumed_core_ids=path.consumed_core_ids,
+                            last_matched_s=path.last_matched_s,
+                            last_matched_fdi=path.last_matched_fdi,
+                            operations=(*path.operations, f"undetected:{fdi}"),
+                        )
+                    )
                 cells[(core_index, fdi_index + 1)] = _retain(target)
 
     results: list[AlignmentPath] = []
@@ -974,42 +914,38 @@ def _solve_one_configuration(
             f"{item.fdi}:{item.kind}:{','.join(map(str, item.core_ids))}"
             for item in path.assignments
         ) + tuple(f"artifact:{item}" for item in path.artifact_core_ids)
-        results.append(AlignmentPath(
-            orientation_name=frame.orientation_name,
-            global_scale=float(scale),
-            midline_offset_mm=float(offset),
-            total_cost=float(path.cost),
-            assignments=path.assignments,
-            artifact_core_ids=tuple(sorted(path.artifact_core_ids)),
-            consumed_core_ids=tuple(sorted(path.consumed_core_ids)),
-            undetected_fdi=tuple(
-                item.fdi for item in path.assignments if item.kind == "undetected"
-            ),
-            signature=signature,
-        ))
+        results.append(
+            AlignmentPath(
+                orientation_name=frame.orientation_name,
+                global_scale=float(scale),
+                midline_offset_mm=float(offset),
+                total_cost=float(path.cost),
+                assignments=path.assignments,
+                artifact_core_ids=tuple(sorted(path.artifact_core_ids)),
+                consumed_core_ids=tuple(sorted(path.consumed_core_ids)),
+                undetected_fdi=tuple(
+                    item.fdi for item in path.assignments if item.kind == "undetected"
+                ),
+                signature=signature,
+            )
+        )
     return results
 
 
-def _physically_equivalent(
-    first: AlignmentPath, second_path: AlignmentPath
-) -> bool:
+def _physically_equivalent(first: AlignmentPath, second_path: AlignmentPath) -> bool:
     """算法说明。 Collapse redundant-core choices that preserve every physical centre."""
 
     if first.orientation_name != second_path.orientation_name:
         return False
     if len(first.assignments) != len(second_path.assignments):
         return False
-    for first_item, second_item in zip(
-        first.assignments, second_path.assignments, strict=True
-    ):
+    for first_item, second_item in zip(first.assignments, second_path.assignments, strict=True):
         if first_item.fdi != second_item.fdi:
             return False
         if (first_item.s_mm is None) != (second_item.s_mm is None):
             return False
         if first_item.s_mm is not None:
-            equivalent_radius = 0.35 * first.global_scale * crown_width_prior_mm(
-                first_item.fdi
-            )
+            equivalent_radius = 0.35 * first.global_scale * crown_width_prior_mm(first_item.fdi)
             if abs(first_item.s_mm - second_item.s_mm) > equivalent_radius:
                 return False
     return True
@@ -1027,18 +963,24 @@ def rank_monotone_fdi_alignments(
 
     all_paths: list[AlignmentPath] = []
     for frame, tracks, hypotheses in candidates:
-        median_local_scale = float(np.median([
-            item.local_scale_mm for item in tracks
-        ])) if tracks else 8.0
-        offset_limit = (
-            midline_offset_search_local_scale * median_local_scale
+        median_local_scale = (
+            float(np.median([item.local_scale_mm for item in tracks])) if tracks else 8.0
         )
+        offset_limit = midline_offset_search_local_scale * median_local_scale
         for scale in np.linspace(0.78, 1.22, 9):
             for offset in np.linspace(-offset_limit, offset_limit, 9):
-                all_paths.extend(_solve_one_configuration(
-                    tracks, hypotheses, present_fdis, jaw, frame,
-                    float(scale), float(offset), missing_fdis,
-                )[:24])
+                all_paths.extend(
+                    _solve_one_configuration(
+                        tracks,
+                        hypotheses,
+                        present_fdis,
+                        jaw,
+                        frame,
+                        float(scale),
+                        float(offset),
+                        missing_fdis,
+                    )[:24]
+                )
     if not all_paths:
         raise RuntimeError("global monotone alignment produced no complete path")
     all_paths.sort(key=lambda item: item.total_cost)
@@ -1070,7 +1012,7 @@ def solve_monotone_fdi_alignment(
     )
     best = ranked[0]
     second = ranked[1] if len(ranked) > 1 else None
-    margin = 0.0 if second is None else (
-        second.total_cost - best.total_cost
-    ) / max(len(present_fdis), 1)
+    margin = (
+        0.0 if second is None else (second.total_cost - best.total_cost) / max(len(present_fdis), 1)
+    )
     return best, second, float(margin)

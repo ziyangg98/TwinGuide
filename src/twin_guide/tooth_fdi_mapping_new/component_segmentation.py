@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass, replace
 
 import numpy as np
+from scipy.interpolate import RegularGridInterpolator
 from scipy.ndimage import (
     binary_dilation,
     binary_erosion,
     distance_transform_edt,
     gaussian_filter,
 )
-from scipy.interpolate import RegularGridInterpolator
 from skimage.draw import line
 from skimage.graph import route_through_array
 from skimage.measure import find_contours, label
@@ -25,6 +26,7 @@ from .models import AlignmentPath, ArchFrame, ToothRegion
 @dataclass(frozen=True)
 class SegmentationDiagnostics:
     """算法说明。"""
+
     component_count: int
     seeded_component_count: int
     artifact_component_ids: tuple[int, ...]
@@ -54,12 +56,12 @@ def resample_partition_maps(
 ) -> dict[str, object]:
     """算法说明。
 
-Resample selected physical evidence to a resolution-invariant grid.
+    Resample selected physical evidence to a resolution-invariant grid.
 
-    Candidate detection remains on the requested projection grid.  Only the
-    final finite separators and component-local measurement use this canonical
-    physical lattice, preventing chord endpoints from changing merely because
-    the source pixel pitch changed.
+        Candidate detection remains on the requested projection grid.  Only the
+        final finite separators and component-local measurement use this canonical
+        physical lattice, preventing chord endpoints from changing merely because
+        the source pixel pitch changed.
     """
 
     source_resolution = float(maps["resolution_mm"])
@@ -75,14 +77,12 @@ Resample selected physical evidence to a resolution-invariant grid.
 
     target_lr = np.arange(
         np.ceil(lr[0] / target_resolution) * target_resolution,
-        np.floor(lr[-1] / target_resolution) * target_resolution
-        + 0.5 * target_resolution,
+        np.floor(lr[-1] / target_resolution) * target_resolution + 0.5 * target_resolution,
         target_resolution,
     )
     target_ap = np.arange(
         np.ceil(ap[0] / target_resolution) * target_resolution,
-        np.floor(ap[-1] / target_resolution) * target_resolution
-        + 0.5 * target_resolution,
+        np.floor(ap[-1] / target_resolution) * target_resolution + 0.5 * target_resolution,
         target_resolution,
     )
     grid_lr, grid_ap = np.meshgrid(target_lr, target_ap, indexing="ij")
@@ -92,15 +92,16 @@ Resample selected physical evidence to a resolution-invariant grid.
         """算法说明。"""
         array = np.asarray(values, dtype=float)
         interpolator = RegularGridInterpolator(
-            (lr, ap), array, method=method, bounds_error=False,
+            (lr, ap),
+            array,
+            method=method,
+            bounds_error=False,
             fill_value=fill_value,
         )
         return interpolator(points).reshape(grid_lr.shape + array.shape[2:])
 
     source_mask = np.asarray(maps["silhouette"], dtype=bool)
-    silhouette = interpolate(
-        source_mask.astype(float), method="nearest", fill_value=0.0
-    ) >= 0.5
+    silhouette = interpolate(source_mask.astype(float), method="nearest", fill_value=0.0) >= 0.5
     valid_height = source_mask & np.isfinite(np.asarray(maps["top_height_mm"], dtype=float))
     support = interpolate(valid_height.astype(float), fill_value=0.0)
     height_numerator = interpolate(
@@ -115,28 +116,28 @@ Resample selected physical evidence to a resolution-invariant grid.
     normal_numerator = interpolate(
         np.where(valid_height[..., None], source_normals, 0.0), fill_value=0.0
     )
-    normals = np.zeros(silhouette.shape + (3,), dtype=float)
-    normals[height_valid] = (
-        normal_numerator[height_valid] / support[height_valid][:, None]
-    )
+    normals = np.zeros((*silhouette.shape, 3), dtype=float)
+    normals[height_valid] = normal_numerator[height_valid] / support[height_valid][:, None]
     norm = np.linalg.norm(normals, axis=2, keepdims=True)
     normals = np.divide(normals, np.maximum(norm, 1.0e-9))
     normal_rgb = np.clip(0.5 * (normals + 1.0), 0.0, 1.0)
     normal_rgb[~silhouette] = 1.0
 
     output = dict(maps)
-    output.update({
-        "resolution_mm": target_resolution,
-        "lr_centres": target_lr,
-        "ap_centres": target_ap,
-        "silhouette": silhouette,
-        "top_height_mm": height,
-        "top_normal_lr_ap_occ": normals,
-        "normal_rgb": normal_rgb,
-        "fused_edge": np.clip(interpolate(maps["fused_edge"], fill_value=0.0), 0.0, 1.0),
-        "covered_pixel_count": int(np.count_nonzero(silhouette)),
-        "source_projection_resolution_mm": source_resolution,
-    })
+    output.update(
+        {
+            "resolution_mm": target_resolution,
+            "lr_centres": target_lr,
+            "ap_centres": target_ap,
+            "silhouette": silhouette,
+            "top_height_mm": height,
+            "top_normal_lr_ap_occ": normals,
+            "normal_rgb": normal_rgb,
+            "fused_edge": np.clip(interpolate(maps["fused_edge"], fill_value=0.0), 0.0, 1.0),
+            "covered_pixel_count": int(np.count_nonzero(silhouette)),
+            "source_projection_resolution_mm": source_resolution,
+        }
+    )
     for field in ("local_gingiva_baseline_mm", "relative_crown_relief_mm"):
         if field not in maps:
             continue
@@ -212,10 +213,7 @@ def _finite_barrier(
         first = _physical_to_index(chord.first_endpoint_lr_ap_mm, lr, ap)
         second = _physical_to_index(chord.second_endpoint_lr_ap_mm, lr, ap)
         rows, columns = line(first[0], first[1], second[0], second[1])
-        valid = (
-            (rows >= 0) & (rows < shape[0])
-            & (columns >= 0) & (columns < shape[1])
-        )
+        valid = (rows >= 0) & (rows < shape[0]) & (columns >= 0) & (columns < shape[1])
         barrier[rows[valid], columns[valid]] = True
     return binary_dilation(barrier, iterations=1) & component
 
@@ -255,7 +253,7 @@ def _remove_endpoint_collisions(
         )
 
     tolerance = 3.0 * float(resolution)
-    for first, second in zip(ordered, ordered[1:], strict=False):
+    for first, second in itertools.pairwise(ordered):
         if int(second.pair_index) != int(first.pair_index) + 1:
             continue
         first_endpoints = endpoints(first)
@@ -269,19 +267,19 @@ def _remove_endpoint_collisions(
             continue
         loser = first if support_key(first) < support_key(second) else second
         rejected.add(int(loser.pair_index))
-        records.append({
-            "component_id": int(component_id),
-            "kind": "separator_endpoint_topology_conflict",
-            "first_pair_index": int(first.pair_index),
-            "second_pair_index": int(second.pair_index),
-            "shared_endpoint_distance_mm": distance,
-            "resolution_tolerance_mm": tolerance,
-            "rejected_pair_index": int(loser.pair_index),
-            "reason": "adjacent_separators_reuse_component_boundary_endpoint",
-        })
-    return [
-        chord for chord in ordered if int(chord.pair_index) not in rejected
-    ], records
+        records.append(
+            {
+                "component_id": int(component_id),
+                "kind": "separator_endpoint_topology_conflict",
+                "first_pair_index": int(first.pair_index),
+                "second_pair_index": int(second.pair_index),
+                "shared_endpoint_distance_mm": distance,
+                "resolution_tolerance_mm": tolerance,
+                "rejected_pair_index": int(loser.pair_index),
+                "reason": "adjacent_separators_reuse_component_boundary_endpoint",
+            }
+        )
+    return [chord for chord in ordered if int(chord.pair_index) not in rejected], records
 
 
 def _local_midpoint_barrier(
@@ -297,12 +295,8 @@ def _local_midpoint_barrier(
     grid_lr, grid_ap = np.meshgrid(lr, ap, indexing="ij")
     barrier = np.zeros(component.shape, dtype=bool)
     for pair_index in sorted(pair_indices):
-        first = np.asarray(
-            records[pair_index]["assignment"].center_lr_ap_mm, dtype=float
-        )
-        second = np.asarray(
-            records[pair_index + 1]["assignment"].center_lr_ap_mm, dtype=float
-        )
+        first = np.asarray(records[pair_index]["assignment"].center_lr_ap_mm, dtype=float)
+        second = np.asarray(records[pair_index + 1]["assignment"].center_lr_ap_mm, dtype=float)
         along = second - first
         separation = float(np.linalg.norm(along))
         if separation <= 1.0e-6:
@@ -314,9 +308,8 @@ def _local_midpoint_barrier(
         delta_ap = grid_ap - midpoint[1]
         longitudinal = delta_lr * along[0] + delta_ap * along[1]
         transverse_distance = delta_lr * transverse[0] + delta_ap * transverse[1]
-        local = (
-            (np.abs(longitudinal) <= 0.75 * resolution)
-            & (np.abs(transverse_distance) <= max(1.25 * separation, 6.0))
+        local = (np.abs(longitudinal) <= 0.75 * resolution) & (
+            np.abs(transverse_distance) <= max(1.25 * separation, 6.0)
         )
         barrier |= local & component
     return binary_dilation(barrier, iterations=1) & component
@@ -379,10 +372,7 @@ def _surface_valley_barrier(
         local_scale_mm=local_scale,
     )
     base_record["independent_crown_basin_support"] = basin_support
-    if (
-        require_independent_crown_basins
-        and not bool(basin_support.get("accepted"))
-    ):
+    if require_independent_crown_basins and not bool(basin_support.get("accepted")):
         return empty, {
             **base_record,
             "reason": "two_independent_crown_basins_not_demonstrated",
@@ -395,14 +385,11 @@ def _surface_valley_barrier(
     boundary = component & ~binary_erosion(component, iterations=1)
     endpoint_slice_half_width = max(2.5 * resolution, 0.20 * corridor_half_width)
     endpoints = np.argwhere(
-        boundary & corridor
-        & (np.abs(longitudinal) <= endpoint_slice_half_width)
+        boundary & corridor & (np.abs(longitudinal) <= endpoint_slice_half_width)
     )
     if len(endpoints) < 2:
         return empty, {**base_record, "reason": "corridor_has_no_boundary_span"}
-    endpoint_transverse = transverse_coordinate[
-        endpoints[:, 0], endpoints[:, 1]
-    ]
+    endpoint_transverse = transverse_coordinate[endpoints[:, 0], endpoints[:, 1]]
     transverse_span = float(np.max(endpoint_transverse) - np.min(endpoint_transverse))
     if transverse_span + 1.0e-9 < max(0.10 * local_scale, 4.0 * resolution):
         return empty, {
@@ -410,21 +397,15 @@ def _surface_valley_barrier(
             "reason": "corridor_boundary_span_is_too_short",
             "transverse_span_mm": transverse_span,
         }
-    endpoint_score = np.nan_to_num(
-        score[endpoints[:, 0], endpoints[:, 1]], nan=0.0
-    )
-    endpoint_longitudinal = np.abs(
-        longitudinal[endpoints[:, 0], endpoints[:, 1]]
-    )
+    endpoint_score = np.nan_to_num(score[endpoints[:, 0], endpoints[:, 1]], nan=0.0)
+    endpoint_longitudinal = np.abs(longitudinal[endpoints[:, 0], endpoints[:, 1]])
 
     def choose_endpoint(selected: np.ndarray) -> tuple[int, int]:
         """算法说明。"""
         candidate_indices = np.flatnonzero(selected)
-        utility = (
-            endpoint_score[candidate_indices]
-            - 0.20 * endpoint_longitudinal[candidate_indices]
-            / max(endpoint_slice_half_width, resolution)
-        )
+        utility = endpoint_score[candidate_indices] - 0.20 * endpoint_longitudinal[
+            candidate_indices
+        ] / max(endpoint_slice_half_width, resolution)
         chosen = endpoints[candidate_indices[int(np.argmax(utility))]]
         return int(chosen[0]), int(chosen[1])
 
@@ -444,13 +425,8 @@ def _surface_valley_barrier(
         0.90 * local_scale,
         0.85 * separation,
     )
-    routing_corridor = component & (
-        np.abs(longitudinal) <= routing_half_width
-    )
-    if not (
-        routing_corridor[first_endpoint]
-        and routing_corridor[second_endpoint]
-    ):
+    routing_corridor = component & (np.abs(longitudinal) <= routing_half_width)
+    if not (routing_corridor[first_endpoint] and routing_corridor[second_endpoint]):
         return empty, {
             **base_record,
             "reason": "boundary_endpoints_leave_local_crown_corridor",
@@ -458,30 +434,34 @@ def _surface_valley_barrier(
             "routing_half_width_mm": routing_half_width,
         }
 
-    fused_edge = np.asarray(
-        maps.get("fused_edge", np.zeros(component.shape)), dtype=float
+    fused_edge = np.asarray(maps.get("fused_edge", np.zeros(component.shape)), dtype=float)
+    multi_view = np.clip(
+        np.nan_to_num(
+            np.asarray(
+                maps.get("multi_view_boundary_score", np.zeros(component.shape)),
+                dtype=float,
+            ),
+            nan=0.0,
+        ),
+        0.0,
+        1.0,
     )
-    multi_view = np.clip(np.nan_to_num(
-        np.asarray(
-            maps.get("multi_view_boundary_score", np.zeros(component.shape)),
-            dtype=float,
+    multi_view_consistency = np.clip(
+        np.nan_to_num(
+            np.asarray(
+                maps.get("multi_view_consistency", np.zeros(component.shape)),
+                dtype=float,
+            ),
+            nan=0.0,
         ),
-        nan=0.0,
-    ), 0.0, 1.0)
-    multi_view_consistency = np.clip(np.nan_to_num(
-        np.asarray(
-            maps.get("multi_view_consistency", np.zeros(component.shape)),
-            dtype=float,
-        ),
-        nan=0.0,
-    ), 0.0, 1.0)
+        0.0,
+        1.0,
+    )
     # The face-level aggregate already contains a consistency factor.  The
     # second square root is deliberately mild: it suppresses single-view
     # grooves while retaining contacts repeatedly visible from oblique views.
     view_consistent_boundary = multi_view * np.sqrt(multi_view_consistency)
-    normalized_longitudinal = (
-        np.abs(longitudinal) / max(corridor_half_width, resolution)
-    )
+    normalized_longitudinal = np.abs(longitudinal) / max(corridor_half_width, resolution)
     valley_cost = (
         1.0
         + 2.2 * (1.0 - np.nan_to_num(score, nan=0.0))
@@ -505,32 +485,21 @@ def _surface_valley_barrier(
         except Exception as error:
             return None, None, f"{evidence_name}_path_error: {error}"
         path_array = np.asarray(path, dtype=int)
-        if (
-            len(path_array) < 3
-            or np.any(~routing_corridor[path_array[:, 0], path_array[:, 1]])
-        ):
+        if len(path_array) < 3 or np.any(~routing_corridor[path_array[:, 0], path_array[:, 1]]):
             return None, None, f"{evidence_name}_path_left_local_corridor"
         return path_array, float(total_cost), None
 
-    valley_path, valley_total_cost, valley_error = trace_path(
-        valley_cost, "surface_valley"
-    )
+    valley_path, valley_total_cost, valley_error = trace_path(valley_cost, "surface_valley")
     if valley_path is None:
         return empty, {**base_record, "reason": valley_error}
 
     def path_support(path_array: np.ndarray) -> dict[str, float]:
         """内部算法说明。"""
-        path_score = np.nan_to_num(
-            score[path_array[:, 0], path_array[:, 1]], nan=0.0
-        )
-        path_multi_view = view_consistent_boundary[
-            path_array[:, 0], path_array[:, 1]
-        ]
+        path_score = np.nan_to_num(score[path_array[:, 0], path_array[:, 1]], nan=0.0)
+        path_multi_view = view_consistent_boundary[path_array[:, 0], path_array[:, 1]]
         return {
             "valley_mean": float(np.mean(path_score)),
-            "valley_coverage": float(
-                np.mean(path_score >= minimum_mean_support)
-            ),
+            "valley_coverage": float(np.mean(path_score >= minimum_mean_support)),
             "multi_view_mean": float(np.mean(path_multi_view)),
             "multi_view_p90": float(np.quantile(path_multi_view, 0.90)),
         }
@@ -575,19 +544,13 @@ def _surface_valley_barrier(
             + 1.2 * normalized_longitudinal**2
         )
         multiview_cost[~routing_corridor] = 1.0e6
-        multiview_path, multiview_total_cost, _ = trace_path(
-            multiview_cost, "multi_view"
-        )
+        multiview_path, multiview_total_cost, _ = trace_path(multiview_cost, "multi_view")
         if multiview_path is not None:
             central = path_support(multiview_path)
             multiview_support["multi_view_mean"] = central["multi_view_mean"]
             multiview_support["multi_view_p90"] = central["multi_view_p90"]
-            central_values = view_consistent_boundary[
-                multiview_path[:, 0], multiview_path[:, 1]
-            ]
-            multiview_support["multi_view_q25"] = float(
-                np.quantile(central_values, 0.25)
-            )
+            central_values = view_consistent_boundary[multiview_path[:, 0], multiview_path[:, 1]]
+            multiview_support["multi_view_q25"] = float(np.quantile(central_values, 0.25))
             shifted_series: dict[str, np.ndarray] = {}
             shift_mm = max(2.0 * resolution, 0.55 * corridor_half_width)
             for name, sign in (("negative", -1.0), ("positive", 1.0)):
@@ -604,20 +567,12 @@ def _surface_valley_barrier(
                     len(ap) - 1,
                 )
                 valid = component[shifted_rows, shifted_columns]
-                shifted = view_consistent_boundary[
-                    shifted_rows[valid], shifted_columns[valid]
-                ]
+                shifted = view_consistent_boundary[shifted_rows[valid], shifted_columns[valid]]
                 if len(shifted) >= max(3, len(multiview_path) // 3):
                     shifted_series[name] = shifted
-                    multiview_support[f"{name}_shift_mean"] = float(
-                        np.mean(shifted)
-                    )
-                    multiview_support[f"{name}_shift_p90"] = float(
-                        np.quantile(shifted, 0.90)
-                    )
-                    multiview_support[f"{name}_shift_q25"] = float(
-                        np.quantile(shifted, 0.25)
-                    )
+                    multiview_support[f"{name}_shift_mean"] = float(np.mean(shifted))
+                    multiview_support[f"{name}_shift_p90"] = float(np.quantile(shifted, 0.90))
+                    multiview_support[f"{name}_shift_q25"] = float(np.quantile(shifted, 0.25))
             side_means = (
                 multiview_support["negative_shift_mean"],
                 multiview_support["positive_shift_mean"],
@@ -640,9 +595,7 @@ def _surface_valley_barrier(
                     len(shifted_series["positive"]),
                 )
                 if comparison_length:
-                    indices = np.linspace(
-                        0, len(central_values) - 1, comparison_length
-                    ).astype(int)
+                    indices = np.linspace(0, len(central_values) - 1, comparison_length).astype(int)
                     negative_indices = np.linspace(
                         0,
                         len(shifted_series["negative"]) - 1,
@@ -692,9 +645,7 @@ def _surface_valley_barrier(
         "multi_view_mean_support": multiview_support["multi_view_mean"],
         "multi_view_p90_support": multiview_support["multi_view_p90"],
         "multi_view_local_dominance": multiview_support,
-        "multi_view_used_as_independent_boundary_hypothesis": bool(
-            multiview_available
-        ),
+        "multi_view_used_as_independent_boundary_hypothesis": bool(multiview_available),
         "minimum_mean_support": float(minimum_mean_support),
         "minimum_coverage": float(minimum_coverage),
         "path_length_mm": float((len(path_array) - 1) * resolution),
@@ -702,12 +653,8 @@ def _surface_valley_barrier(
         "corridor_half_width_mm": corridor_half_width,
         "routing_half_width_mm": routing_half_width,
         "total_path_cost": float(total_cost),
-        "first_endpoint_lr_ap_mm": [
-            float(lr[first_endpoint[0]]), float(ap[first_endpoint[1]])
-        ],
-        "second_endpoint_lr_ap_mm": [
-            float(lr[second_endpoint[0]]), float(ap[second_endpoint[1]])
-        ],
+        "first_endpoint_lr_ap_mm": [float(lr[first_endpoint[0]]), float(ap[first_endpoint[1]])],
+        "second_endpoint_lr_ap_mm": [float(lr[second_endpoint[0]]), float(ap[second_endpoint[1]])],
     }
     if not accepted:
         return empty, record
@@ -715,25 +662,17 @@ def _surface_valley_barrier(
     barrier[path_array[:, 0], path_array[:, 1]] = True
     barrier = binary_dilation(barrier, iterations=1) & component
     separated = label(component & ~barrier, connectivity=2)
-    first_row, first_column = _physical_to_index(
-        first_assignment.center_lr_ap_mm, lr, ap
-    )
-    second_row, second_column = _physical_to_index(
-        second_assignment.center_lr_ap_mm, lr, ap
-    )
+    first_row, first_column = _physical_to_index(first_assignment.center_lr_ap_mm, lr, ap)
+    second_row, second_column = _physical_to_index(second_assignment.center_lr_ap_mm, lr, ap)
     if barrier[first_row, first_column]:
-        first_row, first_column = _nearest_mask_pixel(
-            component & ~barrier, first_row, first_column
-        )
+        first_row, first_column = _nearest_mask_pixel(component & ~barrier, first_row, first_column)
     if barrier[second_row, second_column]:
         second_row, second_column = _nearest_mask_pixel(
             component & ~barrier, second_row, second_column
         )
     first_side = int(separated[first_row, first_column])
     second_side = int(separated[second_row, second_column])
-    topology_separates_seeds = (
-        first_side > 0 and second_side > 0 and first_side != second_side
-    )
+    topology_separates_seeds = first_side > 0 and second_side > 0 and first_side != second_side
     record["topology_separates_seeds"] = bool(topology_separates_seeds)
     record["first_seed_side"] = first_side
     record["second_seed_side"] = second_side
@@ -771,10 +710,14 @@ def _independent_crown_basin_support(
     lr = np.asarray(maps["lr_centres"], dtype=float)
     ap = np.asarray(maps["ap_centres"], dtype=float)
     resolution = float(maps["resolution_mm"])
-    relief = np.clip(np.nan_to_num(
-        np.asarray(maps["relative_crown_relief_score"], dtype=float),
-        nan=0.0,
-    ), 0.0, 1.0)
+    relief = np.clip(
+        np.nan_to_num(
+            np.asarray(maps["relative_crown_relief_score"], dtype=float),
+            nan=0.0,
+        ),
+        0.0,
+        1.0,
+    )
     if float(np.max(relief[component], initial=0.0)) <= 0.0:
         return {
             "available": False,
@@ -800,10 +743,10 @@ def _independent_crown_basin_support(
     delta_ap = grid_ap - midpoint[1]
     longitudinal = delta_lr * axis[0] + delta_ap * axis[1]
     transverse_distance = delta_lr * transverse[0] + delta_ap * transverse[1]
-    local = component & (
-        np.abs(longitudinal) <= 0.5 * separation + 0.40 * local_scale_mm
-    ) & (
-        np.abs(transverse_distance) <= 0.75 * local_scale_mm
+    local = (
+        component
+        & (np.abs(longitudinal) <= 0.5 * separation + 0.40 * local_scale_mm)
+        & (np.abs(transverse_distance) <= 0.75 * local_scale_mm)
     )
     if np.count_nonzero(local) < 30:
         return {
@@ -827,11 +770,11 @@ def _independent_crown_basin_support(
 
     distance_first = np.hypot(grid_lr - first[0], grid_ap - first[1])
     distance_second = np.hypot(grid_lr - second[0], grid_ap - second[1])
-    first_neighbourhood = local & (distance_first <= distance_second) & (
-        distance_first <= 0.70 * local_scale_mm
+    first_neighbourhood = (
+        local & (distance_first <= distance_second) & (distance_first <= 0.70 * local_scale_mm)
     )
-    second_neighbourhood = local & (distance_second < distance_first) & (
-        distance_second <= 0.70 * local_scale_mm
+    second_neighbourhood = (
+        local & (distance_second < distance_first) & (distance_second <= 0.70 * local_scale_mm)
     )
     if not np.any(first_neighbourhood) or not np.any(second_neighbourhood):
         return {
@@ -877,34 +820,25 @@ def _independent_crown_basin_support(
     horizontal = local[1:, :] & local[:-1, :]
     vertical = local[:, 1:] & local[:, :-1]
     if np.any(horizontal):
-        neighbour_differences.append(np.abs(
-            response[1:, :][horizontal] - response[:-1, :][horizontal]
-        ))
+        neighbour_differences.append(
+            np.abs(response[1:, :][horizontal] - response[:-1, :][horizontal])
+        )
     if np.any(vertical):
-        neighbour_differences.append(np.abs(
-            response[:, 1:][vertical] - response[:, :-1][vertical]
-        ))
+        neighbour_differences.append(np.abs(response[:, 1:][vertical] - response[:, :-1][vertical]))
     differences = (
-        np.concatenate(neighbour_differences)
-        if neighbour_differences else np.asarray([0.0])
+        np.concatenate(neighbour_differences) if neighbour_differences else np.asarray([0.0])
     )
     local_variation = float(np.quantile(differences, 0.75))
     first_prominence = first_peak_score - saddle_score
     second_prominence = second_peak_score - saddle_score
     minimum_prominence = min(first_prominence, second_prominence)
-    accepted = bool(
-        minimum_prominence > max(local_variation, 1.0e-6)
-    )
+    accepted = bool(minimum_prominence > max(local_variation, 1.0e-6))
     return {
         "available": True,
         "accepted": accepted,
         "method": "local_3d_relief_topological_basin_persistence",
-        "first_peak_lr_ap_mm": [
-            float(lr[first_peak[0]]), float(ap[first_peak[1]])
-        ],
-        "second_peak_lr_ap_mm": [
-            float(lr[second_peak[0]]), float(ap[second_peak[1]])
-        ],
+        "first_peak_lr_ap_mm": [float(lr[first_peak[0]]), float(ap[first_peak[1]])],
+        "second_peak_lr_ap_mm": [float(lr[second_peak[0]]), float(ap[second_peak[1]])],
         "first_peak_score": first_peak_score,
         "second_peak_score": second_peak_score,
         "merge_saddle_score": saddle_score,
@@ -937,46 +871,56 @@ def _finite_chord_3d_boundary_support(
     lr = np.asarray(maps["lr_centres"], dtype=float)
     ap = np.asarray(maps["ap_centres"], dtype=float)
     resolution = float(maps["resolution_mm"])
-    surface = np.clip(np.nan_to_num(
-        np.asarray(
-            maps.get("surface_valley_score", np.zeros(component.shape)),
-            dtype=float,
+    surface = np.clip(
+        np.nan_to_num(
+            np.asarray(
+                maps.get("surface_valley_score", np.zeros(component.shape)),
+                dtype=float,
+            ),
+            nan=0.0,
         ),
-        nan=0.0,
-    ), 0.0, 1.0)
-    multiview = np.clip(np.nan_to_num(
-        np.asarray(
-            maps.get("multi_view_boundary_score", np.zeros(component.shape)),
-            dtype=float,
+        0.0,
+        1.0,
+    )
+    multiview = np.clip(
+        np.nan_to_num(
+            np.asarray(
+                maps.get("multi_view_boundary_score", np.zeros(component.shape)),
+                dtype=float,
+            ),
+            nan=0.0,
         ),
-        nan=0.0,
-    ), 0.0, 1.0)
-    consistency = np.clip(np.nan_to_num(
-        np.asarray(
-            maps.get("multi_view_consistency", np.zeros(component.shape)),
-            dtype=float,
+        0.0,
+        1.0,
+    )
+    consistency = np.clip(
+        np.nan_to_num(
+            np.asarray(
+                maps.get("multi_view_consistency", np.zeros(component.shape)),
+                dtype=float,
+            ),
+            nan=0.0,
         ),
-        nan=0.0,
-    ), 0.0, 1.0)
-    fused_edge = np.clip(np.nan_to_num(
-        np.asarray(maps.get("fused_edge", np.zeros(component.shape)), dtype=float),
-        nan=0.0,
-    ), 0.0, 1.0)
+        0.0,
+        1.0,
+    )
+    fused_edge = np.clip(
+        np.nan_to_num(
+            np.asarray(maps.get("fused_edge", np.zeros(component.shape)), dtype=float),
+            nan=0.0,
+        ),
+        0.0,
+        1.0,
+    )
     view_consistent = multiview * np.sqrt(consistency)
-    surface_available = bool(
-        np.max(surface[component], initial=0.0) > 0.0
-    )
-    multiview_available = bool(
-        np.max(view_consistent[component], initial=0.0) > 0.0
-    )
+    surface_available = bool(np.max(surface[component], initial=0.0) > 0.0)
+    multiview_available = bool(np.max(view_consistent[component], initial=0.0) > 0.0)
     # A formal 3-D contact needs agreement between two independent geometric
     # channels: mesh curvature and repeated multi-view normal/depth change.
     # Taking max(surface, view) allowed an intracrown groove in either channel
     # to manufacture a boundary.  The geometric mean acts as an AND-like
     # consensus; fused_edge may corroborate but can never create support.
-    combined = np.sqrt(surface * view_consistent) * (
-        0.75 + 0.25 * fused_edge
-    )
+    combined = np.sqrt(surface * view_consistent) * (0.75 + 0.25 * fused_edge)
     if not (surface_available or multiview_available):
         return {
             "available": False,
@@ -1028,14 +972,12 @@ def _finite_chord_3d_boundary_support(
             "available": True,
             "accepted": False,
             "reason": "insufficient_parallel_surface_support",
-            "central_sample_count": int(len(central)),
-            "negative_sample_count": int(len(negative)),
-            "positive_sample_count": int(len(positive)),
+            "central_sample_count": len(central),
+            "negative_sample_count": len(negative),
+            "positive_sample_count": len(positive),
         }
 
-    def summary(
-        values: np.ndarray, strong_threshold: float
-    ) -> dict[str, float]:
+    def summary(values: np.ndarray, strong_threshold: float) -> dict[str, float]:
         """内部算法说明。"""
         return {
             "mean": float(np.mean(values)),
@@ -1048,19 +990,12 @@ def _finite_chord_3d_boundary_support(
         visible = field[component]
         positive_visible = visible[visible > 0.0]
         strong_threshold = (
-            float(np.quantile(positive_visible, 0.75))
-            if len(positive_visible) else 1.0
+            float(np.quantile(positive_visible, 0.75)) if len(positive_visible) else 1.0
         )
         field_central = sample(field, base_points)
-        field_negative = sample(
-            field, base_points - shift_mm * crown_axis
-        )
-        field_positive = sample(
-            field, base_points + shift_mm * crown_axis
-        )
-        if min(
-            len(field_central), len(field_negative), len(field_positive)
-        ) < minimum_samples:
+        field_negative = sample(field, base_points - shift_mm * crown_axis)
+        field_positive = sample(field, base_points + shift_mm * crown_axis)
+        if min(len(field_central), len(field_negative), len(field_positive)) < minimum_samples:
             return {
                 "accepted": False,
                 "strong_threshold": strong_threshold,
@@ -1069,15 +1004,9 @@ def _finite_chord_3d_boundary_support(
         central_summary = summary(field_central, strong_threshold)
         negative_summary = summary(field_negative, strong_threshold)
         positive_summary = summary(field_positive, strong_threshold)
-        side_mean = max(
-            negative_summary["mean"], positive_summary["mean"]
-        )
-        side_q25 = max(
-            negative_summary["q25"], positive_summary["q25"]
-        )
-        side_coverage = max(
-            negative_summary["coverage"], positive_summary["coverage"]
-        )
+        side_mean = max(negative_summary["mean"], positive_summary["mean"])
+        side_q25 = max(negative_summary["q25"], positive_summary["q25"])
+        side_coverage = max(negative_summary["coverage"], positive_summary["coverage"])
         accepted = bool(
             central_summary["mean"] > side_mean
             and central_summary["q25"] > side_q25
@@ -1100,10 +1029,7 @@ def _finite_chord_3d_boundary_support(
     # of their ridges is unnecessarily brittle.  Channel-level agreement is the
     # invariant: each must independently show a locally dominant boundary along
     # the same finite chord.  The geometric-mean field remains diagnostic.
-    accepted = bool(
-        surface_contrast.get("accepted")
-        and multiview_contrast.get("accepted")
-    )
+    accepted = bool(surface_contrast.get("accepted") and multiview_contrast.get("accepted"))
     return {
         "available": True,
         "accepted": accepted,
@@ -1112,17 +1038,14 @@ def _finite_chord_3d_boundary_support(
         "surface_valley_available": surface_available,
         "multi_view_boundary_available": multiview_available,
         "central": consensus.get("central", {}),
-        "negative_crown_side": consensus.get(
-            "negative_crown_side", {}
-        ),
-        "positive_crown_side": consensus.get(
-            "positive_crown_side", {}
-        ),
+        "negative_crown_side": consensus.get("negative_crown_side", {}),
+        "positive_crown_side": consensus.get("positive_crown_side", {}),
         "consensus_contrast": consensus,
         "surface_valley_contrast": surface_contrast,
         "multi_view_boundary_contrast": multiview_contrast,
         "reason": (
-            None if accepted
+            None
+            if accepted
             else "curvature_and_multiview_boundary_channels_do_not_both_support_chord"
         ),
     }
@@ -1140,10 +1063,7 @@ def _refine_finite_chord_to_3d_ridge(
 ):
     """内部算法说明。 Relocate a 2-D chord onto a nearby, component-spanning 3-D ridge."""
 
-    if (
-        chord.first_endpoint_lr_ap_mm is None
-        or chord.second_endpoint_lr_ap_mm is None
-    ):
+    if chord.first_endpoint_lr_ap_mm is None or chord.second_endpoint_lr_ap_mm is None:
         return chord, None
     first_endpoint = np.asarray(chord.first_endpoint_lr_ap_mm, dtype=float)
     second_endpoint = np.asarray(chord.second_endpoint_lr_ap_mm, dtype=float)
@@ -1165,9 +1085,7 @@ def _refine_finite_chord_to_3d_ridge(
     resolution = float(maps["resolution_mm"])
     boundary = component & ~binary_erosion(component, iterations=1)
     boundary_rows, boundary_columns = np.nonzero(boundary)
-    boundary_points = np.column_stack([
-        lr[boundary_rows], ap[boundary_columns]
-    ])
+    boundary_points = np.column_stack([lr[boundary_rows], ap[boundary_columns]])
     if len(boundary_points) < 2:
         return chord, None
     seed_midpoint = 0.5 * (first_center + second_center)
@@ -1177,27 +1095,19 @@ def _refine_finite_chord_to_3d_ridge(
     candidates = []
     for shift_mm in shifts:
         line_point = initial_midpoint + float(shift_mm) * crown_axis
-        perpendicular_distance = np.abs(
-            (boundary_points - line_point) @ chord_normal
-        )
-        selected = boundary_points[
-            perpendicular_distance <= 1.75 * resolution
-        ]
+        perpendicular_distance = np.abs((boundary_points - line_point) @ chord_normal)
+        selected = boundary_points[perpendicular_distance <= 1.75 * resolution]
         if len(selected) < 2:
             continue
         coordinate = (selected - line_point) @ chord_direction
-        local = np.abs(coordinate) <= max(
-            0.90 * local_scale_mm, 0.75 * original_length
-        )
+        local = np.abs(coordinate) <= max(0.90 * local_scale_mm, 0.75 * original_length)
         selected = selected[local]
         coordinate = coordinate[local]
         if len(selected) < 2:
             continue
         candidate_first = selected[int(np.argmin(coordinate))]
         candidate_second = selected[int(np.argmax(coordinate))]
-        candidate_length = float(np.linalg.norm(
-            candidate_second - candidate_first
-        ))
+        candidate_length = float(np.linalg.norm(candidate_second - candidate_first))
         if candidate_length < 0.35 * original_length:
             continue
         core_clearance = _finite_separator_core_clearance(
@@ -1210,12 +1120,8 @@ def _refine_finite_chord_to_3d_ridge(
         if not bool(core_clearance["accepted"]):
             continue
         support = _finite_chord_3d_boundary_support(
-            first_endpoint_lr_ap_mm=(
-                float(candidate_first[0]), float(candidate_first[1])
-            ),
-            second_endpoint_lr_ap_mm=(
-                float(candidate_second[0]), float(candidate_second[1])
-            ),
+            first_endpoint_lr_ap_mm=(float(candidate_first[0]), float(candidate_first[1])),
+            second_endpoint_lr_ap_mm=(float(candidate_second[0]), float(candidate_second[1])),
             first_center_lr_ap_mm=first_center,
             second_center_lr_ap_mm=second_center,
             maps=maps,
@@ -1225,19 +1131,17 @@ def _refine_finite_chord_to_3d_ridge(
         if not bool(support.get("accepted")):
             continue
         central = support["central"]
-        ranking_score = (
-            float(central["mean"])
-            + float(central["coverage"])
-            + float(central["q25"])
+        ranking_score = float(central["mean"]) + float(central["coverage"]) + float(central["q25"])
+        candidates.append(
+            (
+                ranking_score,
+                float(shift_mm),
+                candidate_first,
+                candidate_second,
+                candidate_length,
+                support,
+            )
         )
-        candidates.append((
-            ranking_score,
-            float(shift_mm),
-            candidate_first,
-            candidate_second,
-            candidate_length,
-            support,
-        ))
     if not candidates:
         return chord, None
     _, shift_mm, candidate_first, candidate_second, candidate_length, support = max(
@@ -1247,15 +1151,9 @@ def _refine_finite_chord_to_3d_ridge(
     centre_offset = float((refined_midpoint - seed_midpoint) @ crown_axis)
     refined = replace(
         chord,
-        line_point_lr_ap_mm=(
-            float(refined_midpoint[0]), float(refined_midpoint[1])
-        ),
-        first_endpoint_lr_ap_mm=(
-            float(candidate_first[0]), float(candidate_first[1])
-        ),
-        second_endpoint_lr_ap_mm=(
-            float(candidate_second[0]), float(candidate_second[1])
-        ),
+        line_point_lr_ap_mm=(float(refined_midpoint[0]), float(refined_midpoint[1])),
+        first_endpoint_lr_ap_mm=(float(candidate_first[0]), float(candidate_first[1])),
+        second_endpoint_lr_ap_mm=(float(candidate_second[0]), float(candidate_second[1])),
         chord_length_mm=float(candidate_length),
         centre_offset_mm=centre_offset,
         selection_method="local_3d_surface_ridge_refinement",
@@ -1323,13 +1221,8 @@ def _finite_separator_core_clearance(
     )
     first_clearance = distance_to_segment(first_center)
     second_clearance = distance_to_segment(second_center)
-    within_midpoint_corridor = bool(
-        abs(signed_centre_offset) <= maximum_centre_offset_mm + 1.0e-9
-    )
-    clears_both_cores = bool(
-        min(first_clearance, second_clearance)
-        >= minimum_clearance - 1.0e-9
-    )
+    within_midpoint_corridor = bool(abs(signed_centre_offset) <= maximum_centre_offset_mm + 1.0e-9)
+    clears_both_cores = bool(min(first_clearance, second_clearance) >= minimum_clearance - 1.0e-9)
     accepted = bool(within_midpoint_corridor and clears_both_cores)
     return {
         "available": True,
@@ -1362,16 +1255,16 @@ def _contour(region: np.ndarray, lr: np.ndarray, ap: np.ndarray) -> tuple[tuple[
     raw = max(candidates, key=len)
     if len(raw) > 400:
         raw = raw[np.linspace(0, len(raw) - 1, 400, dtype=int)]
-    points = np.column_stack([
-        np.interp(raw[:, 0], np.arange(len(lr)), lr),
-        np.interp(raw[:, 1], np.arange(len(ap)), ap),
-    ])
+    points = np.column_stack(
+        [
+            np.interp(raw[:, 0], np.arange(len(lr)), lr),
+            np.interp(raw[:, 1], np.arange(len(ap)), ap),
+        ]
+    )
     return tuple((float(point[0]), float(point[1])) for point in points)
 
 
-def _sample_height(
-    maps: dict[str, object], center: np.ndarray
-) -> tuple[float, float]:
+def _sample_height(maps: dict[str, object], center: np.ndarray) -> tuple[float, float]:
     """算法说明。"""
     lr = np.asarray(maps["lr_centres"], dtype=float)
     ap = np.asarray(maps["ap_centres"], dtype=float)
@@ -1396,15 +1289,15 @@ def choose_partition_map(
 ) -> tuple[float, dict[str, object]]:
     """算法说明。
 
-Choose the highest scale that geometrically supports every matched seed.
+    Choose the highest scale that geometrically supports every matched seed.
 
-    Merely being close to a foreground pixel is insufficient: at a high global
-    height quantile a low posterior crown can be reduced to a tiny island while
-    its multi-scale core remains valid.  Such an island cannot be used as the
-    final physical tooth region.  Component area is therefore checked against
-    a resolution-derived pixel safety limit before a seed counts as supported.
-    This only selects the segmentation scale; it never deletes a core or changes
-    the monotone FDI alignment.
+        Merely being close to a foreground pixel is insufficient: at a high global
+        height quantile a low posterior crown can be reduced to a tiny island while
+        its multi-scale core remains valid.  Such an island cannot be used as the
+        final physical tooth region.  Component area is therefore checked against
+        a resolution-derived pixel safety limit before a seed counts as supported.
+        This only selects the segmentation scale; it never deletes a core or changes
+        the monotone FDI alignment.
     """
 
     matched = [item for item in assignments if item.center_lr_ap_mm is not None]
@@ -1437,8 +1330,7 @@ Choose the highest scale that geometrically supports every matched seed.
             else:
                 component_id = 0
             component_is_nondegenerate = (
-                component_id > 0
-                and int(component_pixels[component_id]) >= minimum_component_pixels
+                component_id > 0 and int(component_pixels[component_id]) >= minimum_component_pixels
             )
             supported += value <= 1.5 and component_is_nondegenerate
             total_distance += value
@@ -1532,13 +1424,15 @@ def segment_component_local_regions(
         if not mask[row, column]:
             row, column = _nearest_mask_pixel(mask, row, column)
         component_id = int(components[row, column])
-        seed_records.append({
-            "region_index": region_index,
-            "assignment": assignment,
-            "row": row,
-            "column": column,
-            "component_id": component_id,
-        })
+        seed_records.append(
+            {
+                "region_index": region_index,
+                "assignment": assignment,
+                "row": row,
+                "column": column,
+                "component_id": component_id,
+            }
+        )
 
     global_labels = np.zeros(mask.shape, dtype=np.int32)
     unassigned_mask = np.zeros(mask.shape, dtype=bool)
@@ -1571,7 +1465,8 @@ def segment_component_local_regions(
             global_labels[component & ~released] = region_index
             boundary_methods[region_index] = (
                 "component_membership_with_gingiva_release"
-                if np.any(released) else "connected_component_membership"
+                if np.any(released)
+                else "connected_component_membership"
             )
             boundary_confidence[region_index] = 1.0
             continue
@@ -1597,14 +1492,16 @@ def segment_component_local_regions(
             )
         except Exception:
             chords = []
-        contact_evidence = np.asarray([
-            float(chord.evidence_score)
-            for chord in chords
-            if chord.kind == "contact" and chord.evidence_score is not None
-        ], dtype=float)
+        contact_evidence = np.asarray(
+            [
+                float(chord.evidence_score)
+                for chord in chords
+                if chord.kind == "contact" and chord.evidence_score is not None
+            ],
+            dtype=float,
+        )
         component_evidence_median = (
-            float(np.median(contact_evidence))
-            if len(contact_evidence) else float("inf")
+            float(np.median(contact_evidence)) if len(contact_evidence) else float("inf")
         )
         reliable = []
         for chord in chords:
@@ -1629,8 +1526,7 @@ def segment_component_local_regions(
             if (
                 first_assignment.kind == "split"
                 and second_assignment.kind == "split"
-                and first_assignment.hypothesis_id
-                == second_assignment.hypothesis_id
+                and first_assignment.hypothesis_id == second_assignment.hypothesis_id
             ):
                 # Both seeds were generated from one broad physical track.
                 # Admit Level 1 only when its measured contact evidence is at
@@ -1641,21 +1537,19 @@ def segment_component_local_regions(
                     and float(chord.evidence_score) >= component_evidence_median
                 )
                 if not split_contact_is_typical:
-                    separator_candidate_records.append({
-                        "component_id": component_id,
-                        "pair_index": int(chord.pair_index),
-                        "accepted": False,
-                        "rejection_reason": "low_evidence_shared_split_uses_level_2",
-                        "centre_offset_mm": chord.centre_offset_mm,
-                        "evidence_score": chord.evidence_score,
-                        "component_evidence_median": component_evidence_median,
-                        "paired_concavity_score": (
-                            chord.paired_concavity_score
-                        ),
-                        "paired_concavity_level": (
-                            chord.paired_concavity_level
-                        ),
-                    })
+                    separator_candidate_records.append(
+                        {
+                            "component_id": component_id,
+                            "pair_index": int(chord.pair_index),
+                            "accepted": False,
+                            "rejection_reason": "low_evidence_shared_split_uses_level_2",
+                            "centre_offset_mm": chord.centre_offset_mm,
+                            "evidence_score": chord.evidence_score,
+                            "component_evidence_median": component_evidence_median,
+                            "paired_concavity_score": (chord.paired_concavity_score),
+                            "paired_concavity_level": (chord.paired_concavity_level),
+                        }
+                    )
                     continue
             seed_separation = float(np.linalg.norm(second_center - first_center))
             # A chord far from the midpoint is usually a different concavity
@@ -1671,17 +1565,12 @@ def segment_component_local_regions(
                 0.27 * local_scale,
             )
             direct_acceptance_offset = 0.20 * local_scale
-            normalized_chord_length = (
-                float(chord.chord_length_mm or 0.0)
-                / max(local_scale, 1.0e-6)
-            )
+            normalized_chord_length = float(chord.chord_length_mm or 0.0) / max(local_scale, 1.0e-6)
             typical_component_evidence = (
                 chord.evidence_score is not None
                 and float(chord.evidence_score) >= component_evidence_median
             )
-            paired_concavity_level = str(
-                chord.paired_concavity_level or "none"
-            ).lower()
+            paired_concavity_level = str(chord.paired_concavity_level or "none").lower()
             basin_support = _independent_crown_basin_support(
                 first_center_lr_ap_mm=first_center,
                 second_center_lr_ap_mm=second_center,
@@ -1689,14 +1578,13 @@ def segment_component_local_regions(
                 component=component,
                 local_scale_mm=local_scale,
             )
-            anatomical_contact_supported = (
-                typical_component_evidence
-                or paired_concavity_level in {"moderate", "strong"}
-            )
+            anatomical_contact_supported = typical_component_evidence or paired_concavity_level in {
+                "moderate",
+                "strong",
+            }
             if require_anatomical_split_evidence:
                 anatomical_contact_supported = bool(
-                    anatomical_contact_supported
-                    and basin_support.get("accepted")
+                    anatomical_contact_supported and basin_support.get("accepted")
                 )
             boundary_3d_support = _finite_chord_3d_boundary_support(
                 first_endpoint_lr_ap_mm=chord.first_endpoint_lr_ap_mm,
@@ -1708,10 +1596,7 @@ def segment_component_local_regions(
                 local_scale_mm=local_scale,
             )
             ridge_refinement = None
-            if (
-                anatomical_contact_supported
-                and not bool(boundary_3d_support.get("accepted"))
-            ):
+            if anatomical_contact_supported and not bool(boundary_3d_support.get("accepted")):
                 chord, ridge_refinement = _refine_finite_chord_to_3d_ridge(
                     chord=chord,
                     first_center_lr_ap_mm=first_center,
@@ -1723,9 +1608,8 @@ def segment_component_local_regions(
                 )
                 if ridge_refinement is not None:
                     centre_offset = abs(float(chord.centre_offset_mm))
-                    normalized_chord_length = (
-                        float(chord.chord_length_mm or 0.0)
-                        / max(local_scale, 1.0e-6)
+                    normalized_chord_length = float(chord.chord_length_mm or 0.0) / max(
+                        local_scale, 1.0e-6
                     )
                     boundary_3d_support = ridge_refinement["support"]
             core_clearance = _finite_separator_core_clearance(
@@ -1751,63 +1635,54 @@ def segment_component_local_regions(
             )
             accepted = bool(
                 shape_and_location_supported
-                and (
-                    not require_anatomical_split_evidence
-                    or boundary_3d_support.get("accepted")
-                )
+                and (not require_anatomical_split_evidence or boundary_3d_support.get("accepted"))
             )
-            separator_candidate_records.append({
-                "component_id": component_id,
-                "pair_index": int(chord.pair_index),
-                "accepted": accepted,
-                "rejection_reason": (
-                    None
-                    if accepted
-                    else (
-                        "insufficient_anatomical_contact_support"
-                        if not anatomical_contact_supported
+            separator_candidate_records.append(
+                {
+                    "component_id": component_id,
+                    "pair_index": int(chord.pair_index),
+                    "accepted": accepted,
+                    "rejection_reason": (
+                        None
+                        if accepted
                         else (
-                            str(core_clearance.get("reason"))
-                            if not bool(core_clearance.get("accepted"))
+                            "insufficient_anatomical_contact_support"
+                            if not anatomical_contact_supported
                             else (
-                            "independent_3d_boundary_consensus_not_demonstrated"
-                            if (
-                                require_anatomical_split_evidence
-                                and not bool(
-                                    boundary_3d_support.get("accepted")
+                                str(core_clearance.get("reason"))
+                                if not bool(core_clearance.get("accepted"))
+                                else (
+                                    "independent_3d_boundary_consensus_not_demonstrated"
+                                    if (
+                                        require_anatomical_split_evidence
+                                        and not bool(boundary_3d_support.get("accepted"))
+                                    )
+                                    else "off_centre_chord_lacks_local_width"
                                 )
                             )
-                            else "off_centre_chord_lacks_local_width"
-                            )
                         )
-                    )
-                ),
-                "centre_offset_mm": chord.centre_offset_mm,
-                "centre_offset_limit_mm": maximum_centre_offset,
-                "direct_acceptance_offset_mm": direct_acceptance_offset,
-                "normalized_chord_length": normalized_chord_length,
-                "evidence_score": chord.evidence_score,
-                "component_evidence_median": component_evidence_median,
-                "typical_component_evidence": typical_component_evidence,
-                "anatomical_contact_supported": anatomical_contact_supported,
-                "core_clearance": core_clearance,
-                "independent_crown_basin_support": basin_support,
-                "projected_3d_boundary_support": boundary_3d_support,
-                "local_3d_ridge_refinement": ridge_refinement,
-                "confidence_margin": chord.confidence_margin,
-                "selection_method": chord.selection_method,
-                "paired_concavity_score": chord.paired_concavity_score,
-                "paired_concavity_level": chord.paired_concavity_level,
-                "paired_concavity_facing_support": (
-                    chord.paired_concavity_facing_support
-                ),
-                "paired_concavity_axial_alignment": (
-                    chord.paired_concavity_axial_alignment
-                ),
-                "paired_concavity_crown_support": (
-                    chord.paired_concavity_crown_support
-                ),
-            })
+                    ),
+                    "centre_offset_mm": chord.centre_offset_mm,
+                    "centre_offset_limit_mm": maximum_centre_offset,
+                    "direct_acceptance_offset_mm": direct_acceptance_offset,
+                    "normalized_chord_length": normalized_chord_length,
+                    "evidence_score": chord.evidence_score,
+                    "component_evidence_median": component_evidence_median,
+                    "typical_component_evidence": typical_component_evidence,
+                    "anatomical_contact_supported": anatomical_contact_supported,
+                    "core_clearance": core_clearance,
+                    "independent_crown_basin_support": basin_support,
+                    "projected_3d_boundary_support": boundary_3d_support,
+                    "local_3d_ridge_refinement": ridge_refinement,
+                    "confidence_margin": chord.confidence_margin,
+                    "selection_method": chord.selection_method,
+                    "paired_concavity_score": chord.paired_concavity_score,
+                    "paired_concavity_level": chord.paired_concavity_level,
+                    "paired_concavity_facing_support": (chord.paired_concavity_facing_support),
+                    "paired_concavity_axial_alignment": (chord.paired_concavity_axial_alignment),
+                    "paired_concavity_crown_support": (chord.paired_concavity_crown_support),
+                }
+            )
             if not accepted:
                 continue
             reliable.append(chord)
@@ -1817,53 +1692,49 @@ def segment_component_local_regions(
             component_id=component_id,
         )
         boundary_topology_records.extend(topology_records)
-        separator_records.extend({
-            "component_id": component_id,
-            "pair_index": int(chord.pair_index),
-            "first_instance_id": int(chord.first_instance_id),
-            "second_instance_id": int(chord.second_instance_id),
-            "first_endpoint_lr_ap_mm": list(chord.first_endpoint_lr_ap_mm),
-            "second_endpoint_lr_ap_mm": list(chord.second_endpoint_lr_ap_mm),
-            "chord_length_mm": chord.chord_length_mm,
-            "centre_offset_mm": chord.centre_offset_mm,
-            "angle_offset_degrees": chord.angle_offset_degrees,
-            "evidence_score": chord.evidence_score,
-            "confidence_margin": chord.confidence_margin,
-            "component_evidence_median": component_evidence_median,
-            "selection_method": chord.selection_method,
-            "endpoint_concavity_support": chord.endpoint_concavity_support,
-            "paired_concavity_score": chord.paired_concavity_score,
-            "paired_concavity_level": chord.paired_concavity_level,
-            "paired_concavity_facing_support": (
-                chord.paired_concavity_facing_support
-            ),
-            "paired_concavity_axial_alignment": (
-                chord.paired_concavity_axial_alignment
-            ),
-            "paired_concavity_crown_support": (
-                chord.paired_concavity_crown_support
-            ),
-        } for chord in reliable)
+        separator_records.extend(
+            {
+                "component_id": component_id,
+                "pair_index": int(chord.pair_index),
+                "first_instance_id": int(chord.first_instance_id),
+                "second_instance_id": int(chord.second_instance_id),
+                "first_endpoint_lr_ap_mm": list(chord.first_endpoint_lr_ap_mm),
+                "second_endpoint_lr_ap_mm": list(chord.second_endpoint_lr_ap_mm),
+                "chord_length_mm": chord.chord_length_mm,
+                "centre_offset_mm": chord.centre_offset_mm,
+                "angle_offset_degrees": chord.angle_offset_degrees,
+                "evidence_score": chord.evidence_score,
+                "confidence_margin": chord.confidence_margin,
+                "component_evidence_median": component_evidence_median,
+                "selection_method": chord.selection_method,
+                "endpoint_concavity_support": chord.endpoint_concavity_support,
+                "paired_concavity_score": chord.paired_concavity_score,
+                "paired_concavity_level": chord.paired_concavity_level,
+                "paired_concavity_facing_support": (chord.paired_concavity_facing_support),
+                "paired_concavity_axial_alignment": (chord.paired_concavity_axial_alignment),
+                "paired_concavity_crown_support": (chord.paired_concavity_crown_support),
+            }
+            for chord in reliable
+        )
         reliable_pair_indices = {int(chord.pair_index) for chord in reliable}
         reliable_confidence_by_pair = {
-            int(record["pair_index"]): float(np.clip(
-                record.get("confidence_margin")
-                if record.get("confidence_margin") is not None
-                else 1.0,
-                0.0,
-                1.0,
-            ))
+            int(record["pair_index"]): float(
+                np.clip(
+                    record.get("confidence_margin")
+                    if record.get("confidence_margin") is not None
+                    else 1.0,
+                    0.0,
+                    1.0,
+                )
+            )
             for record in separator_candidate_records
             if (
                 int(record.get("component_id", -1)) == component_id
                 and bool(record.get("accepted"))
-                and int(record.get("pair_index", -1))
-                in reliable_pair_indices
+                and int(record.get("pair_index", -1)) in reliable_pair_indices
             )
         }
-        unresolved_pair_indices = (
-            set(range(len(records) - 1)) - reliable_pair_indices
-        )
+        unresolved_pair_indices = set(range(len(records) - 1)) - reliable_pair_indices
         barrier = _finite_barrier(reliable, mask.shape, lr, ap, component)
         valley_resolved_pair_indices: set[int] = set()
         for pair_index in sorted(unresolved_pair_indices):
@@ -1875,33 +1746,29 @@ def segment_component_local_regions(
                 component=component,
                 minimum_mean_support=minimum_surface_valley_mean_support,
                 minimum_coverage=minimum_surface_valley_coverage,
-                require_independent_crown_basins=(
-                    require_anatomical_split_evidence
-                ),
+                require_independent_crown_basins=(require_anatomical_split_evidence),
             )
             surface_valley_separator_records.append(valley_record)
             if bool(valley_record["accepted"]):
                 barrier |= valley_barrier
                 valley_resolved_pair_indices.add(pair_index)
-        fallback_pair_indices = (
-            unresolved_pair_indices - valley_resolved_pair_indices
-        )
+        fallback_pair_indices = unresolved_pair_indices - valley_resolved_pair_indices
         if boundary_first_segmentation:
             for pair_index in sorted(fallback_pair_indices):
                 first_assignment = records[pair_index]["assignment"]
                 second_assignment = records[pair_index + 1]["assignment"]
-                unsupported_separator_records.append({
-                    "component_id": int(component_id),
-                    "pair_index": int(pair_index),
-                    "first_FDI": int(first_assignment.fdi),
-                    "second_FDI": int(second_assignment.fdi),
-                    "first_hypothesis_id": first_assignment.hypothesis_id,
-                    "second_hypothesis_id": second_assignment.hypothesis_id,
-                    "reason": (
-                        "no_contact_chord_surface_valley_or_multiview_separator"
-                    ),
-                    "formal_midpoint_barrier_created": False,
-                })
+                unsupported_separator_records.append(
+                    {
+                        "component_id": int(component_id),
+                        "pair_index": int(pair_index),
+                        "first_FDI": int(first_assignment.fdi),
+                        "second_FDI": int(second_assignment.fdi),
+                        "first_hypothesis_id": first_assignment.hypothesis_id,
+                        "second_hypothesis_id": second_assignment.hypothesis_id,
+                        "reason": ("no_contact_chord_surface_valley_or_multiview_separator"),
+                        "formal_midpoint_barrier_created": False,
+                    }
+                )
         else:
             barrier |= _local_midpoint_barrier(
                 records,
@@ -1915,9 +1782,7 @@ def segment_component_local_regions(
         finite_separator_count += len(reliable) + len(valley_resolved_pair_indices)
         markers = np.zeros(mask.shape, dtype=np.int32)
         for marker_index, record in enumerate(records, start=1):
-            row, column = _nearest_mask_pixel(
-                component, int(record["row"]), int(record["column"])
-            )
+            row, column = _nearest_mask_pixel(component, int(record["row"]), int(record["column"]))
             markers[row, column] = marker_index
         fused_edge = np.asarray(maps["fused_edge"], dtype=float)
         sigma = max(0.35, 0.80 * boundary_smoothing_scale)
@@ -1927,36 +1792,36 @@ def segment_component_local_regions(
                 np.asarray(maps["surface_valley_score"], dtype=float), nan=0.0
             )
             weight = float(np.clip(surface_valley_watershed_weight, 0.0, 0.5))
-            elevation = (
-                (1.0 - weight) * elevation
-                + weight * gaussian_filter(valley_score, sigma=sigma)
+            elevation = (1.0 - weight) * elevation + weight * gaussian_filter(
+                valley_score, sigma=sigma
             )
         if "multi_view_boundary_score" in maps:
-            multi_view_score = np.clip(np.nan_to_num(
-                np.asarray(maps["multi_view_boundary_score"], dtype=float),
-                nan=0.0,
-            ), 0.0, 1.0)
-            multi_view_consistency = np.clip(np.nan_to_num(
-                np.asarray(
-                    maps.get(
-                        "multi_view_consistency",
-                        np.ones(component.shape, dtype=float),
-                    ),
-                    dtype=float,
+            multi_view_score = np.clip(
+                np.nan_to_num(
+                    np.asarray(maps["multi_view_boundary_score"], dtype=float),
+                    nan=0.0,
                 ),
-                nan=0.0,
-            ), 0.0, 1.0)
-            view_consistent_boundary = (
-                multi_view_score * np.sqrt(multi_view_consistency)
+                0.0,
+                1.0,
             )
-            view_weight = float(np.clip(
-                multi_view_watershed_weight, 0.0, 0.35
-            ))
-            elevation = (
-                (1.0 - view_weight) * elevation
-                + view_weight * gaussian_filter(
-                    view_consistent_boundary, sigma=sigma
-                )
+            multi_view_consistency = np.clip(
+                np.nan_to_num(
+                    np.asarray(
+                        maps.get(
+                            "multi_view_consistency",
+                            np.ones(component.shape, dtype=float),
+                        ),
+                        dtype=float,
+                    ),
+                    nan=0.0,
+                ),
+                0.0,
+                1.0,
+            )
+            view_consistent_boundary = multi_view_score * np.sqrt(multi_view_consistency)
+            view_weight = float(np.clip(multi_view_watershed_weight, 0.0, 0.35))
+            elevation = (1.0 - view_weight) * elevation + view_weight * gaussian_filter(
+                view_consistent_boundary, sigma=sigma
             )
         elevation[barrier] = max(float(np.max(elevation)), 1.0) + 1.0
         local_labels = watershed(elevation, markers=markers, mask=component)
@@ -1971,12 +1836,8 @@ def segment_component_local_regions(
                 for pair_index in (marker_index - 2, marker_index - 1)
                 if 0 <= pair_index < len(records) - 1
             }
-            local_fallback_pairs = (
-                adjacent_pair_indices & fallback_pair_indices
-            )
-            local_valley_pairs = (
-                adjacent_pair_indices & valley_resolved_pair_indices
-            )
+            local_fallback_pairs = adjacent_pair_indices & fallback_pair_indices
+            local_valley_pairs = adjacent_pair_indices & valley_resolved_pair_indices
             if boundary_first_segmentation and local_fallback_pairs:
                 method = "unsupported_anatomical_boundary_diagnostic_watershed"
                 confidence = 0.0
@@ -1991,8 +1852,7 @@ def segment_component_local_regions(
                     if pair_index in reliable_confidence_by_pair
                 ]
                 confidence = (
-                    min(adjacent_reliable_confidence)
-                    if adjacent_reliable_confidence else 1.0
+                    min(adjacent_reliable_confidence) if adjacent_reliable_confidence else 1.0
                 )
             boundary_methods[region_index] = method
             boundary_confidence[region_index] = confidence
@@ -2005,18 +1865,16 @@ def segment_component_local_regions(
         rows, columns = np.nonzero(region)
         if not len(rows):
             raise RuntimeError(f"component-local region for FDI {assignment.fdi} is empty")
-        centroid = np.asarray([
-            float(np.mean(lr[rows])), float(np.mean(ap[columns]))
-        ])
+        centroid = np.asarray([float(np.mean(lr[rows])), float(np.mean(ap[columns]))])
         interior = distance_transform_edt(region) * resolution
         radius = float(np.max(interior))
-        interior_rows, interior_columns = np.nonzero(
-            interior >= radius - 0.25 * resolution
+        interior_rows, interior_columns = np.nonzero(interior >= radius - 0.25 * resolution)
+        interior_center = np.asarray(
+            [
+                float(np.mean(lr[interior_rows])),
+                float(np.mean(ap[interior_columns])),
+            ]
         )
-        interior_center = np.asarray([
-            float(np.mean(lr[interior_rows])),
-            float(np.mean(ap[interior_columns])),
-        ])
         crown_height, lift_distance = _sample_height(maps, centroid)
         relief_map = np.asarray(
             maps.get("relative_crown_relief_mm", np.zeros(mask.shape)), dtype=float
@@ -2025,50 +1883,48 @@ def segment_component_local_regions(
             maps.get("relative_crown_relief_score", np.zeros(mask.shape)), dtype=float
         )
         region_relief = relief_map[region & np.isfinite(relief_map)]
-        region_relief_score = relief_score_map[
-            region & np.isfinite(relief_score_map)
-        ]
+        region_relief_score = relief_score_map[region & np.isfinite(relief_score_map)]
         global_point = (
             frame.origin
             + centroid[0] * frame.e_lr
             + centroid[1] * frame.e_ap
             + crown_height * frame.e_occ
         )
-        component_ids = tuple(sorted(
-            int(value) for value in np.unique(components[region]) if int(value) > 0
-        ))
+        component_ids = tuple(
+            sorted(int(value) for value in np.unique(components[region]) if int(value) > 0)
+        )
         confidence = boundary_confidence[region_index]
         if lift_distance > 1.5:
             confidence *= 0.5
-        regions.append(ToothRegion(
-            fdi=int(assignment.fdi),
-            region_id=region_index,
-            pixel_count=int(len(rows)),
-            area_mm2=float(len(rows) * resolution**2),
-            area_centroid_lr_ap_mm=(float(centroid[0]), float(centroid[1])),
-            interior_center_lr_ap_mm=(
-                float(interior_center[0]), float(interior_center[1])
-            ),
-            maximum_interior_radius_mm=radius,
-            contour_lr_ap_mm=_contour(region, lr, ap),
-            component_ids=component_ids,
-            boundary_method=boundary_methods[region_index],
-            boundary_confidence=float(confidence),
-            crown_height_mm=crown_height,
-            crown_point_global_mm=tuple(float(value) for value in global_point),
-            relative_relief_mean_mm=(
-                float(np.mean(region_relief)) if len(region_relief) else 0.0
-            ),
-            relative_relief_p90_mm=(
-                float(np.quantile(region_relief, 0.90)) if len(region_relief) else 0.0
-            ),
-            relative_relief_score=(
-                float(np.mean(region_relief_score))
-                if len(region_relief_score) else 0.0
-            ),
-        ))
+        regions.append(
+            ToothRegion(
+                fdi=int(assignment.fdi),
+                region_id=region_index,
+                pixel_count=len(rows),
+                area_mm2=float(len(rows) * resolution**2),
+                area_centroid_lr_ap_mm=(float(centroid[0]), float(centroid[1])),
+                interior_center_lr_ap_mm=(float(interior_center[0]), float(interior_center[1])),
+                maximum_interior_radius_mm=radius,
+                contour_lr_ap_mm=_contour(region, lr, ap),
+                component_ids=component_ids,
+                boundary_method=boundary_methods[region_index],
+                boundary_confidence=float(confidence),
+                crown_height_mm=crown_height,
+                crown_point_global_mm=tuple(float(value) for value in global_point),
+                relative_relief_mean_mm=(
+                    float(np.mean(region_relief)) if len(region_relief) else 0.0
+                ),
+                relative_relief_p90_mm=(
+                    float(np.quantile(region_relief, 0.90)) if len(region_relief) else 0.0
+                ),
+                relative_relief_score=(
+                    float(np.mean(region_relief_score)) if len(region_relief_score) else 0.0
+                ),
+            )
+        )
     artifact_components = tuple(
-        component_id for component_id in range(1, component_count + 1)
+        component_id
+        for component_id in range(1, component_count + 1)
         if component_id not in seeded_components
     )
     assigned_fraction = float(np.count_nonzero(global_labels) / max(np.count_nonzero(mask), 1))
@@ -2096,13 +1952,10 @@ def segment_component_local_regions(
         surface_valley_separator_records=tuple(surface_valley_separator_records),
         multi_view_boundary_evidence_available=bool(
             "multi_view_boundary_score" in maps
-            and np.any(np.isfinite(
-                np.asarray(maps["multi_view_boundary_score"])
-            ))
+            and np.any(np.isfinite(np.asarray(maps["multi_view_boundary_score"])))
         ),
         multi_view_boundary_fused_into_watershed=bool(
-            "multi_view_boundary_score" in maps
-            and multi_view_watershed_weight > 0.0
+            "multi_view_boundary_score" in maps and multi_view_watershed_weight > 0.0
         ),
         boundary_first_segmentation=bool(boundary_first_segmentation),
         midpoint_fallback_disabled=bool(boundary_first_segmentation),

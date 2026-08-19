@@ -25,10 +25,11 @@
 到植体顶端的轴向距离。双导延长量由钻针长度和植体长度计算：
 
 $$
-L_{\mathrm{twin}}=L_{\mathrm{drill}}-12-L_{\mathrm{implant}}.
+L_{\mathrm{twin}}=L_{\mathrm{drill}}-L_{\mathrm{in}}-L_{\mathrm{implant}}.
 $$
 
-其中 12 mm 是钻针位于手机内部的固定长度，不随病例或种植位置变化。牙弓在该圆环处
+其中 $L_{in}$ 是 `drill_inside_handpiece_length_mm`，默认 12 mm，可按实际手机与钻针系统
+逐圆环配置。牙弓在该圆环处
 的局部法向决定左右导柱的
 排列方向，两根导柱的 C 口均朝向中间。
 
@@ -42,64 +43,30 @@ $$
 
 ### 全局标准值
 
-`runtime.sleeve` 保存真实标准导柱的默认参数。长度单位为 mm，角度单位为度。
-
-```yaml
-runtime:
-  sleeve:
-    inner_diameter_mm: 2.05
-    outer_diameter_mm: 5.10
-    top_recess_diameter_mm: 2.61
-    top_recess_depth_mm: 0.30
-    height_mm: 15.50
-    platform_slot_width_mm: 1.60
-    platform_overhang_mm: 0.20
-    platform_height_mm: 10.00
-    closed_bore_height_mm: 4.90
-    inner_arc_angle_degrees: 257.83
-    outer_arc_angle_degrees: 246.59
-    guide_spacing_mm: 11.50
-```
+`runtime.sleeve` 保存标准导柱参数。完整 YAML、默认值和约束只在
+[病例配置](../guide/configuration.md)维护。
 
 ### 每个种植位的三项高度覆盖
 
 种植位的 `sleeve` 只接受 `height_mm`、`platform_height_mm` 和
-`closed_bore_height_mm`。未填写的高度继承 `runtime.sleeve`。下面的圆环 1
-使用 16.00 mm 总高、10.50 mm 平台总高度和 5.00 mm C 口闭合段高度；
-其余 9 项参数使用全局标准值。
-
-```yaml
-planning:
-  guide_posts:
-    - ring_index: 1
-      drill_length_mm: 33.00
-      implant_length_mm: 12.00
-      sleeve_template_extension_mm: 8.00
-      sleeve:
-        height_mm: 16.00
-        platform_height_mm: 10.50
-        closed_bore_height_mm: 5.00
-```
+`closed_bore_height_mm`；未填写值继承 `runtime.sleeve`。
 
 参数生效顺序为：全局标准值 → 种植位 `sleeve` 覆盖值 → Blender 中该种植位的
 三项高度调整。Blender 高度控制以种植位为单位，左右导柱同步变化。
 
 ### 12 项参数定义
 
-| 参数 | 标准值 | 几何定义 | 种植位调整 |
-| --- | ---: | --- | --- |
-| `inner_diameter_mm` | 2.05 | 贯穿整根导柱的中心导孔直径 | 否 |
-| `outer_diameter_mm` | 5.10 | 不包含平台凸出部分的圆柱主体外径 | 否 |
-| `top_recess_diameter_mm` | 2.61 | 凹槽端同轴环形凹槽的最大直径 | 否 |
-| `top_recess_depth_mm` | 0.30 | 环形凹槽沿导柱轴向进入实体的深度 | 否 |
-| `height_mm` | 15.50 | 凹槽端到闭合端的导柱轴向总高 | 是 |
-| `platform_slot_width_mm` | 1.60 | 平台开槽段中央直槽的宽度 | 否 |
-| `platform_overhang_mm` | 0.20 | 内侧平台端面超出圆柱主体外缘的距离 | 否 |
-| `platform_height_mm` | 10.00 | 平台从闭合端向凹槽端延伸的轴向总高度 | 是 |
-| `closed_bore_height_mm` | 4.90 | 从闭合端起算的 C 口闭合段高度；中心导孔仍贯通 | 是 |
-| `inner_arc_angle_degrees` | 257.83 | C 口段中心导孔保留圆弧的圆心角 | 否 |
-| `outer_arc_angle_degrees` | 246.59 | C 口段主体外轮廓保留圆弧的圆心角 | 否 |
-| `guide_spacing_mm` | 11.50 | 左右导柱相向内侧平台端面之间的净距 | 否 |
+| 参数 | 几何定义 | 种植位调整 |
+| --- | --- | --- |
+| `inner_diameter_mm` | 贯穿整根导柱的中心导孔直径 | 否 |
+| `outer_diameter_mm` | 不包含平台凸出部分的圆柱主体外径 | 否 |
+| `top_recess_diameter_mm` / `top_recess_depth_mm` | 凹槽端同轴环形凹槽的直径和轴向深度 | 否 |
+| `height_mm` | 凹槽端到闭合端的导柱轴向总高 | 是 |
+| `platform_slot_width_mm` / `platform_overhang_mm` | 平台中央直槽宽度和端面凸出量 | 否 |
+| `platform_height_mm` | 平台从闭合端向凹槽端延伸的轴向总高度 | 是 |
+| `closed_bore_height_mm` | 从闭合端起算的 C 口闭合段高度；中心导孔仍贯通 | 是 |
+| `inner_arc_angle_degrees` / `outer_arc_angle_degrees` | C 口段内外轮廓保留圆弧的圆心角 | 否 |
+| `guide_spacing_mm` | 左右导柱相向内侧平台端面之间的净距 | 否 |
 
 只有 `height_mm`、`platform_height_mm` 和 `closed_bore_height_mm` 可按种植位覆盖，
 且同一种植位左右两根共用合并后的值。其余 9 项只使用全局标准值，所有种植位共用该值。三项高度必须满足

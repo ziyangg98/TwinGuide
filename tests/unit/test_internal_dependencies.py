@@ -47,5 +47,6 @@ class InternalDependencyTests(unittest.TestCase):
         self.assertIn("$project_directory/src", pythonpath_line)
         self.assertNotIn("--gpu-backend", content)
 
+
 if __name__ == "__main__":
     unittest.main()

@@ -37,6 +37,112 @@ class ToothIdentificationBackend(StrEnum):
     FDI_NEW = "fdi_new"
 
 
+TOOTH_FDI_MAPPING_NEW_PROFILE_ID = "tooth_fdi_mapping_new_intercore_separator_exclusion"
+
+
+@dataclass(frozen=True, slots=True)
+class ToothFdiMappingNewProfile:
+    """第 2 阶段 FDI New 识别的可复现算法参数。"""
+
+    profile_id: str = TOOTH_FDI_MAPPING_NEW_PROFILE_ID
+    height_quantiles: tuple[float, ...] = (0.35, 0.40, 0.45, 0.50, 0.55)
+    projection_resolution_mm: float = 0.12
+    candidate_detection_resolution_mm: float = 0.12
+    component_segmentation_resolution_mm: float = 0.12
+    minimum_normal_dot: float = 0.05
+    minimum_track_persistence: float = 0.60
+    minimum_alignment_margin_per_tooth: float = 0.05
+    minimum_independent_core_separation_scale: float = 0.35
+    boundary_first_segmentation: bool = True
+    require_anatomical_split_evidence: bool = True
+    maximum_local_assignment_robust_z: float = 4.0
+    maximum_bilateral_region_area_ratio: float = 1.80
+    midline_offset_search_local_scale: float = 1.50
+    minimum_relative_crown_height_ratio: float = 0.60
+    minimum_relative_relief_quality_ratio: float = 0.75
+    maximum_low_relief_component_area_ratio: float = 0.50
+    relief_baseline_windows_mm: tuple[float, ...] = (6.0, 8.0, 10.0)
+    unassigned_relief_quantile: float = 0.08
+    unassigned_seed_protection_scale: float = 0.55
+    minimum_unassigned_area_mm2: float = 1.50
+    surface_valley_evidence_enabled: bool = True
+    surface_valley_normalization_scale_mm: float = 8.0
+    surface_valley_smoothing_iterations: tuple[int, ...] = (1, 2, 4)
+    surface_valley_watershed_weight: float = 0.22
+    minimum_surface_valley_mean_support: float = 0.36
+    minimum_surface_valley_coverage: float = 0.32
+    multi_view_boundary_enabled: bool = True
+    multi_view_azimuth_count: int = 8
+    multi_view_obliquity_degrees: float = 45.0
+    multi_view_resolution_mm: float = 0.24
+    multi_view_edge_support_quantile: float = 0.75
+    multi_view_watershed_weight: float = 0.12
+    stability_resolutions_mm: tuple[float, ...] = (0.10, 0.12, 0.14)
+    boundary_smoothing_scales: tuple[float, ...] = (0.85, 1.0, 1.15)
+    run_stability: bool = True
+
+    def __post_init__(self) -> None:
+        """拒绝会使识别失去定义或稳定性的参数。"""
+
+        if not self.profile_id.strip():
+            raise ValueError("profile_id 不能为空")
+        if not self.height_quantiles or any(
+            not 0.0 < value < 1.0 for value in self.height_quantiles
+        ):
+            raise ValueError("height_quantiles 必须严格位于 (0, 1)")
+        if tuple(sorted(set(self.height_quantiles))) != self.height_quantiles:
+            raise ValueError("height_quantiles 必须唯一且递增")
+        positive = (
+            self.projection_resolution_mm,
+            self.candidate_detection_resolution_mm,
+            self.component_segmentation_resolution_mm,
+            self.minimum_independent_core_separation_scale,
+            self.maximum_local_assignment_robust_z,
+            self.midline_offset_search_local_scale,
+            self.surface_valley_normalization_scale_mm,
+            self.multi_view_resolution_mm,
+        )
+        if any(value <= 0.0 for value in positive):
+            raise ValueError("FDI New 的分辨率、尺度和 robust-z 参数必须为正")
+        unit_interval = (
+            self.minimum_track_persistence,
+            self.minimum_relative_crown_height_ratio,
+            self.minimum_relative_relief_quality_ratio,
+            self.minimum_surface_valley_mean_support,
+            self.minimum_surface_valley_coverage,
+        )
+        if any(not 0.0 <= value <= 1.0 for value in unit_interval):
+            raise ValueError("FDI New 的比例阈值必须位于 [0, 1]")
+        if self.maximum_bilateral_region_area_ratio <= 1.0:
+            raise ValueError("maximum_bilateral_region_area_ratio 必须大于 1")
+        if not 0.0 < self.maximum_low_relief_component_area_ratio < 1.0:
+            raise ValueError("maximum_low_relief_component_area_ratio 必须位于 (0, 1)")
+        if not self.relief_baseline_windows_mm or any(
+            value <= 0.0 for value in self.relief_baseline_windows_mm
+        ):
+            raise ValueError("relief_baseline_windows_mm 必须为正")
+        if not 0.0 <= self.unassigned_relief_quantile <= 0.25:
+            raise ValueError("unassigned_relief_quantile 必须位于 [0, 0.25]")
+        if self.unassigned_seed_protection_scale <= 0.0:
+            raise ValueError("unassigned_seed_protection_scale 必须为正")
+        if self.minimum_unassigned_area_mm2 < 0.0:
+            raise ValueError("minimum_unassigned_area_mm2 不得为负")
+        if not self.surface_valley_smoothing_iterations or any(
+            value < 0 for value in self.surface_valley_smoothing_iterations
+        ):
+            raise ValueError("surface_valley_smoothing_iterations 不得为负")
+        if not 0.0 <= self.surface_valley_watershed_weight <= 0.5:
+            raise ValueError("surface_valley_watershed_weight 必须位于 [0, 0.5]")
+        if self.multi_view_azimuth_count < 4:
+            raise ValueError("multi_view_azimuth_count 不得小于 4")
+        if not 0.0 < self.multi_view_obliquity_degrees < 90.0:
+            raise ValueError("multi_view_obliquity_degrees 必须位于 (0, 90)")
+        if not 0.50 <= self.multi_view_edge_support_quantile < 1.0:
+            raise ValueError("multi_view_edge_support_quantile 必须位于 [0.5, 1)")
+        if not 0.0 <= self.multi_view_watershed_weight <= 0.35:
+            raise ValueError("multi_view_watershed_weight 必须位于 [0, 0.35]")
+
+
 class HandpieceMotionMode(StrEnum):
     """手机旋转方向策略。"""
 
@@ -175,6 +281,32 @@ class ConnectionBlockParameters:
 
 
 @dataclass(frozen=True, slots=True)
+class AnchorSelectionParameters:
+    """导板表面锚点的净距、跨度和候选规模。"""
+
+    lower_edge_clearance_mm: float = 1.0
+    axial_margin_mm: float = 0.8
+    upper_cutter_clearance_mm: float = 0.01
+    clearance_mm: float | None = None
+    minimum_span_connector_diameters: float = 1.25
+    surface_sample_limit: int = 4096
+    candidate_limit: int = 512
+
+
+@dataclass(frozen=True, slots=True)
+class ConnectorPathParameters:
+    """连接梁中心线的离散、张力和局部下潜参数。"""
+
+    curve_resolution: int = 64
+    recut_sleeve_bore: bool = True
+    endpoint_tension: float = 0.45
+    contact_tension: float = 0.90
+    lower_approach_overlap_mm: float = 1.45
+    lower_dive_merge_arc_mm: float = 5.0
+    centerline_spacing_mm: float = 0.30
+
+
+@dataclass(frozen=True, slots=True)
 class GeometryParameters:
     """导孔切除、连接管和网格融合所需的几何参数。"""
 
@@ -186,6 +318,8 @@ class GeometryParameters:
     sleeve_stop_front_avoidance_mm: float = 4.0
     connection_blocks: ConnectionBlockParameters = field(default_factory=ConnectionBlockParameters)
     connector_guide_endpoint: PressBeamGuideEndpointParameters = PressBeamGuideEndpointParameters()
+    anchor_selection: AnchorSelectionParameters = AnchorSelectionParameters()
+    connector_path: ConnectorPathParameters = ConnectorPathParameters()
 
     @property
     def connector_radius_mm(self) -> float:
@@ -209,6 +343,32 @@ class WindowParameters:
     observation_local_failure_drop_targets_mm: tuple[float, ...]
     observation_local_failure_transition_rows: int
     observation_adaptive_fallback_enabled: bool = False
+    observation_solver: ObservationSolverParameters = field(
+        default_factory=lambda: ObservationSolverParameters()
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ObservationSolverParameters:
+    """观察窗布尔体、可见性判定和自适应 fallback 参数。"""
+
+    top_extension_mm: float = 0.40
+    side_extension_mm: float = 0.40
+    outward_margin_mm: float = 0.40
+    wall_overcut_mm: float = 0.40
+    maximum_wall_thickness_mm: float = 5.0
+    ray_entry_tolerance_mm: float = 0.65
+    following_wall_safety_mm: float = 0.10
+    axis_core_overcut_mm: float = 0.30
+    minimum_axis_visibility_row_fraction: float = 0.50
+    minimum_axis_clear_corridor_fraction: float = 0.95
+    union_batch_size: int = 16
+    fragment_volume_tolerance_mm3: float = 2.0
+    minimum_removed_volume_mm3: float = 1.0
+    residual_volume_tolerance_mm3: float = 1.0e-4
+    volume_identity_tolerance_mm3: float = 5.0e-2
+    adaptive_volume_identity_tolerance_mm3: float = 5.0e-3
+    volume_identity_relative_tolerance: float = 1.0e-4
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,6 +398,7 @@ class GuidePostParameters:
     drill_length_mm: float
     implant_length_mm: float
     sleeve_template_extension_mm: float
+    drill_inside_handpiece_length_mm: float = 12.0
     sleeve: SleeveParameterOverrides = SleeveParameterOverrides()
 
     @property
@@ -247,6 +408,7 @@ class GuidePostParameters:
         return calculate_twin_guide_extension_mm(
             self.drill_length_mm,
             self.implant_length_mm,
+            self.drill_inside_handpiece_length_mm,
         )
 
     def resolved_sleeve(self, defaults: SleeveParameters) -> SleeveParameters:
@@ -257,12 +419,13 @@ class GuidePostParameters:
 
 @dataclass(frozen=True, slots=True)
 class SleeveSiteOverride:
-    """一个种植位左右两根导柱共用的三项轴向高度。"""
+    """一个种植位左右两根导柱共用的高度与圆心旋转。"""
 
     ring_index: int
     height_mm: float
     platform_height_mm: float
     closed_bore_height_mm: float
+    rotation_degrees: float = 0.0
 
     def __post_init__(self) -> None:
         """校验圆环编号及三项严格高度关系。"""
@@ -270,6 +433,8 @@ class SleeveSiteOverride:
             raise ValueError("导柱种植位圆环编号必须为正")
         if not 0.0 < self.closed_bore_height_mm < self.platform_height_mm < self.height_mm:
             raise ValueError("导柱高度必须满足：底部高度 < 平台高度 < 总高度")
+        if not math.isfinite(self.rotation_degrees) or not -180.0 <= self.rotation_degrees <= 180.0:
+            raise ValueError("导柱圆心旋转角必须位于 [-180, 180] 度")
 
 
 @dataclass(frozen=True, slots=True)
@@ -424,11 +589,12 @@ class ToothIdentificationInputs:
 
     case_yaml: Path
     backend: ToothIdentificationBackend = ToothIdentificationBackend.FDI_NEW
+    profile: ToothFdiMappingNewProfile = field(default_factory=ToothFdiMappingNewProfile)
 
 
 @dataclass(frozen=True, slots=True)
 class HandpieceAvoidanceParameters:
-    """当前装配深度下牙科手机旋转避障参数。"""
+    """牙科手机轴向位移与旋转避障参数。"""
 
     avoidance_id: str
     handpiece: Path
@@ -442,9 +608,12 @@ class HandpieceAvoidanceParameters:
     collision_refinement_degrees: float = 0.1
     envelope_step_degrees: float = 0.5
     envelope_simplify_tolerance_mm: float = 0.05
+    axial_depth_range_mm: tuple[float, float] = (0.0, 0.0)
+    axial_step_mm: float = 0.5
     extra_clearance_mm: float = 0.0
     tooth_clearance_mm: float = 0.0
     connector_clearance_mm: float = 0.20
+    fragment_volume_tolerance_mm3: float = 1.0e-4
 
 
 class GuideAnchorMode(StrEnum):
@@ -654,9 +823,11 @@ __all__ = [
     "DEFAULT_GUIDE_ANCHOR_U_SIDE_RAY_ANGLE_DEGREES",
     "DEFAULT_OPERATION_BITANGENT_MARGIN_MM",
     "DEFAULT_PRESS_BEAM_DIAMETER_MM",
+    "AnchorSelectionParameters",
     "ClinicalPlanningParameters",
     "ConnectionBlockParameters",
     "ConnectorAvoidanceOverride",
+    "ConnectorPathParameters",
     "EditorOverrides",
     "GeometryParameters",
     "GuideAnchorLocation",
@@ -674,6 +845,7 @@ __all__ = [
     "HandpieceSamplingMode",
     "InputMeshPaths",
     "Jaw",
+    "ObservationSolverParameters",
     "ObservationWindowOverride",
     "OperationWindowOverride",
     "PressBeamExtensionAnchorParameters",

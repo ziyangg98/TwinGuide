@@ -101,9 +101,7 @@ class PressBeamPointPlan:
     connection_type: str = "inner_sleeve_upper_y_tripod"
     guide_endpoint: PressBeamGuideEndpointParameters | None = None
     junction_axis: Vec3 | None = None
-    junction_height_mode: PressBeamJunctionHeightMode = (
-        PressBeamJunctionHeightMode.OCCLUSAL_LIFTED
-    )
+    junction_height_mode: PressBeamJunctionHeightMode = PressBeamJunctionHeightMode.OCCLUSAL_LIFTED
     junction_center_axial_offset_mm: float = 0.0
     anchor_center_to_sleeve_axial_mm: float | None = None
 
@@ -159,10 +157,7 @@ def _geometric_median(points: tuple[Vec3, Vec3, Vec3]) -> Vec3:
     for _ in range(128):
         distances = tuple(max(current.distance_to(point), 1e-8) for point in points)
         updated = sum(
-            (
-                point * (1.0 / distance)
-                for point, distance in zip(points, distances, strict=True)
-            ),
+            (point * (1.0 / distance) for point, distance in zip(points, distances, strict=True)),
             Vec3(0.0, 0.0, 0.0),
         ) / sum(1.0 / distance for distance in distances)
         if current.distance_to(updated) <= 1e-7:
@@ -205,14 +200,8 @@ def _conditional_inner_sleeve_junction(
         raise GeometryError("Y 汇合点在导管轴向垂直平面内没有稳定的径向方向")
     if candidate.distance_to(plane_origin) >= minimum_sleeve_distance_mm:
         return candidate
-    required_radial_mm = math.sqrt(
-        max(0.0, minimum_sleeve_distance_mm**2 - axial_delta_mm**2)
-    )
-    return (
-        plane_origin
-        + unit_axis * axial_delta_mm
-        + radial.normalized() * required_radial_mm
-    )
+    required_radial_mm = math.sqrt(max(0.0, minimum_sleeve_distance_mm**2 - axial_delta_mm**2))
+    return plane_origin + unit_axis * axial_delta_mm + radial.normalized() * required_radial_mm
 
 
 def _minimum_junction_angle_degrees(
@@ -223,9 +212,7 @@ def _minimum_junction_angle_degrees(
 
     directions = tuple((anchor - junction).normalized() for anchor in anchors)
     return min(
-        math.degrees(
-            math.acos(max(-1.0, min(1.0, first.dot(second))))
-        )
+        math.degrees(math.acos(max(-1.0, min(1.0, first.dot(second)))))
         for index, first in enumerate(directions)
         for second in directions[index + 1 :]
     )
@@ -242,10 +229,7 @@ def _farthest_point_from_two_anchors(
 
     if len(points) < 2:
         raise GeometryError("末端 U 型延伸梁候选段不足两个中心线点")
-    lengths = tuple(
-        first.distance_to(second)
-        for first, second in itertools.pairwise(points)
-    )
+    lengths = tuple(first.distance_to(second) for first, second in itertools.pairwise(points))
     total_length = sum(lengths)
     if total_length <= start_margin_mm + end_margin_mm:
         raise GeometryError(
@@ -255,9 +239,7 @@ def _farthest_point_from_two_anchors(
         )
     best: tuple[float, float, Vec3, Vec3, tuple[float, float], float] | None = None
     cumulative = 0.0
-    for first, second, length in zip(
-        points[:-1], points[1:], lengths, strict=True
-    ):
+    for first, second, length in zip(points[:-1], points[1:], lengths, strict=True):
         if length <= 1e-9:
             continue
         vector = second - first
@@ -272,9 +254,8 @@ def _farthest_point_from_two_anchors(
         # 目标可能出现内部折点的唯一位置。其余最大值只可能位于端点。
         anchor_delta = second_anchor - first_anchor
         slope = 2.0 * vector.dot(anchor_delta)
-        intercept = (
-            (first - first_anchor).dot(first - first_anchor)
-            - (first - second_anchor).dot(first - second_anchor)
+        intercept = (first - first_anchor).dot(first - first_anchor) - (first - second_anchor).dot(
+            first - second_anchor
         )
         if abs(slope) > 1e-12:
             equal_fraction = -intercept / slope
@@ -347,8 +328,7 @@ def _lifted_three_anchor_junction(
         raise GeometryError("三个锚点无法形成稳定展开的 Y 型三角形")
     if minimum_angle < minimum_junction_angle_degrees:
         raise GeometryError(
-            f"Y 汇合点最小三臂夹角 {minimum_angle:.2f}° 小于 "
-            f"{minimum_junction_angle_degrees:.2f}°"
+            f"Y 汇合点最小三臂夹角 {minimum_angle:.2f}° 小于 {minimum_junction_angle_degrees:.2f}°"
         )
     return junction, minimum_angle
 
@@ -378,19 +358,14 @@ def _case_occlusal_axis(context: GenerationContext) -> Vec3:
     """返回由病例 YAML 确认并写入牙位映射的牙合方向。"""
 
     assert context.tooth_identification is not None
-    coordinate_system = context.tooth_identification.mapping_report.get(
-        "coordinate_system"
-    )
+    coordinate_system = context.tooth_identification.mapping_report.get("coordinate_system")
     if not isinstance(coordinate_system, dict):
         raise GeometryError("牙位映射缺少病例 YAML 的 coordinate_system")
     raw_axis = coordinate_system.get("e_occ")
     if (
         not isinstance(raw_axis, list | tuple)
         or len(raw_axis) != 3
-        or any(
-            isinstance(value, bool) or not isinstance(value, int | float)
-            for value in raw_axis
-        )
+        or any(isinstance(value, bool) or not isinstance(value, int | float) for value in raw_axis)
     ):
         raise GeometryError("牙位映射 coordinate_system.e_occ 必须为三元素数值向量")
     axis = Vec3(*(float(value) for value in raw_axis))
@@ -448,15 +423,11 @@ def _select_three_tooth_anchor_points(
         config.junction_axial_lift_mm,
         config.minimum_junction_angle_degrees,
     )
-    anchor_center = mean_point(
-        tuple(anchor.centerline_anchor for anchor in anchors)
-    )
+    anchor_center = mean_point(tuple(anchor.centerline_anchor for anchor in anchors))
     axial_lift = (junction - anchor_center).dot(occlusal_axis)
     axial_error = abs(axial_lift - config.junction_axial_lift_mm)
     if axial_error > 1e-6:
-        raise GeometryError(
-            f"全牙位 Y 汇合点牙合方向抬高误差 {axial_error:.6g} mm 超限"
-        )
+        raise GeometryError(f"全牙位 Y 汇合点牙合方向抬高误差 {axial_error:.6g} mm 超限")
     return PressBeamPointPlan(
         sleeve_anchor=None,
         extension_anchor=None,
@@ -496,24 +467,18 @@ def _select_terminal_u_extension_anchor_points(
         config.stations,
         PRESS_BEAM_U_SIDE_RAY_DEGREES,
     )
-    guide_anchors = _fixed_ray_guide_anchors(
-        selections, config.radius_mm, config.guide_overlap_mm
-    )
+    guide_anchors = _fixed_ray_guide_anchors(selections, config.radius_mm, config.guide_overlap_mm)
     if len(guide_anchors) != 2:
         raise GeometryError("末端 U 型延伸梁锚点 Y 梁必须产生两个牙位锚点")
     segment_centerline = _extension_segment_centerline(context, anchor_config.segment)
-    center, tangent, anchor_distances, segment_fraction = (
-        _farthest_point_from_two_anchors(
-            segment_centerline,
-            guide_anchors[0].centerline_anchor,
-            guide_anchors[1].centerline_anchor,
-            anchor_config.start_margin_mm,
-            anchor_config.end_margin_mm,
-        )
+    center, tangent, anchor_distances, segment_fraction = _farthest_point_from_two_anchors(
+        segment_centerline,
+        guide_anchors[0].centerline_anchor,
+        guide_anchors[1].centerline_anchor,
+        anchor_config.start_margin_mm,
+        anchor_config.end_margin_mm,
     )
-    guide_midpoint = mean_point(
-        tuple(anchor.centerline_anchor for anchor in guide_anchors)
-    )
+    guide_midpoint = mean_point(tuple(anchor.centerline_anchor for anchor in guide_anchors))
     toward_guides = guide_midpoint - center
     radial = toward_guides - tangent * toward_guides.dot(tangent)
     if radial.length <= 1e-8:
@@ -647,14 +612,15 @@ def _select_press_beam_points_base(context: GenerationContext) -> PressBeamPoint
     for pair_start in range(0, len(guides), 2):
         pair_scores = tuple(
             sorted(
-                (score_by_guide[guide.guide_index] for guide in guides[pair_start : pair_start + 2]),
+                (
+                    score_by_guide[guide.guide_index]
+                    for guide in guides[pair_start : pair_start + 2]
+                ),
                 key=lambda score: score.outward_coordinate_mm,
             )
         )
         if pair_scores[1].outward_coordinate_mm - pair_scores[0].outward_coordinate_mm < 0.50:
-            raise GeometryError(
-                f"种植位 {pair_start // 2 + 1} 的双导管牙弓内外侧差异不足 0.50 mm"
-            )
+            raise GeometryError(f"种植位 {pair_start // 2 + 1} 的双导管牙弓内外侧差异不足 0.50 mm")
         candidate = pair_scores[0]
         sleeve_selection = next(
             selection
@@ -667,24 +633,16 @@ def _select_press_beam_points_base(context: GenerationContext) -> PressBeamPoint
         )
         candidates.append((min(distances), sum(distances), candidate, sleeve_selection))
     if selection_policy.distance_score != "maximin_to_two_guide_anchors":
-        raise GeometryError(
-            f"不支持的 Y 梁导管距离评分：{selection_policy.distance_score}"
-        )
+        raise GeometryError(f"不支持的 Y 梁导管距离评分：{selection_policy.distance_score}")
     if selection_policy.tie_breaker != "larger_sum_distance":
-        raise GeometryError(
-            f"不支持的 Y 梁导管平局规则：{selection_policy.tie_breaker}"
-        )
+        raise GeometryError(f"不支持的 Y 梁导管平局规则：{selection_policy.tie_breaker}")
     if selection_policy.candidate_scope != "inner_sleeve_upper_per_implant_site":
-        raise GeometryError(
-            f"不支持的 Y 梁导管候选范围：{selection_policy.candidate_scope}"
-        )
+        raise GeometryError(f"不支持的 Y 梁导管候选范围：{selection_policy.candidate_scope}")
     _, _, inner_score, sleeve_selection = max(
         candidates,
         key=lambda item: (item[0], item[1], -item[2].guide_index),
     )
-    inner_guide = next(
-        guide for guide in guides if guide.guide_index == inner_score.guide_index
-    )
+    inner_guide = next(guide for guide in guides if guide.guide_index == inner_score.guide_index)
     upper = sleeve_selection.upper
     centerline_anchors = (
         upper.position,
@@ -710,14 +668,9 @@ def _select_press_beam_points_base(context: GenerationContext) -> PressBeamPoint
         config.junction_sleeve_distance_mm,
         config.junction_axial_lift_mm,
     )
-    axial_error = abs(
-        (junction - upper.position).dot(sleeve_axis)
-        - expected_axial_delta_mm
-    )
+    axial_error = abs((junction - upper.position).dot(sleeve_axis) - expected_axial_delta_mm)
     if axial_error > 1e-6:
-        raise GeometryError(
-            f"Y 汇合点条件轴向高度误差 {axial_error:.6g} mm 超限"
-        )
+        raise GeometryError(f"Y 汇合点条件轴向高度误差 {axial_error:.6g} mm 超限")
     sleeve_distance = junction.distance_to(upper.position)
     sleeve_distance_error = max(
         0.0,
@@ -725,8 +678,7 @@ def _select_press_beam_points_base(context: GenerationContext) -> PressBeamPoint
     )
     if sleeve_distance_error > 1e-6:
         raise GeometryError(
-            "Y 汇合点到导管上锚点的最小距离缺口 "
-            f"{sleeve_distance_error:.6g} mm 超限"
+            f"Y 汇合点到导管上锚点的最小距离缺口 {sleeve_distance_error:.6g} mm 超限"
         )
     minimum_angle = _minimum_junction_angle_degrees(junction, centerline_anchors)
     if minimum_angle < config.minimum_junction_angle_degrees:
@@ -766,9 +718,7 @@ def _select_press_beam_points_base(context: GenerationContext) -> PressBeamPoint
         guide_endpoint=config.guide_endpoint,
         junction_axis=sleeve_axis,
         junction_height_mode=height_mode,
-        junction_center_axial_offset_mm=(junction - original_center).dot(
-            sleeve_axis
-        ),
+        junction_center_axial_offset_mm=(junction - original_center).dot(sleeve_axis),
         anchor_center_to_sleeve_axial_mm=center_above_sleeve_mm,
     )
 
@@ -795,16 +745,11 @@ def _apply_editor_overrides(
                 anchor,
                 surface_anchor=position,
                 surface_normal=normal,
-                centerline_anchor=(
-                    position
-                    + normal * (plan.radius_mm - plan.guide_overlap_mm)
-                ),
+                centerline_anchor=(position + normal * (plan.radius_mm - plan.guide_overlap_mm)),
             )
         )
     junction = (
-        plan.junction
-        if overrides.press_junction_mm is None
-        else Vec3(*overrides.press_junction_mm)
+        plan.junction if overrides.press_junction_mm is None else Vec3(*overrides.press_junction_mm)
     )
     centerline_anchors = tuple(anchor.centerline_anchor for anchor in anchors)
     if plan.sleeve_anchor is not None:

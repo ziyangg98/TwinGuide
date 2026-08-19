@@ -1,8 +1,9 @@
-"""生成当前装配深度下的牙科手机左右摆动避障包络。"""
+"""生成牙科手机轴向位移与旋转的二维避障包络。"""
 
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import time
 from dataclasses import dataclass
@@ -17,8 +18,8 @@ from twin_guide.config import (
 from twin_guide.errors import GeometryError
 from twin_guide.types import GenerationContext
 
-ALGORITHM_VERSION = "current-depth-configurable-sweep-v5-release-then-validate"
-FRAGMENT_VOLUME_TOLERANCE_MM3 = 1.0e-4
+ALGORITHM_VERSION = "axial-rotation-sweep-v6-conservative-interpolation"
+MAXIMUM_POSE_COUNT = 2000
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,8 +33,16 @@ class HandpieceAvoidancePlan:
     pivot: tuple[float, float, float]
     matched_stop_patch_ids: tuple[str, str]
     angle_samples_degrees: tuple[float, ...]
+    axial_depth_samples_mm: tuple[float, ...]
     extra_clearance_mm: float
+    automatic_clearance_mm: float
     cache_reused: bool
+
+    @property
+    def effective_clearance_mm(self) -> float:
+        """返回用户净距与离散插值补偿之和。"""
+
+        return self.extra_clearance_mm + self.automatic_clearance_mm
 
 
 def _sha256(path: Path) -> str:
@@ -75,6 +84,22 @@ def _load_mesh(
     if require_volume and not loaded.is_volume:
         raise GeometryError(f"手机避障网格不是封闭有效体：{path}")
     return loaded
+
+
+def _combine_closed_components(mesh):
+    """保留并组合输入网格的全部封闭连通分量。"""
+
+    import trimesh
+
+    components = tuple(mesh.split(only_watertight=False))
+    if not components:
+        raise GeometryError("手机 STL 不包含可用连通分量")
+    invalid = [index for index, component in enumerate(components) if not component.is_volume]
+    if invalid:
+        raise GeometryError(f"手机 STL 存在非封闭有效连通分量：{invalid}")
+    combined = trimesh.util.concatenate(components)
+    combined.remove_unreferenced_vertices()
+    return combined, components
 
 
 def _boolean_union(
@@ -132,8 +157,7 @@ def _stop_geometry(stop_report: Path):
         report = json.loads(stop_report.read_text(encoding="utf-8"))
         axis = _unit(np.asarray(report["pair_axis"], dtype=float))
         patches = {
-            item["patch_id"]: item
-            for item in report["phone_downward_planar_patch_candidates"]
+            item["patch_id"]: item for item in report["phone_downward_planar_patch_candidates"]
         }
         matched_ids = tuple(
             str(report["provisional_paired_stop_match"][side]["patch_id"])
@@ -158,9 +182,88 @@ def _guide_midpoint(guide):
     import numpy as np
 
     return np.asarray(guide.center.as_tuple(), dtype=float) + (
-        0.5 * (guide.axial_min_mm + guide.axial_max_mm)
+        0.5
+        * (guide.axial_min_mm + guide.axial_max_mm)
         * np.asarray(guide.axis.as_tuple(), dtype=float)
     )
+
+
+def _axial_depth_samples(
+    axial_depth_range_mm: tuple[float, float],
+    axial_step_mm: float,
+):
+    """生成包含范围端点和 0 mm 当前姿态的轴向样本。"""
+
+    import numpy as np
+
+    minimum, maximum = (float(value) for value in axial_depth_range_mm)
+    if minimum > maximum or minimum > 0.0 or maximum < 0.0:
+        raise GeometryError("手机轴向范围必须递增并包含 0 mm 当前姿态")
+    if axial_step_mm <= 0.0:
+        raise GeometryError("手机轴向采样步长必须为正数")
+    segments = []
+    for start, end in ((minimum, 0.0), (0.0, maximum)):
+        if abs(end - start) <= 1.0e-12:
+            segments.append(np.asarray([start], dtype=float))
+            continue
+        interval_count = max(1, int(np.ceil(abs(end - start) / axial_step_mm)))
+        segments.append(np.linspace(start, end, interval_count + 1))
+    return np.unique(np.concatenate(segments))
+
+
+def _pose_grid_size(angle_count: int, axial_count: int) -> int:
+    """校验二维姿态网格大小并返回姿态总数。"""
+
+    count = int(angle_count) * int(axial_count)
+    if count > MAXIMUM_POSE_COUNT:
+        raise GeometryError(
+            "手机二维姿态超过 2000 个；请增大 axial_step_mm、"
+            "envelope_step_degrees 或减少 pose_samples"
+        )
+    return count
+
+
+def _axial_insertion_direction(context: GenerationContext, axis, pivot):
+    """用距枢轴最近的导管对确定顶部到下部的钻针进入方向。"""
+
+    import numpy as np
+
+    sleeves = context.sleeve_generation
+    if sleeves is None or len(sleeves.sleeves) < 2 or len(sleeves.sleeves) % 2:
+        raise GeometryError("无法从当前病例确定手机轴向进入方向")
+    candidates = []
+    for start in range(0, len(sleeves.sleeves), 2):
+        first, second = sleeves.sleeves[start : start + 2]
+        first_axis = _unit(np.asarray(first.axis.as_tuple(), dtype=float))
+        second_axis = _unit(np.asarray(second.axis.as_tuple(), dtype=float))
+        if float(first_axis @ second_axis) < 0.0:
+            second_axis = -second_axis
+        direction = _unit(first_axis + second_axis)
+        pair_pivot = np.mean(np.asarray([_guide_midpoint(first), _guide_midpoint(second)]), axis=0)
+        candidates.append((float(np.linalg.norm(pair_pivot - pivot)), direction))
+    _distance, direction = min(candidates, key=lambda item: item[0])
+    alignment = abs(float(direction @ axis))
+    if alignment < 0.90:
+        raise GeometryError("手机旋转轴与最近导管对的钻针进入方向不一致，无法定义轴向运动")
+    # GuideSleeve.axis 的领域定义固定为导管顶部指向底部；保留其符号。
+    return direction, alignment
+
+
+def _interpolation_clearance(
+    maximum_rotation_radius_mm: float,
+    maximum_angle_step_degrees: float,
+    maximum_axial_step_mm: float,
+) -> tuple[float, float, float]:
+    """返回旋转、轴向和合计的保守半步位移上界。"""
+
+    import numpy as np
+
+    rotation = float(
+        2.0 * maximum_rotation_radius_mm * np.sin(np.deg2rad(maximum_angle_step_degrees) / 4.0)
+    )
+    axial = 0.5 * float(maximum_axial_step_mm)
+    return rotation, axial, rotation + axial
+
 
 def _derived_pair_geometry(context: GenerationContext, body):
     """从已识别导管对自动匹配手机并计算公共轴线。"""
@@ -178,13 +281,9 @@ def _derived_pair_geometry(context: GenerationContext, body):
         if float(first_axis @ second_axis) < 0.0:
             second_axis = -second_axis
         axis = _unit(first_axis + second_axis)
-        centroids = np.asarray(
-            [_guide_midpoint(first), _guide_midpoint(second)], dtype=float
-        )
+        centroids = np.asarray([_guide_midpoint(first), _guide_midpoint(second)], dtype=float)
         pivot = np.mean(centroids, axis=0)
-        nearest_phone_distance = float(
-            np.min(np.linalg.norm(body.vertices - pivot, axis=1))
-        )
+        nearest_phone_distance = float(np.min(np.linalg.norm(body.vertices - pivot, axis=1)))
         candidates.append(
             (
                 nearest_phone_distance,
@@ -207,9 +306,7 @@ def _fingerprint(
         "algorithm_version": ALGORITHM_VERSION,
         "handpiece_sha256": _sha256(parameters.handpiece),
         "stop_report_sha256": (
-            _sha256(parameters.stop_report)
-            if parameters.stop_report is not None
-            else None
+            _sha256(parameters.stop_report) if parameters.stop_report is not None else None
         ),
         "motion_mode": parameters.motion_mode.value,
         "sampling_mode": parameters.sampling_mode.value,
@@ -219,9 +316,10 @@ def _fingerprint(
         "collision_coarse_step_degrees": parameters.collision_coarse_step_degrees,
         "collision_refinement_degrees": parameters.collision_refinement_degrees,
         "envelope_step_degrees": parameters.envelope_step_degrees,
-        "envelope_simplify_tolerance_mm": (
-            parameters.envelope_simplify_tolerance_mm
-        ),
+        "envelope_simplify_tolerance_mm": (parameters.envelope_simplify_tolerance_mm),
+        "axial_depth_range_mm": list(parameters.axial_depth_range_mm),
+        "axial_step_mm": parameters.axial_step_mm,
+        "extra_clearance_mm": parameters.extra_clearance_mm,
         "tooth_clearance_mm": parameters.tooth_clearance_mm,
         "connector_clearance_mm": parameters.connector_clearance_mm,
         "constraint_inputs": constraint_inputs,
@@ -257,7 +355,7 @@ def _connector_obstacle(context: GenerationContext, clearance_mm: float):
             continue
         labels.append(link.link_label or f"guide_{link.guide_index}_{link.sleeve_label}")
         points = np.asarray([point.as_tuple() for point in link.centerline], dtype=float)
-        for first, second in zip(points[:-1], points[1:], strict=True):
+        for first, second in itertools.pairwise(points):
             if float(np.linalg.norm(second - first)) <= 1.0e-8:
                 continue
             pieces.append(
@@ -296,7 +394,7 @@ def _tooth_crown_obstacle(context: GenerationContext, dentition):
         raise GeometryError("无法从口扫网格提取牙冠保护面")
     crown_mesh = dentition.submesh([face_indices], append=True, repair=False)
     crown_mesh.remove_unreferenced_vertices()
-    return crown_mesh, radius, int(len(face_indices))
+    return crown_mesh, radius, len(face_indices)
 
 
 def _missing_site_outward(context: GenerationContext, pivot):
@@ -354,9 +452,7 @@ def _missing_site_outward(context: GenerationContext, pivot):
         )
     if not candidates:
         raise GeometryError("无法从现存牙位为缺牙区插值得到颊侧方向")
-    _, missing_fdi, centre, outward, neighbor_fdis = min(
-        candidates, key=lambda item: item[0]
-    )
+    _, missing_fdi, centre, outward, neighbor_fdis = min(candidates, key=lambda item: item[0])
     return missing_fdi, centre, outward, neighbor_fdis
 
 
@@ -378,7 +474,7 @@ def _handle_direction(body, pivot, axis):
         selected = coherent
     direction = np.mean(selected, axis=0)
     direction = direction - float(direction @ axis) * axis
-    return _unit(direction), int(len(selected)), maximum
+    return _unit(direction), len(selected), maximum
 
 
 def _signed_buccal_target_angle(axis, handle_direction, outward):
@@ -572,64 +668,63 @@ def _buccal_angles_and_constraints(
     body,
     axis,
     pivot,
+    axial_depths,
+    axial_direction,
 ):
     """允许初始接触并搜索牙体释放后的连续颊侧旋转区间。"""
 
     import numpy as np
     import trimesh
 
-    missing_fdi, site_centre, outward, neighbor_fdis = _missing_site_outward(
-        context, pivot
-    )
-    handle_direction, handle_vertex_count, maximum_radius = _handle_direction(
-        body, pivot, axis
-    )
-    target_angle, outward_projected = _signed_buccal_target_angle(
-        axis, handle_direction, outward
-    )
+    missing_fdi, site_centre, outward, neighbor_fdis = _missing_site_outward(context, pivot)
+    handle_direction, handle_vertex_count, maximum_radius = _handle_direction(body, pivot, axis)
+    target_angle, outward_projected = _signed_buccal_target_angle(axis, handle_direction, outward)
     requested_angle = float(
-        np.sign(target_angle)
-        * min(abs(target_angle), parameters.maximum_angle_degrees)
+        np.sign(target_angle) * min(abs(target_angle), parameters.maximum_angle_degrees)
     )
     dentition = _load_mesh(
         context.config.inputs.patient_dentition,
         require_volume=False,
         process=True,
     )
-    connector, connector_labels = _connector_obstacle(
-        context, parameters.connector_clearance_mm
-    )
-    tooth_crowns, crown_radius, crown_face_count = _tooth_crown_obstacle(
-        context, dentition
-    )
+    connector, connector_labels = _connector_obstacle(context, parameters.connector_clearance_mm)
+    tooth_crowns, crown_radius, crown_face_count = _tooth_crown_obstacle(context, dentition)
     dentition_bvh = _mesh_bvh(tooth_crowns)
     connector_bvh = _mesh_bvh(connector)
 
     def pose_test(angle: float):
-        """返回一个旋转姿态的牙体侵入和背 U 梁接触状态。"""
+        """返回该角度在全部轴向深度上的聚合碰撞状态。"""
 
-        pose = body.copy()
-        pose.apply_transform(
-            trimesh.transformations.rotation_matrix(
-                np.deg2rad(float(angle)), axis, point=pivot
+        tooth_collision = False
+        connector_collision = False
+        collision_depths = []
+        for depth in axial_depths:
+            pose = body.copy()
+            pose.apply_transform(
+                trimesh.transformations.rotation_matrix(np.deg2rad(float(angle)), axis, point=pivot)
             )
-        )
-        pose_bvh = _mesh_bvh(pose)
-        tooth_collision = bool(pose_bvh.overlap(dentition_bvh))
-        if not tooth_collision and parameters.tooth_clearance_mm > 0.0:
-            sample_step = max(1, len(pose.vertices) // 10000)
-            _, distances, _ = trimesh.proximity.closest_point(
-                tooth_crowns,
-                pose.vertices[::sample_step],
-            )
-            tooth_collision = bool(
-                np.min(distances, initial=np.inf) < parameters.tooth_clearance_mm
-            )
-        connector_collision = bool(pose_bvh.overlap(connector_bvh))
+            pose.apply_translation(axial_direction * float(depth))
+            pose_bvh = _mesh_bvh(pose)
+            depth_tooth_collision = bool(pose_bvh.overlap(dentition_bvh))
+            if not depth_tooth_collision and parameters.tooth_clearance_mm > 0.0:
+                sample_step = max(1, len(pose.vertices) // 10000)
+                _, distances, _ = trimesh.proximity.closest_point(
+                    tooth_crowns,
+                    pose.vertices[::sample_step],
+                )
+                depth_tooth_collision = bool(
+                    np.min(distances, initial=np.inf) < parameters.tooth_clearance_mm
+                )
+            depth_connector_collision = bool(pose_bvh.overlap(connector_bvh))
+            tooth_collision = tooth_collision or depth_tooth_collision
+            connector_collision = connector_collision or depth_connector_collision
+            if depth_tooth_collision or depth_connector_collision:
+                collision_depths.append(float(depth))
         return {
             "angle_degrees": float(angle),
             "tooth_intrusion": tooth_collision,
             "back_u_connector_contact": connector_collision,
+            "collision_axial_depths_mm": collision_depths,
         }
 
     if parameters.sampling_mode is HandpieceSamplingMode.ADAPTIVE:
@@ -704,7 +799,7 @@ def _buccal_angles_and_constraints(
         "collision_coarse_step_degrees": parameters.collision_coarse_step_degrees,
         "collision_refinement_degrees": parameters.collision_refinement_degrees,
         "envelope_step_degrees": parameters.envelope_step_degrees,
-        "envelope_pose_count": int(len(envelope_angles)),
+        "envelope_pose_count": len(envelope_angles),
         "protected_back_u_connector_labels": list(connector_labels),
         "tooth_clearance_mm": parameters.tooth_clearance_mm,
         "protected_tooth_crown_radius_mm": crown_radius,
@@ -759,10 +854,12 @@ def _cached_plan(
             rotation_axis=tuple(float(value) for value in motion["rotation_axis"]),
             pivot=tuple(float(value) for value in motion["pivot_global_mm"]),
             matched_stop_patch_ids=tuple(motion["matched_stop_patch_ids"]),
-            angle_samples_degrees=tuple(
-                float(value) for value in motion["angle_samples_degrees"]
+            angle_samples_degrees=tuple(float(value) for value in motion["angle_samples_degrees"]),
+            axial_depth_samples_mm=tuple(
+                float(value) for value in motion["axial_depth_samples_mm"]
             ),
             extra_clearance_mm=extra_clearance_mm,
+            automatic_clearance_mm=float(motion["automatic_interpolation_clearance_mm"]),
             cache_reused=True,
         )
     except (OSError, ValueError, TypeError, KeyError, GeometryError):
@@ -777,30 +874,22 @@ def _adjust_single_handpiece(
     validate_cached_geometry: bool,
     force_rebuild: bool,
 ) -> HandpieceAvoidancePlan:
-    """为一个已配置手机生成或复用当前深度旋转包络。"""
+    """为一个已配置手机生成或复用轴向位移与旋转二维包络。"""
 
     import numpy as np
     import trimesh
 
     output_directory.mkdir(parents=True, exist_ok=True)
-    envelope_filename = (
-        "handpiece_current_depth_buccal_sweep_envelope.ply"
-        if parameters.motion_mode is HandpieceMotionMode.BUCCAL_OUTWARD
-        else "handpiece_current_depth_lr_sweep_envelope.ply"
-    )
+    envelope_filename = "handpiece_axial_rotation_envelope.ply"
     envelope_path = output_directory / envelope_filename
     report_path = output_directory / "handpiece_avoidance.json"
 
-    all_components = _load_mesh(
+    handpiece_mesh = _load_mesh(
         parameters.handpiece,
         require_volume=False,
         process=True,
-    ).split(only_watertight=False)
-    if not all_components:
-        raise GeometryError("手机 STL 不包含可用连通分量")
-    body = max(all_components, key=lambda mesh: float(mesh.area))
-    if not body.is_volume:
-        raise GeometryError("手机 STL 最大面积连通分量不是封闭有效体")
+    )
+    body, all_components = _combine_closed_components(handpiece_mesh)
 
     if parameters.stop_report is not None:
         axis, pivot, matched_ids, centroids = _stop_geometry(parameters.stop_report)
@@ -820,17 +909,24 @@ def _adjust_single_handpiece(
     else:
         raise GeometryError("当前手机旋转模式需要 handpiece stop report")
 
+    axial_direction, axial_axis_alignment = _axial_insertion_direction(context, axis, pivot)
+    axial_depths = _axial_depth_samples(parameters.axial_depth_range_mm, parameters.axial_step_mm)
+
     constraint_report = None
     constraint_started = time.perf_counter()
     if parameters.motion_mode is HandpieceMotionMode.BUCCAL_OUTWARD:
         try:
             angles, constraint_report = _buccal_angles_and_constraints(
-                context, parameters, body, axis, pivot
+                context,
+                parameters,
+                body,
+                axis,
+                pivot,
+                axial_depths,
+                axial_direction,
             )
         except GeometryError as error:
-            raise GeometryError(
-                f"手机 {parameters.avoidance_id}：{error}"
-            ) from error
+            raise GeometryError(f"手机 {parameters.avoidance_id}：{error}") from error
         constraint_inputs = {
             "dentition_sha256": _sha256(context.config.inputs.patient_dentition),
             # 牙位报告包含 created_at 和输出路径，整文件哈希会导致相同
@@ -848,9 +944,7 @@ def _adjust_single_handpiece(
                     else ()
                 )
             ],
-            "protected_tooth_crown_radius_mm": constraint_report[
-                "protected_tooth_crown_radius_mm"
-            ],
+            "protected_tooth_crown_radius_mm": constraint_report["protected_tooth_crown_radius_mm"],
             "missing_fdi": constraint_report["missing_fdi"],
             "local_outward_global": constraint_report["local_outward_global"],
             "protected_back_u_connector_labels": constraint_report[
@@ -875,6 +969,9 @@ def _adjust_single_handpiece(
     constraint_elapsed_seconds = time.perf_counter() - constraint_started
     if not np.any(np.isclose(angles, 0.0)):
         raise GeometryError("手机姿态采样未包含 0° 当前装配姿态")
+    if not np.any(np.isclose(axial_depths, 0.0)):
+        raise GeometryError("手机轴向采样未包含 0 mm 当前装配姿态")
+    pose_count = _pose_grid_size(len(angles), len(axial_depths))
     fingerprint = _fingerprint(parameters, constraint_inputs)
     cached = (
         None
@@ -892,16 +989,18 @@ def _adjust_single_handpiece(
         return cached
 
     poses = []
-    for angle in angles:
-        pose = body.copy()
-        pose.apply_transform(
-            trimesh.transformations.rotation_matrix(
-                np.deg2rad(float(angle)),
-                axis,
-                point=pivot,
+    for depth in axial_depths:
+        for angle in angles:
+            pose = body.copy()
+            pose.apply_transform(
+                trimesh.transformations.rotation_matrix(
+                    np.deg2rad(float(angle)),
+                    axis,
+                    point=pivot,
+                )
             )
-        )
-        poses.append(pose)
+            pose.apply_translation(axial_direction * float(depth))
+            poses.append(pose)
     union_started = time.perf_counter()
     simplify_tolerance_mm = (
         parameters.envelope_simplify_tolerance_mm
@@ -914,22 +1013,22 @@ def _adjust_single_handpiece(
         simplify_tolerance_mm=simplify_tolerance_mm,
     )
     union_elapsed_seconds = time.perf_counter() - union_started
-    components = sorted(
+    envelope_components = sorted(
         envelope_raw.split(only_watertight=False),
         key=lambda mesh: abs(float(mesh.volume)),
         reverse=True,
     )
-    if not components:
+    if not envelope_components:
         raise GeometryError("手机姿态包络为空")
-    discarded_volumes = [abs(float(mesh.volume)) for mesh in components[1:]]
-    significant = [
-        volume
-        for volume in discarded_volumes
-        if volume > FRAGMENT_VOLUME_TOLERANCE_MM3
+    invalid_envelope_components = [
+        index
+        for index, component in enumerate(envelope_components)
+        if not component.is_volume
+        and abs(float(component.volume)) > parameters.fragment_volume_tolerance_mm3
     ]
-    if significant:
-        raise GeometryError(f"手机姿态并集产生独立有效分量：{significant}")
-    envelope = components[0]
+    if invalid_envelope_components:
+        raise GeometryError(f"手机姿态包络包含非封闭有效分量：{invalid_envelope_components}")
+    envelope = trimesh.util.concatenate(envelope_components)
     envelope.remove_unreferenced_vertices()
     if not envelope.is_volume:
         raise GeometryError("手机左右摆动包络不是封闭有效体")
@@ -940,14 +1039,19 @@ def _adjust_single_handpiece(
         radial_delta - np.outer(radial_delta @ axis, axis),
         axis=1,
     )
-    maximum_angle_step = (
-        float(np.max(np.abs(np.diff(angles)))) if len(angles) > 1 else 0.0
-    )
+    maximum_angle_step = float(np.max(np.abs(np.diff(angles)))) if len(angles) > 1 else 0.0
     maximum_rotation_radius = float(np.max(radial_distance))
-    maximum_half_step_displacement = float(
-        2.0
-        * maximum_rotation_radius
-        * np.sin(np.deg2rad(maximum_angle_step / 2.0) / 2.0)
+    maximum_axial_step = (
+        float(np.max(np.abs(np.diff(axial_depths)))) if len(axial_depths) > 1 else 0.0
+    )
+    (
+        rotation_interpolation_clearance,
+        axial_interpolation_clearance,
+        automatic_interpolation_clearance,
+    ) = _interpolation_clearance(
+        maximum_rotation_radius,
+        maximum_angle_step,
+        maximum_axial_step,
     )
     report = {
         "status": "completed",
@@ -956,14 +1060,24 @@ def _adjust_single_handpiece(
         "inputs": {
             "handpiece": str(parameters.handpiece),
             "stop_report": (
-                str(parameters.stop_report)
-                if parameters.stop_report is not None
-                else None
+                str(parameters.stop_report) if parameters.stop_report is not None else None
             ),
         },
         "motion_model": {
-            "moving_component": "largest-area connected component of handpiece STL",
-            "axial_depth_range_mm": [0.0, 0.0],
+            "moving_components": "all closed connected components of handpiece STL",
+            "moving_component_count": len(all_components),
+            "moving_component_volumes_mm3": [
+                abs(float(component.volume)) for component in all_components
+            ],
+            "axial_depth_range_mm": list(parameters.axial_depth_range_mm),
+            "axial_step_mm": parameters.axial_step_mm,
+            "axial_depth_samples_mm": axial_depths.astype(float).tolist(),
+            "axial_sample_count": len(axial_depths),
+            "axial_insertion_direction_definition": (
+                "mean top-to-bottom axis of nearest generated guide pair"
+            ),
+            "axial_insertion_direction_global": axial_direction.astype(float).tolist(),
+            "axial_rotation_axis_alignment": axial_axis_alignment,
             "rotation_axis_definition": rotation_axis_definition,
             "rotation_axis": axis.astype(float).tolist(),
             "pivot_definition": pivot_definition,
@@ -973,18 +1087,24 @@ def _adjust_single_handpiece(
             "pivot_global_mm": pivot.astype(float).tolist(),
             "angle_range_degrees": [float(angles[0]), float(angles[-1])],
             "angle_samples_degrees": angles.astype(float).tolist(),
-            "pose_count": len(poses),
+            "pose_count": pose_count,
             "maximum_angle_step_degrees": maximum_angle_step,
             "maximum_rotation_radius_mm": maximum_rotation_radius,
-            "maximum_half_step_unsampled_displacement_mm": maximum_half_step_displacement,
+            "maximum_axial_step_mm": maximum_axial_step,
+            "maximum_rotation_half_step_displacement_mm": (rotation_interpolation_clearance),
+            "maximum_axial_half_step_displacement_mm": (axial_interpolation_clearance),
+            "automatic_interpolation_clearance_mm": (automatic_interpolation_clearance),
             "extra_clearance_mm": parameters.extra_clearance_mm,
+            "effective_clearance_mm": (
+                parameters.extra_clearance_mm + automatic_interpolation_clearance
+            ),
             "motion_mode": parameters.motion_mode.value,
             "sampling_mode": parameters.sampling_mode.value,
             "envelope_simplify_tolerance_mm": simplify_tolerance_mm,
             "sweep_semantics": (
                 "one-way rotation from input pose toward local buccal/back-U direction"
                 if parameters.motion_mode is HandpieceMotionMode.BUCCAL_OUTWARD
-                else "signed one-axis left/right rotation at current depth"
+                else "signed left/right rotation crossed with axial translation"
             ),
         },
         "buccal_outward_constraints": constraint_report,
@@ -998,7 +1118,10 @@ def _adjust_single_handpiece(
             "volume_mm3": abs(float(envelope.volume)),
             "vertex_count": len(envelope.vertices),
             "face_count": len(envelope.faces),
-            "discarded_fragment_volumes_mm3": discarded_volumes,
+            "connected_component_count": len(envelope_components),
+            "connected_component_volumes_mm3": [
+                abs(float(component.volume)) for component in envelope_components
+            ],
         },
     }
     report_path.write_text(
@@ -1013,7 +1136,9 @@ def _adjust_single_handpiece(
         pivot=tuple(float(value) for value in pivot),
         matched_stop_patch_ids=matched_ids,
         angle_samples_degrees=tuple(float(value) for value in angles),
+        axial_depth_samples_mm=tuple(float(value) for value in axial_depths),
         extra_clearance_mm=parameters.extra_clearance_mm,
+        automatic_clearance_mm=automatic_interpolation_clearance,
         cache_reused=False,
     )
 

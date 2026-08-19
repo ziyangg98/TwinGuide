@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, replace
-from datetime import datetime, timezone
+import itertools
 import json
+from dataclasses import asdict, dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,11 @@ from .component_segmentation import (
     resample_partition_maps,
     segment_component_local_regions,
 )
+from .missing_slot_anchors import (
+    evaluate_anchor_alignment,
+    evaluate_anchor_frame,
+    extract_labeled_missing_slot_anchors,
+)
 from .models import (
     AlignmentPath,
     ArchFrame,
@@ -33,11 +39,6 @@ from .models import (
     ToothFdiMappingNewRequest,
     ToothFdiMappingNewResult,
     ToothRegion,
-)
-from .missing_slot_anchors import (
-    evaluate_anchor_alignment,
-    evaluate_anchor_frame,
-    extract_labeled_missing_slot_anchors,
 )
 from .multi_view_boundary import (
     MultiViewBoundaryEvidence,
@@ -52,7 +53,6 @@ from .sequence_alignment import (
 )
 from .surface_valleys import build_surface_valley_evidence
 
-
 TOOTH_FDI_MAPPING_NEW_SCHEMA_VERSION = "fdi-new-intercore-separator-exclusion"
 SCHEMA_VERSION = TOOTH_FDI_MAPPING_NEW_SCHEMA_VERSION
 
@@ -60,6 +60,7 @@ SCHEMA_VERSION = TOOTH_FDI_MAPPING_NEW_SCHEMA_VERSION
 @dataclass
 class _OrientationRun:
     """算法说明。"""
+
     frame: ArchFrame
     tracks: list[CoreTrack]
     hypotheses: list[CrownHypothesis]
@@ -69,6 +70,7 @@ class _OrientationRun:
 @dataclass
 class _CoreRun:
     """算法说明。"""
+
     orientation: _OrientationRun
     alignment: AlignmentPath
     second: AlignmentPath | None
@@ -122,9 +124,7 @@ def _counterfactual_margins(
     for fdi, assignment in best_by_fdi.items():
         alternative_costs = []
         for path in ranked:
-            candidate = next(
-                (item for item in path.assignments if item.fdi == fdi), None
-            )
+            candidate = next((item for item in path.assignments if item.fdi == fdi), None)
             if candidate is None:
                 continue
             same_physical_assignment = (
@@ -134,16 +134,15 @@ def _counterfactual_margins(
                     candidate.s_mm is None
                     or assignment.s_mm is None
                     or abs(candidate.s_mm - assignment.s_mm)
-                    <= 0.20 * max(
-                        best.global_scale * crown_width_prior_mm(fdi), 2.0
-                    )
+                    <= 0.20 * max(best.global_scale * crown_width_prior_mm(fdi), 2.0)
                 )
             )
             if not same_physical_assignment:
                 alternative_costs.append(path.total_cost)
         result[str(fdi)] = (
             float((min(alternative_costs) - best.total_cost) / tooth_count)
-            if alternative_costs else None
+            if alternative_costs
+            else None
         )
     return result
 
@@ -163,24 +162,18 @@ def _structural_evidence_diagnostics(
 ) -> dict[str, object]:
     """算法说明。
 
-Reject count-correct paths whose physical edit operations lack evidence.
+    Reject count-correct paths whose physical edit operations lack evidence.
 
-    The checks are deliberately expressed relative to other structures in the
-    same case.  They do not contain case names, FDI combinations, or
-    case-specific millimetre thresholds.
+        The checks are deliberately expressed relative to other structures in the
+        same case.  They do not contain case names, FDI combinations, or
+        case-specific millimetre thresholds.
     """
 
     conflicts: list[dict[str, object]] = []
-    assignments = [
-        item for item in alignment.assignments if item.center_lr_ap_mm is not None
-    ]
+    assignments = [item for item in alignment.assignments if item.center_lr_ap_mm is not None]
     track_by_id = {item.track_id: item for item in tracks}
-    split_hypotheses = {
-        item.hypothesis_id for item in assignments if item.kind == "split"
-    }
-    merge_hypotheses = {
-        item.hypothesis_id for item in assignments if item.kind == "merge"
-    }
+    split_hypotheses = {item.hypothesis_id for item in assignments if item.kind == "split"}
+    merge_hypotheses = {item.hypothesis_id for item in assignments if item.kind == "merge"}
 
     accepted_valley_pairs = {
         (int(item["component_id"]), int(item["pair_index"]))
@@ -195,57 +188,69 @@ Reject count-correct paths whose physical edit operations lack evidence.
         and item.get("second_FDI") is not None
     }
     weak_split_records = [
-        item for item in segmentation.separator_candidate_records
+        item
+        for item in segmentation.separator_candidate_records
         if item.get("rejection_reason") == "low_evidence_shared_split_uses_level_2"
         and (
             int(item.get("component_id", -1)),
             int(item.get("pair_index", -1)),
-        ) not in accepted_valley_pairs
+        )
+        not in accepted_valley_pairs
     ]
     for record in weak_split_records:
-        conflicts.append({
-            "kind": "unresolved_single_or_multiple",
-            "reason": "shared_split_has_no_typical_component_local_contact",
-            "component_id": record.get("component_id"),
-            "pair_index": record.get("pair_index"),
-            "evidence_score": record.get("evidence_score"),
-            "component_evidence_median": record.get("component_evidence_median"),
-        })
+        conflicts.append(
+            {
+                "kind": "unresolved_single_or_multiple",
+                "reason": "shared_split_has_no_typical_component_local_contact",
+                "component_id": record.get("component_id"),
+                "pair_index": record.get("pair_index"),
+                "evidence_score": record.get("evidence_score"),
+                "component_evidence_median": record.get("component_evidence_median"),
+            }
+        )
 
     for record in segmentation.unsupported_separator_records:
-        conflicts.append({
-            "kind": "unresolved_fused_present_teeth",
-            "reason": "adjacent_present_FDI_has_no_anatomical_separator",
-            **record,
-        })
+        conflicts.append(
+            {
+                "kind": "unresolved_fused_present_teeth",
+                "reason": "adjacent_present_FDI_has_no_anatomical_separator",
+                **record,
+            }
+        )
     for record in segmentation.boundary_topology_records:
-        conflicts.append({
-            "kind": "invalid_intertooth_boundary_topology",
-            **record,
-        })
+        conflicts.append(
+            {
+                "kind": "invalid_intertooth_boundary_topology",
+                **record,
+            }
+        )
 
     # Use the stable cores in this same scan as the crown-height reference.
     # A flat occlusal patch can have a large distance-transform radius and thus
     # look like a crown in silhouette, but it should not acquire a present FDI
     # when both its local 3-D relief and relief quality are far below its peers.
     stable_reference = [
-        item for item in tracks
+        item
+        for item in tracks
         if item.persistence >= minimum_reference_persistence
         and item.relative_crown_height_mm > 0.0
         and item.relief_quality > 0.0
     ]
-    reference_height = float(np.median([
-        item.relative_crown_height_mm for item in stable_reference
-    ])) if stable_reference else 0.0
-    reference_relief_quality = float(np.median([
-        item.relief_quality for item in stable_reference
-    ])) if stable_reference else 0.0
+    reference_height = (
+        float(np.median([item.relative_crown_height_mm for item in stable_reference]))
+        if stable_reference
+        else 0.0
+    )
+    reference_relief_quality = (
+        float(np.median([item.relief_quality for item in stable_reference]))
+        if stable_reference
+        else 0.0
+    )
     low_crown_support_fdi: list[int] = []
     low_crown_support_records: list[dict[str, object]] = []
     for assignment in assignments:
         supporting_tracks = [
-            track_by_id[core_id]
-            for core_id in assignment.core_ids if core_id in track_by_id
+            track_by_id[core_id] for core_id in assignment.core_ids if core_id in track_by_id
         ]
         if not supporting_tracks or reference_height <= 0.0:
             continue
@@ -256,9 +261,7 @@ Reject count-correct paths whose physical edit operations lack evidence.
         relief_quality = max(item.relief_quality for item in supporting_tracks)
         height_ratio = height / max(reference_height, 1.0e-9)
         quality_ratio = relief_quality / max(reference_relief_quality, 1.0e-9)
-        physical_support = max(
-            item.relative_3d_tooth_support for item in supporting_tracks
-        )
+        physical_support = max(item.relative_3d_tooth_support for item in supporting_tracks)
         if physical_support < 1.0 - 1.0e-6:
             low_crown_support_fdi.append(int(assignment.fdi))
             # Relative relief is deliberately soft evidence.  A terminal real
@@ -268,28 +271,27 @@ Reject count-correct paths whose physical edit operations lack evidence.
             # report, but do not veto an otherwise feasible monotone assignment.
             # Hard rejection here previously made tooth-15/16 undetected while
             # fixing tooth-17 only by local thresholding.
-            low_crown_support_records.append({
-                "kind": "low_relative_3d_crown_support_assignment",
-                "reason": "global_sequence_selected_locally_weak_crown_support",
-                "FDI": int(assignment.fdi),
-                "core_ids": list(assignment.core_ids),
-                "relative_crown_height_ratio": float(height_ratio),
-                "relative_relief_quality_ratio": float(quality_ratio),
-                "relative_3d_tooth_support": float(physical_support),
-                "projection_component_area_ratio": float(max(
-                    item.projection_component_area_ratio
-                    for item in supporting_tracks
-                )),
-                "case_reference_crown_height_mm": reference_height,
-                "case_reference_relief_quality": reference_relief_quality,
-            })
+            low_crown_support_records.append(
+                {
+                    "kind": "low_relative_3d_crown_support_assignment",
+                    "reason": "global_sequence_selected_locally_weak_crown_support",
+                    "FDI": int(assignment.fdi),
+                    "core_ids": list(assignment.core_ids),
+                    "relative_crown_height_ratio": float(height_ratio),
+                    "relative_relief_quality_ratio": float(quality_ratio),
+                    "relative_3d_tooth_support": float(physical_support),
+                    "projection_component_area_ratio": float(
+                        max(item.projection_component_area_ratio for item in supporting_tracks)
+                    ),
+                    "case_reference_crown_height_mm": reference_height,
+                    "case_reference_relief_quality": reference_relief_quality,
+                }
+            )
 
     # A high individual assignment cost hidden inside a low total path cost is
     # the characteristic signature of a one-tooth label shift.  Compare costs
     # against their within-path robust distribution; do not tune by tooth type.
-    costs = np.asarray([
-        max(float(item.match_cost), 0.0) for item in assignments
-    ], dtype=float)
+    costs = np.asarray([max(float(item.match_cost), 0.0) for item in assignments], dtype=float)
     cost_outlier_fdi: list[int] = []
     diagnostic_only_single_cost_outlier_fdi: list[int] = []
     if len(costs) >= 5:
@@ -312,27 +314,19 @@ Reject count-correct paths whose physical edit operations lack evidence.
                     "robust_z": robust_z,
                 }
                 split_group = {
-                    int(item.fdi) for item in assignments
-                    if item.kind == "split"
-                    and item.hypothesis_id == assignment.hypothesis_id
+                    int(item.fdi)
+                    for item in assignments
+                    if item.kind == "split" and item.hypothesis_id == assignment.hypothesis_id
                 }
                 split_boundary_resolved = (
                     assignment.kind == "split"
                     and len(split_group) == 2
-                    and any(
-                        split_group == set(pair)
-                        for pair in accepted_anatomical_fdi_pairs
-                    )
+                    and any(split_group == set(pair) for pair in accepted_anatomical_fdi_pairs)
                 )
-                if (
-                    assignment.kind in {"merge", "split"}
-                    and not split_boundary_resolved
-                ):
+                if assignment.kind in {"merge", "split"} and not split_boundary_resolved:
                     conflicts.append(record)
                 else:
-                    diagnostic_only_single_cost_outlier_fdi.append(
-                        int(assignment.fdi)
-                    )
+                    diagnostic_only_single_cost_outlier_fdi.append(int(assignment.fdi))
 
     # Bilateral counterparts provide an internal scale reference.  An area
     # close to two crowns is evidence that a neighbouring physical tooth may
@@ -370,8 +364,7 @@ Reject count-correct paths whose physical edit operations lack evidence.
             if assignment is None:
                 continue
             supporting_tracks = [
-                track_by_id[item]
-                for item in assignment.core_ids if item in track_by_id
+                track_by_id[item] for item in assignment.core_ids if item in track_by_id
             ]
             if not supporting_tracks:
                 continue
@@ -379,29 +372,28 @@ Reject count-correct paths whose physical edit operations lack evidence.
                 np.hypot(
                     track.s_mm - supporting.s_mm,
                     track.u_mm - supporting.u_mm,
-                ) / max(
-                    0.5 * (
-                        track.local_scale_mm + supporting.local_scale_mm
-                    ),
+                )
+                / max(
+                    0.5 * (track.local_scale_mm + supporting.local_scale_mm),
                     1.0e-9,
                 )
                 for supporting in supporting_tracks
             )
             if normalized_separation < 0.75:
                 continue
-            absorbed_independent_core_records.append({
-                "FDI": int(region.fdi),
-                "absorbed_core_id": int(core_id),
-                "assigned_core_ids": list(assignment.core_ids),
-                "normalized_core_separation": float(normalized_separation),
-                "persistence": float(track.persistence),
-                "crownness": float(track.crownness),
-            })
+            absorbed_independent_core_records.append(
+                {
+                    "FDI": int(region.fdi),
+                    "absorbed_core_id": int(core_id),
+                    "assigned_core_ids": list(assignment.core_ids),
+                    "normalized_core_separation": float(normalized_separation),
+                    "persistence": float(track.persistence),
+                    "crownness": float(track.crownness),
+                }
+            )
 
     crowded_single_assignment_pairs: list[dict[str, object]] = []
-    for assignment_pair_index, (first, second) in enumerate(
-        zip(assignments, assignments[1:])
-    ):
+    for assignment_pair_index, (first, second) in enumerate(itertools.pairwise(assignments)):
         if (
             first.kind != "single"
             or second.kind != "single"
@@ -409,69 +401,76 @@ Reject count-correct paths whose physical edit operations lack evidence.
             or second.s_mm is None
         ):
             continue
-        expected_spacing = alignment.global_scale * 0.5 * (
-            crown_width_prior_mm(first.fdi)
-            + crown_width_prior_mm(second.fdi)
+        expected_spacing = (
+            alignment.global_scale
+            * 0.5
+            * (crown_width_prior_mm(first.fdi) + crown_width_prior_mm(second.fdi))
         )
-        normalized_spacing = (
-            float(second.s_mm - first.s_mm)
-            / max(expected_spacing, 1.0e-9)
-        )
+        normalized_spacing = float(second.s_mm - first.s_mm) / max(expected_spacing, 1.0e-9)
         if normalized_spacing < 0.65:
-            boundary = next((
-                item for item in segmentation.separator_records
-                if int(item.get("first_instance_id", -1))
-                == assignment_pair_index + 1
-                and int(item.get("second_instance_id", -1))
-                == assignment_pair_index + 2
-            ), None)
-            crowded_single_assignment_pairs.append({
-                "first_FDI": int(first.fdi),
-                "second_FDI": int(second.fdi),
-                "spacing_mm": float(second.s_mm - first.s_mm),
-                "expected_spacing_mm": float(expected_spacing),
-                "normalized_spacing": float(normalized_spacing),
-                "paired_concavity_score": (
-                    boundary.get("paired_concavity_score")
-                    if boundary is not None else None
+            boundary = next(
+                (
+                    item
+                    for item in segmentation.separator_records
+                    if int(item.get("first_instance_id", -1)) == assignment_pair_index + 1
+                    and int(item.get("second_instance_id", -1)) == assignment_pair_index + 2
                 ),
-                "paired_concavity_level": (
-                    boundary.get("paired_concavity_level")
-                    if boundary is not None else None
-                ),
-                "paired_concavity_facing_support": (
-                    boundary.get("paired_concavity_facing_support")
-                    if boundary is not None else None
-                ),
-                "paired_concavity_axial_alignment": (
-                    boundary.get("paired_concavity_axial_alignment")
-                    if boundary is not None else None
-                ),
-                "paired_concavity_crown_support": (
-                    boundary.get("paired_concavity_crown_support")
-                    if boundary is not None else None
-                ),
-            })
+                None,
+            )
+            crowded_single_assignment_pairs.append(
+                {
+                    "first_FDI": int(first.fdi),
+                    "second_FDI": int(second.fdi),
+                    "spacing_mm": float(second.s_mm - first.s_mm),
+                    "expected_spacing_mm": float(expected_spacing),
+                    "normalized_spacing": float(normalized_spacing),
+                    "paired_concavity_score": (
+                        boundary.get("paired_concavity_score") if boundary is not None else None
+                    ),
+                    "paired_concavity_level": (
+                        boundary.get("paired_concavity_level") if boundary is not None else None
+                    ),
+                    "paired_concavity_facing_support": (
+                        boundary.get("paired_concavity_facing_support")
+                        if boundary is not None
+                        else None
+                    ),
+                    "paired_concavity_axial_alignment": (
+                        boundary.get("paired_concavity_axial_alignment")
+                        if boundary is not None
+                        else None
+                    ),
+                    "paired_concavity_crown_support": (
+                        boundary.get("paired_concavity_crown_support")
+                        if boundary is not None
+                        else None
+                    ),
+                }
+            )
 
     if absorbed_independent_core_records:
-        conflicts.append({
-            "kind": "unresolved_single_or_multiple",
-            "reason": "present_region_absorbs_independent_persistent_crown_core",
-            "records": absorbed_independent_core_records,
-        })
+        conflicts.append(
+            {
+                "kind": "unresolved_single_or_multiple",
+                "reason": "present_region_absorbs_independent_persistent_crown_core",
+                "records": absorbed_independent_core_records,
+            }
+        )
     implicit_compensation = bool(
         absorbed_independent_core_records and crowded_single_assignment_pairs
     )
     if implicit_compensation:
-        conflicts.append({
-            "kind": "compensatory_hypothesis_conflict",
-            "reason": (
-                "crowded_single_assignments_and_absorbed_crown_core_"
-                "jointly_restore_present_count"
-            ),
-            "crowded_pairs": crowded_single_assignment_pairs,
-            "absorbed_core_records": absorbed_independent_core_records,
-        })
+        conflicts.append(
+            {
+                "kind": "compensatory_hypothesis_conflict",
+                "reason": (
+                    "crowded_single_assignments_and_absorbed_crown_core_"
+                    "jointly_restore_present_count"
+                ),
+                "crowded_pairs": crowded_single_assignment_pairs,
+                "absorbed_core_records": absorbed_independent_core_records,
+            }
+        )
 
     bilateral_area_ratios: dict[str, float] = {}
     checked_pairs: set[tuple[int, int]] = set()
@@ -479,8 +478,7 @@ Reject count-correct paths whose physical edit operations lack evidence.
         quadrant, tooth = divmod(int(fdi), 10)
         counterpart_quadrant = {1: 2, 2: 1, 3: 4, 4: 3}.get(quadrant)
         counterpart = (
-            counterpart_quadrant * 10 + tooth
-            if counterpart_quadrant is not None else None
+            counterpart_quadrant * 10 + tooth if counterpart_quadrant is not None else None
         )
         if counterpart not in region_by_fdi:
             continue
@@ -495,17 +493,20 @@ Reject count-correct paths whose physical edit operations lack evidence.
         bilateral_area_ratios[f"{pair[0]}-{pair[1]}"] = float(ratio)
         larger_fdi = fdi if region.area_mm2 >= other.area_mm2 else int(counterpart)
         if ratio >= maximum_bilateral_region_area_ratio:
-            conflicts.append({
-                "kind": "semantic_geometry_conflict",
-                "reason": "region_is_bilateral_area_outlier",
-                "FDI": int(larger_fdi),
-                "counterpart_FDI": int(pair[0] if larger_fdi == pair[1] else pair[1]),
-                "area_ratio": float(ratio),
-            })
+            conflicts.append(
+                {
+                    "kind": "semantic_geometry_conflict",
+                    "reason": "region_is_bilateral_area_outlier",
+                    "FDI": int(larger_fdi),
+                    "counterpart_FDI": int(pair[0] if larger_fdi == pair[1] else pair[1]),
+                    "area_ratio": float(ratio),
+                }
+            )
 
     compensation = bool(split_hypotheses and merge_hypotheses)
     unproven_split_assignments = [
-        item for item in assignments
+        item
+        for item in assignments
         if item.kind == "split"
         and (
             item.independent_subbasin_count < 2
@@ -513,23 +514,25 @@ Reject count-correct paths whose physical edit operations lack evidence.
         )
     ]
     if unproven_split_assignments:
-        conflicts.append({
-            "kind": "unresolved_single_or_multiple",
-            "reason": "split_has_no_persistent_independent_crown_basins",
-            "FDI": [int(item.fdi) for item in unproven_split_assignments],
-            "hypotheses": sorted({
-                str(item.hypothesis_id) for item in unproven_split_assignments
-            }),
-        })
+        conflicts.append(
+            {
+                "kind": "unresolved_single_or_multiple",
+                "reason": "split_has_no_persistent_independent_crown_basins",
+                "FDI": [int(item.fdi) for item in unproven_split_assignments],
+                "hypotheses": sorted(
+                    {str(item.hypothesis_id) for item in unproven_split_assignments}
+                ),
+            }
+        )
     if compensation and (weak_split_records or unproven_split_assignments):
-        conflicts.append({
-            "kind": "compensatory_hypothesis_conflict",
-            "reason": (
-                "merge_and_unproven_split_jointly_restore_present_count"
-            ),
-            "split_hypotheses": sorted(str(item) for item in split_hypotheses),
-            "merge_hypotheses": sorted(str(item) for item in merge_hypotheses),
-        })
+        conflicts.append(
+            {
+                "kind": "compensatory_hypothesis_conflict",
+                "reason": ("merge_and_unproven_split_jointly_restore_present_count"),
+                "split_hypotheses": sorted(str(item) for item in split_hypotheses),
+                "merge_hypotheses": sorted(str(item) for item in merge_hypotheses),
+            }
+        )
 
     return {
         "conflicts": conflicts,
@@ -540,21 +543,15 @@ Reject count-correct paths whose physical edit operations lack evidence.
         "compensatory_merge_split_topology": compensation,
         "implicit_compensatory_single_topology": implicit_compensation,
         "crowded_single_assignment_pairs": crowded_single_assignment_pairs,
-        "absorbed_independent_crown_core_records": (
-            absorbed_independent_core_records
-        ),
+        "absorbed_independent_crown_core_records": (absorbed_independent_core_records),
         "weak_split_boundary_records": weak_split_records,
-        "unproven_split_FDI": [
-            int(item.fdi) for item in unproven_split_assignments
-        ],
+        "unproven_split_FDI": [int(item.fdi) for item in unproven_split_assignments],
         "surface_valley_resolved_pairs": [
             {"component_id": component_id, "pair_index": pair_index}
             for component_id, pair_index in sorted(accepted_valley_pairs)
         ],
         "match_cost_outlier_FDI": cost_outlier_fdi,
-        "diagnostic_only_single_match_cost_outlier_FDI": (
-            diagnostic_only_single_cost_outlier_fdi
-        ),
+        "diagnostic_only_single_match_cost_outlier_FDI": (diagnostic_only_single_cost_outlier_fdi),
         "low_relative_3d_crown_support_FDI": low_crown_support_fdi,
         "low_relative_3d_crown_support_records": low_crown_support_records,
         "case_reference_crown_height_mm": reference_height,
@@ -588,9 +585,7 @@ def _resolve_candidate_path(case_dir: Path, node: dict[str, object], name: str) 
 
 def _present_order(semantics) -> tuple[int, ...]:
     """算法说明。"""
-    return tuple(
-        fdi for fdi in semantics.fdi_order if fdi in semantics.present_teeth
-    )
+    return tuple(fdi for fdi in semantics.fdi_order if fdi in semantics.present_teeth)
 
 
 def _refine_split_seeds_from_regions(
@@ -623,14 +618,11 @@ def _refine_split_seeds_from_regions(
         first = np.asarray(ordered_assignments[0].center_lr_ap_mm, dtype=float)
         last = np.asarray(ordered_assignments[-1].center_lr_ap_mm, dtype=float)
         original_direction = last - first
-        mean_s = float(np.mean([
-            item.s_mm for item in ordered_assignments if item.s_mm is not None
-        ]))
-        tangent_step = max(1.0, 0.25 * frame.scale_at_s(mean_s))
-        direction = (
-            frame.at_s(mean_s + tangent_step)
-            - frame.at_s(mean_s - tangent_step)
+        mean_s = float(
+            np.mean([item.s_mm for item in ordered_assignments if item.s_mm is not None])
         )
+        tangent_step = max(1.0, 0.25 * frame.scale_at_s(mean_s))
+        direction = frame.at_s(mean_s + tangent_step) - frame.at_s(mean_s - tangent_step)
         if float(np.linalg.norm(direction)) <= 1.0e-6:
             continue
         direction /= np.linalg.norm(direction)
@@ -640,21 +632,18 @@ def _refine_split_seeds_from_regions(
         coordinate = points @ direction
         cuts = np.quantile(coordinate, np.linspace(0.0, 1.0, len(fdis) + 1))
         for group_index, fdi in enumerate(fdis):
-            selected = (
-                (coordinate >= cuts[group_index] - 1.0e-9)
-                & (coordinate <= cuts[group_index + 1] + 1.0e-9)
+            selected = (coordinate >= cuts[group_index] - 1.0e-9) & (
+                coordinate <= cuts[group_index + 1] + 1.0e-9
             )
             if not np.any(selected):
                 continue
             selected_rows = rows[selected]
             selected_columns = columns[selected]
-            selected_points = np.column_stack([
-                lr[selected_rows], ap[selected_columns]
-            ])
+            selected_points = np.column_stack([lr[selected_rows], ap[selected_columns]])
             target = np.mean(selected_points, axis=0)
-            center = selected_points[int(np.argmin(
-                np.linalg.norm(selected_points - target, axis=1)
-            ))]
+            center = selected_points[
+                int(np.argmin(np.linalg.norm(selected_points - target, axis=1)))
+            ]
             s_mm, _ = frame.project_lr_ap(center)
             assignment_index = index_by_fdi[fdi]
             assignments[assignment_index] = replace(
@@ -680,12 +669,8 @@ def _run_core(
             np.asarray(dental.vertices, dtype=float),
             np.asarray(dental.faces, dtype=np.int64),
             np.asarray(dental.vertex_normals, dtype=float),
-            normalization_scale_mm=(
-                profile.surface_valley_normalization_scale_mm
-            ),
-            smoothing_iterations=(
-                profile.surface_valley_smoothing_iterations
-            ),
+            normalization_scale_mm=(profile.surface_valley_normalization_scale_mm),
+            smoothing_iterations=(profile.surface_valley_smoothing_iterations),
         )
     frame_candidates = build_arch_frame_candidates(
         dental,
@@ -695,33 +680,33 @@ def _run_core(
         minimum_normal_dot=profile.minimum_normal_dot,
     )
     frame_anchor_evaluations = [
-        evaluate_anchor_frame(
-            frame, missing_slot_anchors, semantics.fdi_order
-        )
+        evaluate_anchor_frame(frame, missing_slot_anchors, semantics.fdi_order)
         for frame in frame_candidates
     ]
     compatible_frame_names = {
-        str(item["orientation"])
-        for item in frame_anchor_evaluations if bool(item["compatible"])
+        str(item["orientation"]) for item in frame_anchor_evaluations if bool(item["compatible"])
     }
-    frame_constraint_applied = bool(
-        missing_slot_anchors and compatible_frame_names
-    )
+    frame_constraint_applied = bool(missing_slot_anchors and compatible_frame_names)
     if frame_constraint_applied:
         frame_candidates = [
-            frame for frame in frame_candidates
-            if frame.orientation_name in compatible_frame_names
+            frame for frame in frame_candidates if frame.orientation_name in compatible_frame_names
         ]
 
     orientations: list[_OrientationRun] = []
     alignment_inputs = []
     for frame in frame_candidates:
-        maps_by_quantile = render_multiscale_maps(
-            dental, frame, profile, surface_valleys
-        )
-        tracks, refined_frame, _ = detect_core_tracks(
-            maps_by_quantile, frame, profile
-        )
+        maps_by_quantile = render_multiscale_maps(dental, frame, profile, surface_valleys)
+        # Detect crown cores on one physical lattice.  Projection resolution is
+        # still perturbed by stability QA, but pixel pitch must not move a core
+        # merely because a local maximum falls on another source-grid cell.
+        maps_by_quantile = {
+            quantile: resample_partition_maps(
+                maps,
+                profile.candidate_detection_resolution_mm,
+            )
+            for quantile, maps in maps_by_quantile.items()
+        }
+        tracks, refined_frame, _ = detect_core_tracks(maps_by_quantile, frame, profile)
         if not tracks:
             continue
         hypotheses = build_crown_hypotheses(
@@ -732,16 +717,10 @@ def _run_core(
             minimum_independent_core_separation_scale=(
                 profile.minimum_independent_core_separation_scale
             ),
-            minimum_surface_valley_mean_support=(
-                profile.minimum_surface_valley_mean_support
-            ),
-            minimum_surface_valley_coverage=(
-                profile.minimum_surface_valley_coverage
-            ),
+            minimum_surface_valley_mean_support=(profile.minimum_surface_valley_mean_support),
+            minimum_surface_valley_coverage=(profile.minimum_surface_valley_coverage),
         )
-        orientation = _OrientationRun(
-            refined_frame, tracks, hypotheses, maps_by_quantile
-        )
+        orientation = _OrientationRun(refined_frame, tracks, hypotheses, maps_by_quantile)
         orientations.append(orientation)
         alignment_inputs.append((refined_frame, tracks, hypotheses))
     if not orientations:
@@ -751,12 +730,8 @@ def _run_core(
         alignment_inputs,
         present_order,
         semantics.jaw,
-        missing_fdis=tuple(
-            fdi for fdi in semantics.fdi_order if fdi in semantics.missing_teeth
-        ),
-        midline_offset_search_local_scale=(
-            profile.midline_offset_search_local_scale
-        ),
+        missing_fdis=tuple(fdi for fdi in semantics.fdi_order if fdi in semantics.missing_teeth),
+        midline_offset_search_local_scale=(profile.midline_offset_search_local_scale),
     )
     # Physical instances must be explained without creating teeth first.
     # Automatic split hypotheses are intentionally a fallback family because
@@ -775,12 +750,8 @@ def _run_core(
         conservative_inputs,
         present_order,
         semantics.jaw,
-        missing_fdis=tuple(
-            fdi for fdi in semantics.fdi_order if fdi in semantics.missing_teeth
-        ),
-        midline_offset_search_local_scale=(
-            profile.midline_offset_search_local_scale
-        ),
+        missing_fdis=tuple(fdi for fdi in semantics.fdi_order if fdi in semantics.missing_teeth),
+        midline_offset_search_local_scale=(profile.midline_offset_search_local_scale),
     )
     ranked: list[AlignmentPath] = []
     seen_signatures: set[tuple[str, ...]] = set()
@@ -792,9 +763,7 @@ def _run_core(
     anchor_path_evaluations: list[dict[str, object]] = []
     anchor_compatible_ranked: list[AlignmentPath] = []
     if missing_slot_anchors:
-        frame_by_name = {
-            item.frame.orientation_name: item.frame for item in orientations
-        }
+        frame_by_name = {item.frame.orientation_name: item.frame for item in orientations}
         for candidate in ranked:
             evaluation = evaluate_anchor_alignment(
                 candidate,
@@ -805,9 +774,7 @@ def _run_core(
             anchor_path_evaluations.append(evaluation)
             if bool(evaluation["compatible"]):
                 anchor_compatible_ranked.append(candidate)
-    path_constraint_applied = bool(
-        missing_slot_anchors and anchor_compatible_ranked
-    )
+    path_constraint_applied = bool(missing_slot_anchors and anchor_compatible_ranked)
     if path_constraint_applied:
         ranked = anchor_compatible_ranked
     ranked, diagnostic_only_incomplete_paths, present_constraint_applied = (
@@ -830,7 +797,8 @@ def _run_core(
     multiview_by_orientation: dict[str, MultiViewBoundaryEvidence] = {}
     for candidate in ranked:
         selected = next(
-            item for item in orientations
+            item
+            for item in orientations
             if item.frame.orientation_name == candidate.orientation_name
         )
         try:
@@ -842,9 +810,7 @@ def _run_core(
                 profile.component_segmentation_resolution_mm,
             )
             if profile.multi_view_boundary_enabled:
-                evidence = multiview_by_orientation.get(
-                    selected.frame.orientation_name
-                )
+                evidence = multiview_by_orientation.get(selected.frame.orientation_name)
                 if evidence is None:
                     evidence = build_multiview_boundary_evidence(
                         dental,
@@ -853,13 +819,9 @@ def _run_core(
                         azimuth_count=profile.multi_view_azimuth_count,
                         obliquity_degrees=profile.multi_view_obliquity_degrees,
                         resolution_mm=profile.multi_view_resolution_mm,
-                        edge_support_quantile=(
-                            profile.multi_view_edge_support_quantile
-                        ),
+                        edge_support_quantile=(profile.multi_view_edge_support_quantile),
                     )
-                    multiview_by_orientation[
-                        selected.frame.orientation_name
-                    ] = evidence
+                    multiview_by_orientation[selected.frame.orientation_name] = evidence
                 boundary, consistency = resample_occlusal_evidence(
                     evidence,
                     np.asarray(partition_maps["lr_centres"], dtype=float),
@@ -874,25 +836,13 @@ def _run_core(
                 maps=partition_maps,
                 boundary_smoothing_scale=1.0,
                 unassigned_relief_quantile=profile.unassigned_relief_quantile,
-                unassigned_seed_protection_scale=(
-                    profile.unassigned_seed_protection_scale
-                ),
+                unassigned_seed_protection_scale=(profile.unassigned_seed_protection_scale),
                 minimum_unassigned_area_mm2=profile.minimum_unassigned_area_mm2,
-                surface_valley_watershed_weight=(
-                    profile.surface_valley_watershed_weight
-                ),
-                minimum_surface_valley_mean_support=(
-                    profile.minimum_surface_valley_mean_support
-                ),
-                minimum_surface_valley_coverage=(
-                    profile.minimum_surface_valley_coverage
-                ),
-                multi_view_watershed_weight=(
-                    profile.multi_view_watershed_weight
-                ),
-                boundary_first_segmentation=(
-                    profile.boundary_first_segmentation
-                ),
+                surface_valley_watershed_weight=(profile.surface_valley_watershed_weight),
+                minimum_surface_valley_mean_support=(profile.minimum_surface_valley_mean_support),
+                minimum_surface_valley_coverage=(profile.minimum_surface_valley_coverage),
+                multi_view_watershed_weight=(profile.multi_view_watershed_weight),
+                boundary_first_segmentation=(profile.boundary_first_segmentation),
                 # V2.17 3-D/basin evidence is recorded for QA only.  It is not
                 # yet allowed to reject a global alignment path.
                 require_anatomical_split_evidence=False,
@@ -912,64 +862,52 @@ def _run_core(
                     maps=partition_maps,
                     boundary_smoothing_scale=1.0,
                     unassigned_relief_quantile=profile.unassigned_relief_quantile,
-                    unassigned_seed_protection_scale=(
-                        profile.unassigned_seed_protection_scale
-                    ),
+                    unassigned_seed_protection_scale=(profile.unassigned_seed_protection_scale),
                     minimum_unassigned_area_mm2=profile.minimum_unassigned_area_mm2,
-                    surface_valley_watershed_weight=(
-                        profile.surface_valley_watershed_weight
-                    ),
+                    surface_valley_watershed_weight=(profile.surface_valley_watershed_weight),
                     minimum_surface_valley_mean_support=(
                         profile.minimum_surface_valley_mean_support
                     ),
-                    minimum_surface_valley_coverage=(
-                        profile.minimum_surface_valley_coverage
-                    ),
-                    multi_view_watershed_weight=(
-                        profile.multi_view_watershed_weight
-                    ),
-                    boundary_first_segmentation=(
-                        profile.boundary_first_segmentation
-                    ),
+                    minimum_surface_valley_coverage=(profile.minimum_surface_valley_coverage),
+                    multi_view_watershed_weight=(profile.multi_view_watershed_weight),
+                    boundary_first_segmentation=(profile.boundary_first_segmentation),
                     require_anatomical_split_evidence=False,
                 )
         except Exception as error:
             rejected_path_objects.append(candidate)
-            rejected.append({
-                "total_cost": candidate.total_cost,
-                "signature": list(candidate.signature),
-                "reason": f"component_local_segmentation_error: {error}",
-            })
+            rejected.append(
+                {
+                    "total_cost": candidate.total_cost,
+                    "signature": list(candidate.signature),
+                    "reason": f"component_local_segmentation_error: {error}",
+                }
+            )
             continue
         structural_diagnostics = _structural_evidence_diagnostics(
             candidate,
             regions,
             segmentation,
             selected.tracks,
-            maximum_local_assignment_robust_z=(
-                profile.maximum_local_assignment_robust_z
-            ),
-            maximum_bilateral_region_area_ratio=(
-                profile.maximum_bilateral_region_area_ratio
-            ),
+            maximum_local_assignment_robust_z=(profile.maximum_local_assignment_robust_z),
+            maximum_bilateral_region_area_ratio=(profile.maximum_bilateral_region_area_ratio),
             minimum_reference_persistence=profile.minimum_track_persistence,
-            minimum_relative_crown_height_ratio=(
-                profile.minimum_relative_crown_height_ratio
-            ),
-            minimum_relative_relief_quality_ratio=(
-                profile.minimum_relative_relief_quality_ratio
-            ),
+            minimum_relative_crown_height_ratio=(profile.minimum_relative_crown_height_ratio),
+            minimum_relative_relief_quality_ratio=(profile.minimum_relative_relief_quality_ratio),
             label_grid=label_grid,
             partition_maps=partition_maps,
         )
         evaluated = (
-            candidate, selected, quantile, partition_maps,
-            regions, segmentation, label_grid, structural_diagnostics,
+            candidate,
+            selected,
+            quantile,
+            partition_maps,
+            regions,
+            segmentation,
+            label_grid,
+            structural_diagnostics,
         )
         physical_fdi = tuple(item.fdi for item in regions)
-        minimum_interior_radius_mm = (
-            3.0 * float(partition_maps["resolution_mm"])
-        )
+        minimum_interior_radius_mm = 3.0 * float(partition_maps["resolution_mm"])
         nondegenerate = all(
             item.pixel_count > 30
             and len(item.contour_lr_ap_mm) > 8
@@ -1003,26 +941,30 @@ def _run_core(
             fallback_key = diagnostic_key
         if reasons:
             smallest_region = min(
-                regions, key=lambda item: item.maximum_interior_radius_mm,
+                regions,
+                key=lambda item: item.maximum_interior_radius_mm,
                 default=None,
             )
             rejected_path_objects.append(candidate)
-            rejected.append({
-                "total_cost": candidate.total_cost,
-                "signature": list(candidate.signature),
-                "reason": ", ".join(reasons),
-                "smallest_region_FDI": (
-                    smallest_region.fdi if smallest_region is not None else None
-                ),
-                "smallest_region_interior_radius_mm": (
-                    smallest_region.maximum_interior_radius_mm
-                    if smallest_region is not None else None
-                ),
-                "smallest_region_area_mm2": (
-                    smallest_region.area_mm2 if smallest_region is not None else None
-                ),
-                "structural_conflicts": structural_diagnostics["conflicts"],
-            })
+            rejected.append(
+                {
+                    "total_cost": candidate.total_cost,
+                    "signature": list(candidate.signature),
+                    "reason": ", ".join(reasons),
+                    "smallest_region_FDI": (
+                        smallest_region.fdi if smallest_region is not None else None
+                    ),
+                    "smallest_region_interior_radius_mm": (
+                        smallest_region.maximum_interior_radius_mm
+                        if smallest_region is not None
+                        else None
+                    ),
+                    "smallest_region_area_mm2": (
+                        smallest_region.area_mm2 if smallest_region is not None else None
+                    ),
+                    "structural_conflicts": structural_diagnostics["conflicts"],
+                }
+            )
             continue
         if feasible:
             reference = feasible[0]
@@ -1034,10 +976,12 @@ def _run_core(
             ious = []
             if equivalent:
                 centroid_shifts = [
-                    float(np.linalg.norm(
-                        np.asarray(reference_by_fdi[fdi].area_centroid_lr_ap_mm)
-                        - np.asarray(candidate_by_fdi[fdi].area_centroid_lr_ap_mm)
-                    ))
+                    float(
+                        np.linalg.norm(
+                            np.asarray(reference_by_fdi[fdi].area_centroid_lr_ap_mm)
+                            - np.asarray(candidate_by_fdi[fdi].area_centroid_lr_ap_mm)
+                        )
+                    )
                     for fdi in sorted(reference_by_fdi)
                 ]
                 reference_lr = np.asarray(reference[3]["lr_centres"], dtype=float)
@@ -1045,28 +989,24 @@ def _run_core(
                 reference_masks = _region_masks_on_grid(
                     reference_regions, reference_lr, reference_ap
                 )
-                candidate_masks = _region_masks_on_grid(
-                    regions, reference_lr, reference_ap
-                )
+                candidate_masks = _region_masks_on_grid(regions, reference_lr, reference_ap)
                 for fdi in sorted(reference_masks):
-                    union = np.count_nonzero(
-                        reference_masks[fdi] | candidate_masks[fdi]
-                    )
-                    intersection = np.count_nonzero(
-                        reference_masks[fdi] & candidate_masks[fdi]
-                    )
+                    union = np.count_nonzero(reference_masks[fdi] | candidate_masks[fdi])
+                    intersection = np.count_nonzero(reference_masks[fdi] & candidate_masks[fdi])
                     ious.append(float(intersection / max(union, 1)))
                 equivalent = (
                     max(centroid_shifts, default=float("inf")) <= 0.50
                     and min(ious, default=0.0) >= 0.90
                 )
             if equivalent:
-                equivalent_paths.append({
-                    "total_cost": candidate.total_cost,
-                    "signature": list(candidate.signature),
-                    "maximum_centroid_shift_mm": max(centroid_shifts, default=0.0),
-                    "minimum_region_IoU": min(ious, default=1.0),
-                })
+                equivalent_paths.append(
+                    {
+                        "total_cost": candidate.total_cost,
+                        "signature": list(candidate.signature),
+                        "maximum_centroid_shift_mm": max(centroid_shifts, default=0.0),
+                        "minimum_region_IoU": min(ious, default=1.0),
+                    }
+                )
                 continue
         feasible.append(evaluated)
         if len(feasible) >= 2:
@@ -1078,43 +1018,44 @@ def _run_core(
     else:
         raise RuntimeError("no alignment path could be segmented component-locally")
     (
-        best, selected, quantile, partition_maps, regions, segmentation,
-        label_grid, structural_diagnostics,
+        best,
+        selected,
+        quantile,
+        partition_maps,
+        regions,
+        segmentation,
+        label_grid,
+        structural_diagnostics,
     ) = chosen
     if len(feasible) > 1:
         second = feasible[1][0]
         second_is_feasible = True
         margin_mode = "best_vs_second_feasible_path_cost_per_present_tooth"
-        margin = (
-            second.total_cost - best.total_cost
-        ) / max(len(present_order), 1)
+        margin = (second.total_cost - best.total_cost) / max(len(present_order), 1)
     else:
         second = rejected_path_objects[0] if rejected_path_objects else None
         second_is_feasible = False
         margin_mode = "unique_feasible_path_cost_margin_not_computable"
         margin = None
     orientation_alternative = next(
-        (
-            item for item in ranked
-            if item.orientation_name != best.orientation_name
-        ),
+        (item for item in ranked if item.orientation_name != best.orientation_name),
         None,
     )
     orientation_margin = (
-        (orientation_alternative.total_cost - best.total_cost)
-        / max(len(present_order), 1)
-        if orientation_alternative is not None else None
+        (orientation_alternative.total_cost - best.total_cost) / max(len(present_order), 1)
+        if orientation_alternative is not None
+        else None
     )
     counterfactual_margins = _counterfactual_margins(best, ranked)
-    selected_frame_evaluation = next((
-        item for item in frame_anchor_evaluations
-        if item["orientation"] == best.orientation_name
-    ), {
-        "orientation": best.orientation_name,
-        "anchors": [],
-        "violations": [],
-        "compatible": not bool(missing_slot_anchors),
-    })
+    selected_frame_evaluation = next(
+        (item for item in frame_anchor_evaluations if item["orientation"] == best.orientation_name),
+        {
+            "orientation": best.orientation_name,
+            "anchors": [],
+            "violations": [],
+            "compatible": not bool(missing_slot_anchors),
+        },
+    )
     selected_path_evaluation = evaluate_anchor_alignment(
         best,
         selected.frame,
@@ -1123,10 +1064,7 @@ def _run_core(
     )
     anchor_constraints_satisfied = bool(
         not missing_slot_anchors
-        or (
-            selected_frame_evaluation["compatible"]
-            and selected_path_evaluation["compatible"]
-        )
+        or (selected_frame_evaluation["compatible"] and selected_path_evaluation["compatible"])
     )
     missing_slot_anchor_diagnostics = {
         "enabled": bool(missing_slot_anchors),
@@ -1137,11 +1075,10 @@ def _run_core(
         "frame_evaluations": frame_anchor_evaluations,
         "selected_frame_evaluation": selected_frame_evaluation,
         "selected_path_evaluation": selected_path_evaluation,
-        "rejected_path_count": (
-            len(anchor_path_evaluations) - len(anchor_compatible_ranked)
-        ),
+        "rejected_path_count": (len(anchor_path_evaluations) - len(anchor_compatible_ranked)),
         "fallback_reason": (
-            None if anchor_constraints_satisfied
+            None
+            if anchor_constraints_satisfied
             else "no_coordinate_or_alignment_path_satisfied_all_sleeve_anchors"
         ),
     }
@@ -1150,13 +1087,10 @@ def _run_core(
         "complete_path_available": present_constraint_applied,
         "hard_constraint_applied": present_constraint_applied,
         "selected_path_is_complete": not bool(best.undetected_fdi),
-        "diagnostic_only_incomplete_path_count": len(
-            diagnostic_only_incomplete_paths
-        ),
+        "diagnostic_only_incomplete_path_count": len(diagnostic_only_incomplete_paths),
         "selected_undetected_FDI": list(best.undetected_fdi),
         "fallback_reason": (
-            None if not best.undetected_fdi
-            else "no_complete_monotone_candidate_path_was_available"
+            None if not best.undetected_fdi else "no_complete_monotone_candidate_path_was_available"
         ),
     }
     return _CoreRun(
@@ -1175,7 +1109,8 @@ def _run_core(
         tuple(equivalent_paths),
         (
             float(orientation_alternative.total_cost)
-            if orientation_alternative is not None else None
+            if orientation_alternative is not None
+            else None
         ),
         float(orientation_margin) if orientation_margin is not None else None,
         structural_diagnostics,
@@ -1183,9 +1118,7 @@ def _run_core(
         surface_valleys,
         missing_slot_anchor_diagnostics,
         present_fdi_constraint_diagnostics,
-        multiview_evidence=multiview_by_orientation.get(
-            selected.frame.orientation_name
-        ),
+        multiview_evidence=multiview_by_orientation.get(selected.frame.orientation_name),
     )
 
 
@@ -1233,19 +1166,11 @@ def _refine_core_with_multiview_boundary(
         maps=maps,
         boundary_smoothing_scale=1.0,
         unassigned_relief_quantile=profile.unassigned_relief_quantile,
-        unassigned_seed_protection_scale=(
-            profile.unassigned_seed_protection_scale
-        ),
+        unassigned_seed_protection_scale=(profile.unassigned_seed_protection_scale),
         minimum_unassigned_area_mm2=profile.minimum_unassigned_area_mm2,
-        surface_valley_watershed_weight=(
-            profile.surface_valley_watershed_weight
-        ),
-        minimum_surface_valley_mean_support=(
-            profile.minimum_surface_valley_mean_support
-        ),
-        minimum_surface_valley_coverage=(
-            profile.minimum_surface_valley_coverage
-        ),
+        surface_valley_watershed_weight=(profile.surface_valley_watershed_weight),
+        minimum_surface_valley_mean_support=(profile.minimum_surface_valley_mean_support),
+        minimum_surface_valley_coverage=(profile.minimum_surface_valley_coverage),
         multi_view_watershed_weight=profile.multi_view_watershed_weight,
         boundary_first_segmentation=profile.boundary_first_segmentation,
         require_anatomical_split_evidence=False,
@@ -1255,19 +1180,11 @@ def _refine_core_with_multiview_boundary(
         regions,
         segmentation,
         core.orientation.tracks,
-        maximum_local_assignment_robust_z=(
-            profile.maximum_local_assignment_robust_z
-        ),
-        maximum_bilateral_region_area_ratio=(
-            profile.maximum_bilateral_region_area_ratio
-        ),
+        maximum_local_assignment_robust_z=(profile.maximum_local_assignment_robust_z),
+        maximum_bilateral_region_area_ratio=(profile.maximum_bilateral_region_area_ratio),
         minimum_reference_persistence=profile.minimum_track_persistence,
-        minimum_relative_crown_height_ratio=(
-            profile.minimum_relative_crown_height_ratio
-        ),
-        minimum_relative_relief_quality_ratio=(
-            profile.minimum_relative_relief_quality_ratio
-        ),
+        minimum_relative_crown_height_ratio=(profile.minimum_relative_crown_height_ratio),
+        minimum_relative_relief_quality_ratio=(profile.minimum_relative_relief_quality_ratio),
         label_grid=labels,
         partition_maps=maps,
     )
@@ -1286,6 +1203,7 @@ def _compare_runs(base: _CoreRun, other: _CoreRun) -> dict[str, object]:
     base_by_fdi = {item.fdi: item for item in base.regions}
     other_by_fdi = {item.fdi: item for item in other.regions}
     same_fdi = set(base_by_fdi) == set(other_by_fdi)
+
     def physical_topology(run: _CoreRun) -> tuple[tuple[int, ...], ...]:
         """算法说明。 Return FDI grouping by final connected physical component."""
 
@@ -1311,10 +1229,12 @@ def _compare_runs(base: _CoreRun, other: _CoreRun) -> dict[str, object]:
     centroid_shifts = []
     if same_fdi:
         centroid_shifts = [
-            float(np.linalg.norm(
-                np.asarray(base_by_fdi[fdi].area_centroid_lr_ap_mm)
-                - np.asarray(other_by_fdi[fdi].area_centroid_lr_ap_mm)
-            ))
+            float(
+                np.linalg.norm(
+                    np.asarray(base_by_fdi[fdi].area_centroid_lr_ap_mm)
+                    - np.asarray(other_by_fdi[fdi].area_centroid_lr_ap_mm)
+                )
+            )
             for fdi in sorted(base_by_fdi)
         ]
     lr = np.asarray(base.partition_maps["lr_centres"], dtype=float)
@@ -1329,12 +1249,8 @@ def _compare_runs(base: _CoreRun, other: _CoreRun) -> dict[str, object]:
         and np.allclose(ap, other_ap, atol=1.0e-7)
     )
     if same_grid:
-        base_masks = {
-            item.fdi: base.label_grid == item.region_id for item in base.regions
-        }
-        other_masks = {
-            item.fdi: other.label_grid == item.region_id for item in other.regions
-        }
+        base_masks = {item.fdi: base.label_grid == item.region_id for item in base.regions}
+        other_masks = {item.fdi: other.label_grid == item.region_id for item in other.regions}
     else:
         base_masks = _region_masks_on_grid(base.regions, lr, ap)
         other_masks = _region_masks_on_grid(other.regions, lr, ap)
@@ -1355,30 +1271,24 @@ def _compare_runs(base: _CoreRun, other: _CoreRun) -> dict[str, object]:
         "region_IoU_by_FDI": iou_by_fdi,
         "base_partition_quantile": base.partition_quantile,
         "variant_partition_quantile": other.partition_quantile,
-        "base_assignment_topology": [
-            [item.fdi, item.kind] for item in base.alignment.assignments
-        ],
+        "base_assignment_topology": [[item.fdi, item.kind] for item in base.alignment.assignments],
         "variant_assignment_topology": [
             [item.fdi, item.kind] for item in other.alignment.assignments
         ],
         "base_assignment_centers_lr_ap_mm": {
             str(item.fdi): (
-                list(item.center_lr_ap_mm)
-                if item.center_lr_ap_mm is not None else None
-            ) for item in base.alignment.assignments
+                list(item.center_lr_ap_mm) if item.center_lr_ap_mm is not None else None
+            )
+            for item in base.alignment.assignments
         },
         "variant_assignment_centers_lr_ap_mm": {
             str(item.fdi): (
-                list(item.center_lr_ap_mm)
-                if item.center_lr_ap_mm is not None else None
-            ) for item in other.alignment.assignments
+                list(item.center_lr_ap_mm) if item.center_lr_ap_mm is not None else None
+            )
+            for item in other.alignment.assignments
         },
-        "base_physical_hypothesis_topology": [
-            list(group) for group in physical_topology(base)
-        ],
-        "variant_physical_hypothesis_topology": [
-            list(group) for group in physical_topology(other)
-        ],
+        "base_physical_hypothesis_topology": [list(group) for group in physical_topology(base)],
+        "variant_physical_hypothesis_topology": [list(group) for group in physical_topology(other)],
         "base_region_centroids_lr_ap_mm": {
             str(item.fdi): list(item.area_centroid_lr_ap_mm) for item in base.regions
         },
@@ -1419,22 +1329,24 @@ def _stability(
                 variant_profile,
                 missing_slot_anchors,
             )
-            if (
-                multiview_evidence is not None
-                and variant.multiview_evidence is None
-            ):
+            if multiview_evidence is not None and variant.multiview_evidence is None:
                 variant = _refine_core_with_multiview_boundary(
                     variant, multiview_evidence, variant_profile
                 )
             comparison = _compare_runs(base, variant)
             records.append({"kind": "resolution", "value": resolution, **comparison})
         except Exception as error:
-            records.append({
-                "kind": "resolution", "value": resolution,
-                "same_FDI_set": False, "same_hypothesis_topology": False,
-                "maximum_centroid_shift_mm": float("inf"),
-                "minimum_region_IoU": 0.0, "error": str(error),
-            })
+            records.append(
+                {
+                    "kind": "resolution",
+                    "value": resolution,
+                    "same_FDI_set": False,
+                    "same_hypothesis_topology": False,
+                    "maximum_centroid_shift_mm": float("inf"),
+                    "minimum_region_IoU": 0.0,
+                    "error": str(error),
+                }
+            )
     for scale in profile.boundary_smoothing_scales:
         if abs(scale - 1.0) < 1.0e-9:
             continue
@@ -1445,41 +1357,35 @@ def _stability(
                 maps=base.partition_maps,
                 boundary_smoothing_scale=scale,
                 unassigned_relief_quantile=profile.unassigned_relief_quantile,
-                unassigned_seed_protection_scale=(
-                    profile.unassigned_seed_protection_scale
-                ),
+                unassigned_seed_protection_scale=(profile.unassigned_seed_protection_scale),
                 minimum_unassigned_area_mm2=profile.minimum_unassigned_area_mm2,
-                surface_valley_watershed_weight=(
-                    profile.surface_valley_watershed_weight
-                ),
-                minimum_surface_valley_mean_support=(
-                    profile.minimum_surface_valley_mean_support
-                ),
-                minimum_surface_valley_coverage=(
-                    profile.minimum_surface_valley_coverage
-                ),
-                multi_view_watershed_weight=(
-                    profile.multi_view_watershed_weight
-                ),
-                boundary_first_segmentation=(
-                    profile.boundary_first_segmentation
-                ),
+                surface_valley_watershed_weight=(profile.surface_valley_watershed_weight),
+                minimum_surface_valley_mean_support=(profile.minimum_surface_valley_mean_support),
+                minimum_surface_valley_coverage=(profile.minimum_surface_valley_coverage),
+                multi_view_watershed_weight=(profile.multi_view_watershed_weight),
+                boundary_first_segmentation=(profile.boundary_first_segmentation),
                 require_anatomical_split_evidence=False,
             )
-            variant = replace(
-                base, regions=regions, segmentation=segmentation, label_grid=labels
+            variant = replace(base, regions=regions, segmentation=segmentation, label_grid=labels)
+            records.append(
+                {
+                    "kind": "boundary_smoothing",
+                    "value": scale,
+                    **_compare_runs(base, variant),
+                }
             )
-            records.append({
-                "kind": "boundary_smoothing", "value": scale,
-                **_compare_runs(base, variant),
-            })
         except Exception as error:
-            records.append({
-                "kind": "boundary_smoothing", "value": scale,
-                "same_FDI_set": False, "same_hypothesis_topology": False,
-                "maximum_centroid_shift_mm": float("inf"),
-                "minimum_region_IoU": 0.0, "error": str(error),
-            })
+            records.append(
+                {
+                    "kind": "boundary_smoothing",
+                    "value": scale,
+                    "same_FDI_set": False,
+                    "same_hypothesis_topology": False,
+                    "maximum_centroid_shift_mm": float("inf"),
+                    "minimum_region_IoU": 0.0,
+                    "error": str(error),
+                }
+            )
     stable = all(
         item["same_FDI_set"]
         and item["same_hypothesis_topology"]
@@ -1487,19 +1393,29 @@ def _stability(
         and float(item["minimum_region_IoU"]) >= 0.75
         for item in records
     )
-    score = float(np.mean([
-        min(float(item["minimum_region_IoU"]), 1.0)
-        * max(0.0, 1.0 - float(item["maximum_centroid_shift_mm"]) / 2.0)
-        for item in records
-    ])) if records else 1.0
+    score = (
+        float(
+            np.mean(
+                [
+                    min(float(item["minimum_region_IoU"]), 1.0)
+                    * max(0.0, 1.0 - float(item["maximum_centroid_shift_mm"]) / 2.0)
+                    for item in records
+                ]
+            )
+        )
+        if records
+        else 1.0
+    )
     return records, stable, score
 
 
 def _extent(maps):
     """算法说明。"""
     return [
-        float(maps["lr_centres"][0]), float(maps["lr_centres"][-1]),
-        float(maps["ap_centres"][0]), float(maps["ap_centres"][-1]),
+        float(maps["lr_centres"][0]),
+        float(maps["lr_centres"][-1]),
+        float(maps["ap_centres"][0]),
+        float(maps["ap_centres"][-1]),
     ]
 
 
@@ -1508,8 +1424,13 @@ def _image(axis, values, maps, title, cmap=None, vmin=None, vmax=None):
     array = np.asarray(values)
     displayed = array.transpose(1, 0, 2) if array.ndim == 3 else array.T
     artist = axis.imshow(
-        displayed, origin="lower", extent=_extent(maps), interpolation="bilinear",
-        cmap=cmap, vmin=vmin, vmax=vmax,
+        displayed,
+        origin="lower",
+        extent=_extent(maps),
+        interpolation="bilinear",
+        cmap=cmap,
+        vmin=vmin,
+        vmax=vmax,
     )
     axis.set_aspect("equal", adjustable="box")
     axis.set_title(title)
@@ -1517,19 +1438,27 @@ def _image(axis, values, maps, title, cmap=None, vmin=None, vmax=None):
     return artist
 
 
-def _save_multichannel(path: Path, maps, case_name: str):
+def _save_multichannel(path: Path, maps, case_name: str) -> None:
     """算法说明。"""
     figure, axes = plt.subplots(2, 3, figsize=(18, 11), constrained_layout=True)
     _image(axes[0, 0], maps["silhouette"], maps, "Continuous triangle silhouette", "gray_r", 0, 1)
     height = _image(
-        axes[0, 1], maps["top_height_mm"], maps,
-        "Highest-surface height (mm)", "viridis",
+        axes[0, 1],
+        maps["top_height_mm"],
+        maps,
+        "Highest-surface height (mm)",
+        "viridis",
     )
     figure.colorbar(height, ax=axes[0, 1], shrink=0.76)
     _image(axes[0, 2], maps["normal_rgb"], maps, "Interpolated surface-normal map")
     edge = _image(
-        axes[1, 0], maps["fused_edge"], maps,
-        "Fused anatomical edge evidence", "magma", 0, 1,
+        axes[1, 0],
+        maps["fused_edge"],
+        maps,
+        "Fused anatomical edge evidence",
+        "magma",
+        0,
+        1,
     )
     figure.colorbar(edge, ax=axes[1, 0], shrink=0.76)
     relief = _image(
@@ -1570,12 +1499,14 @@ def _save_multiview_boundary(
 
     occlusal = evidence.rasters[0]
     oblique = evidence.rasters[1:]
-    selected = [
-        oblique[index]
-        for index in np.linspace(
-            0, max(len(oblique) - 1, 0), min(3, len(oblique)), dtype=int
-        )
-    ] if oblique else []
+    selected = (
+        [
+            oblique[index]
+            for index in np.linspace(0, max(len(oblique) - 1, 0), min(3, len(oblique)), dtype=int)
+        ]
+        if oblique
+        else []
+    )
     figure, axes = plt.subplots(2, 3, figsize=(18, 11), constrained_layout=True)
 
     def show(axis, raster, values, title, cmap="magma", vmin=0.0, vmax=1.0):
@@ -1601,35 +1532,55 @@ def _save_multiview_boundary(
         return artist
 
     depth = show(
-        axes[0, 0], occlusal, occlusal.top_depth_mm,
-        "Occlusal visible depth", "viridis", None, None,
+        axes[0, 0],
+        occlusal,
+        occlusal.top_depth_mm,
+        "Occlusal visible depth",
+        "viridis",
+        None,
+        None,
     )
     figure.colorbar(depth, ax=axes[0, 0], shrink=0.75)
     edge = show(
-        axes[0, 1], occlusal, occlusal.boundary_score,
+        axes[0, 1],
+        occlusal,
+        occlusal.boundary_score,
         "Occlusal single-view internal boundary",
     )
     figure.colorbar(edge, ax=axes[0, 1], shrink=0.75)
     aggregate = show(
-        axes[0, 2], occlusal, evidence.occlusal_boundary_map,
+        axes[0, 2],
+        occlusal,
+        evidence.occlusal_boundary_map,
         "Multi-view boundary evidence back-projected to occlusal surface",
     )
     for record in pair_records or []:
         midpoint = np.asarray(record["midpoint_lr_ap_mm"], dtype=float)
         score = float(record["tooth_tooth_boundary_score"])
         axes[0, 2].scatter(
-            midpoint[0], midpoint[1], s=28 + 80 * score,
-            c=[[score, 1.0 - score, 0.15]], edgecolor="white", linewidth=0.6,
+            midpoint[0],
+            midpoint[1],
+            s=28 + 80 * score,
+            c=[[score, 1.0 - score, 0.15]],
+            edgecolor="white",
+            linewidth=0.6,
         )
         axes[0, 2].text(
-            midpoint[0], midpoint[1],
+            midpoint[0],
+            midpoint[1],
             f"{record['first_FDI']}|{record['second_FDI']}\n{score:.2f}",
-            fontsize=6, color="white", ha="center", va="bottom",
+            fontsize=6,
+            color="white",
+            ha="center",
+            va="bottom",
         )
     figure.colorbar(aggregate, ax=axes[0, 2], shrink=0.75)
     consistency = show(
-        axes[1, 0], occlusal, evidence.occlusal_consistency_map,
-        "Supporting-view fraction on visible surface", "plasma",
+        axes[1, 0],
+        occlusal,
+        evidence.occlusal_consistency_map,
+        "Supporting-view fraction on visible surface",
+        "plasma",
     )
     figure.colorbar(consistency, ax=axes[1, 0], shrink=0.75)
     for axis, raster in zip(axes[1, 1:], selected[:2], strict=False):
@@ -1642,14 +1593,12 @@ def _save_multiview_boundary(
     for axis in axes.ravel():
         if not axis.has_data():
             axis.axis("off")
-    figure.suptitle(
-        f"{case_name} — FDI New inter-core separator exclusion"
-    )
+    figure.suptitle(f"{case_name} — FDI New inter-core separator exclusion")
     figure.savefig(path, dpi=200, facecolor="white")
     plt.close(figure)
 
 
-def _save_mapping_preview(path: Path, core: _CoreRun, case_name: str):
+def _save_mapping_preview(path: Path, core: _CoreRun, case_name: str) -> None:
     """算法说明。"""
     maps = core.partition_maps
     figure, axis = plt.subplots(figsize=(11, 9), constrained_layout=True)
@@ -1756,7 +1705,8 @@ def _orientation_diagnostics(core: _CoreRun) -> dict[str, object]:
         expected_sign = -1.0 if quadrant in {1, 4} else 1.0
         scales = [
             track_by_id[core_id].local_scale_mm
-            for core_id in assignment.core_ids if core_id in track_by_id
+            for core_id in assignment.core_ids
+            if core_id in track_by_id
         ]
         local_scale = float(np.median(scales)) if scales else 8.0
         centered_s = float(assignment.s_mm - core.alignment.midline_offset_mm)
@@ -1782,9 +1732,11 @@ def _orientation_diagnostics(core: _CoreRun) -> dict[str, object]:
         "midline_offset_mm": core.alignment.midline_offset_mm,
         "alternative_LR_alignment_cost": core.orientation_alternative_cost,
         "LR_reflection_margin_per_present_tooth": core.orientation_margin_per_tooth,
-        "side_consistency_score": float(np.mean([
-            np.clip((value + 0.15) / 0.65, 0.0, 1.0) for value in support
-        ])) if support else 0.0,
+        "side_consistency_score": float(
+            np.mean([np.clip((value + 0.15) / 0.65, 0.0, 1.0) for value in support])
+        )
+        if support
+        else 0.0,
         "side_violation_FDI": violations,
         "per_tooth": checks,
     }
@@ -1813,34 +1765,40 @@ def _per_tooth_evidence(core: _CoreRun) -> dict[str, dict[str, object]]:
     output: dict[str, dict[str, object]] = {}
     for assignment in core.alignment.assignments:
         region = region_by_fdi.get(assignment.fdi)
-        tracks = [
-            track_by_id[core_id]
-            for core_id in assignment.core_ids if core_id in track_by_id
-        ]
+        tracks = [track_by_id[core_id] for core_id in assignment.core_ids if core_id in track_by_id]
         if region is None:
             continue
-        mesiodistal = float(np.median([
-            item.mesiodistal_width_mm for item in tracks
-        ])) if tracks else 0.0
-        buccolingual = float(np.median([
-            item.buccolingual_width_mm for item in tracks
-        ])) if tracks else 0.0
-        relative_height = float(np.median([
-            item.relative_crown_height_mm for item in tracks
-        ])) if tracks else region.relative_relief_p90_mm
-        relief_quality = float(np.mean([
-            item.relief_quality for item in tracks
-        ])) if tracks else region.relative_relief_score
+        mesiodistal = (
+            float(np.median([item.mesiodistal_width_mm for item in tracks])) if tracks else 0.0
+        )
+        buccolingual = (
+            float(np.median([item.buccolingual_width_mm for item in tracks])) if tracks else 0.0
+        )
+        relative_height = (
+            float(np.median([item.relative_crown_height_mm for item in tracks]))
+            if tracks
+            else region.relative_relief_p90_mm
+        )
+        relief_quality = (
+            float(np.mean([item.relief_quality for item in tracks]))
+            if tracks
+            else region.relative_relief_score
+        )
         compact_anisotropy = (
             min(mesiodistal, buccolingual) / max(mesiodistal, buccolingual)
-            if max(mesiodistal, buccolingual) > 1.0e-9 else 0.0
+            if max(mesiodistal, buccolingual) > 1.0e-9
+            else 0.0
         )
         position_score = 1.0 / (1.0 + max(float(assignment.match_cost), 0.0))
-        toothness_score = float(np.mean([
-            assignment.persistence,
-            relief_quality,
-            region.relative_relief_score,
-        ]))
+        toothness_score = float(
+            np.mean(
+                [
+                    assignment.persistence,
+                    relief_quality,
+                    region.relative_relief_score,
+                ]
+            )
+        )
         morphology_score = float(np.mean([relief_quality, compact_anisotropy]))
         output[str(assignment.fdi)] = {
             "order_score": 1.0,
@@ -1884,12 +1842,10 @@ def recognize_teeth_new(
     )
     dental = _load_mesh(dental_path)
     guide = _load_mesh(guide_path)
-    missing_slot_anchors, anchor_discovery = (
-        extract_labeled_missing_slot_anchors(
-            config,
-            request.case_yaml.parent,
-            semantics.missing_teeth,
-        )
+    missing_slot_anchors, anchor_discovery = extract_labeled_missing_slot_anchors(
+        config,
+        request.case_yaml.parent,
+        semantics.missing_teeth,
     )
     anchor_tuple = tuple(missing_slot_anchors)
     core = _run_core(
@@ -1901,10 +1857,7 @@ def recognize_teeth_new(
         anchor_tuple,
     )
     multiview_evidence = core.multiview_evidence
-    if (
-        request.profile.multi_view_boundary_enabled
-        and multiview_evidence is None
-    ):
+    if request.profile.multi_view_boundary_enabled and multiview_evidence is None:
         multiview_evidence = build_multiview_boundary_evidence(
             dental,
             core.orientation.frame,
@@ -1912,25 +1865,26 @@ def recognize_teeth_new(
             azimuth_count=request.profile.multi_view_azimuth_count,
             obliquity_degrees=request.profile.multi_view_obliquity_degrees,
             resolution_mm=request.profile.multi_view_resolution_mm,
-            edge_support_quantile=(
-                request.profile.multi_view_edge_support_quantile
-            ),
+            edge_support_quantile=(request.profile.multi_view_edge_support_quantile),
         )
-        core = _refine_core_with_multiview_boundary(
-            core, multiview_evidence, request.profile
-        )
+        core = _refine_core_with_multiview_boundary(core, multiview_evidence, request.profile)
     stability_records, stability_passed, stability_score = (
         _stability(
-            dental, guide, dict(config["anatomy"]), semantics,
-            request.profile, core, multiview_evidence, anchor_tuple,
+            dental,
+            guide,
+            dict(config["anatomy"]),
+            semantics,
+            request.profile,
+            core,
+            multiview_evidence,
+            anchor_tuple,
         )
-        if request.profile.run_stability else ([], None, None)
+        if request.profile.run_stability
+        else ([], None, None)
     )
     present_order = _present_order(semantics)
     region_fdi = tuple(region.fdi for region in core.regions)
-    matched_assignments = [
-        item for item in core.alignment.assignments if item.kind != "undetected"
-    ]
+    matched_assignments = [item for item in core.alignment.assignments if item.kind != "undetected"]
     hypothesis_cores: dict[str, tuple[int, ...]] = {}
     for assignment in matched_assignments:
         if assignment.hypothesis_id is not None:
@@ -1942,13 +1896,15 @@ def recognize_teeth_new(
     high_crown_artifacts = []
     confidently_rejected_artifacts = []
     absorbed_secondary_cores = []
-    relief_values = np.asarray([
-        item.relief_quality for item in core.orientation.tracks
-        if np.isfinite(item.relief_quality)
-    ], dtype=float)
-    low_relief_reference = (
-        float(np.quantile(relief_values, 0.20)) if len(relief_values) else 0.0
+    relief_values = np.asarray(
+        [
+            item.relief_quality
+            for item in core.orientation.tracks
+            if np.isfinite(item.relief_quality)
+        ],
+        dtype=float,
     )
+    low_relief_reference = float(np.quantile(relief_values, 0.20)) if len(relief_values) else 0.0
 
     for core_id in core.alignment.artifact_core_ids:
         track = track_by_id[core_id]
@@ -1975,9 +1931,7 @@ def recognize_teeth_new(
         else "crown_assignment_self_consistency"
     )
     per_tooth_evidence = _per_tooth_evidence(core)
-    minimum_interior_radius_mm = (
-        3.0 * float(core.partition_maps["resolution_mm"])
-    )
+    minimum_interior_radius_mm = 3.0 * float(core.partition_maps["resolution_mm"])
     qa = {
         "FDI_classification_is_complete_exclusive_and_jaw_valid": True,
         "one_region_per_present_FDI": region_fdi == present_order,
@@ -1992,14 +1946,10 @@ def recognize_teeth_new(
             for item in matched_assignments
         ),
         "alignment_margin_is_sufficient": (
-            (
-                core.alignment_margin is None
-                and not core.second_alignment_is_feasible
-            )
+            (core.alignment_margin is None and not core.second_alignment_is_feasible)
             or (
                 core.alignment_margin is not None
-                and core.alignment_margin
-                >= request.profile.minimum_alignment_margin_per_tooth
+                and core.alignment_margin >= request.profile.minimum_alignment_margin_per_tooth
             )
         ),
         "all_regions_are_nonempty_and_non_degenerate": all(
@@ -2029,12 +1979,8 @@ def recognize_teeth_new(
         "physical_hypothesis_operations_have_independent_evidence": bool(
             core.structural_diagnostics["safe_physical_hypothesis_path"]
         ),
-        "mapping_stability_was_evaluated": bool(
-            request.profile.run_stability
-        ),
-        "mapping_is_stable_under_global_perturbations": bool(
-            stability_passed is True
-        ),
+        "mapping_stability_was_evaluated": bool(request.profile.run_stability),
+        "mapping_is_stable_under_global_perturbations": bool(stability_passed is True),
         "compatibility_fields_are_complete": all(
             len(item.crown_point_global_mm) == 3 and len(item.contour_lr_ap_mm) >= 3
             for item in core.regions
@@ -2046,12 +1992,11 @@ def recognize_teeth_new(
     mapping_path = request.output_dir / "02_tooth_fdi_mapping_preview.png"
     multiview_path = (
         request.output_dir / "03_multiview_boundary_evidence.png"
-        if request.profile.multi_view_boundary_enabled else None
+        if request.profile.multi_view_boundary_enabled
+        else None
     )
     report_path = (
-        request.output_dir / "tooth_fdi_mapping_new.json"
-        if request.write_report_json
-        else None
+        request.output_dir / "tooth_fdi_mapping_new.json" if request.write_report_json else None
     )
     case_name = request.case_yaml.parent.name
     _save_multichannel(multichannel_path, core.partition_maps, case_name)
@@ -2080,9 +2025,7 @@ def recognize_teeth_new(
             multiview_consistency_grid,
             atol=1.0e-7,
         ):
-            raise RuntimeError(
-                "reported multi-view evidence differs from segmentation input"
-            )
+            raise RuntimeError("reported multi-view evidence differs from segmentation input")
         assert multiview_path is not None
         _save_multiview_boundary(
             multiview_path,
@@ -2093,7 +2036,7 @@ def recognize_teeth_new(
     frame = core.orientation.frame
     report: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "status": "complete" if safe else "needs_review",
         "safe_for_downstream_use": safe,
         "case": config.get("case", {"id": case_name}),
@@ -2102,9 +2045,7 @@ def recognize_teeth_new(
             "case_yaml": str(request.case_yaml),
             "dental": str(dental_path),
             "guide": str(guide_path),
-            "labeled_missing_slot_sleeves": [
-                item.mesh_path for item in missing_slot_anchors
-            ],
+            "labeled_missing_slot_sleeves": [item.mesh_path for item in missing_slot_anchors],
         },
         "semantics": {
             "jaw": semantics.jaw,
@@ -2137,19 +2078,14 @@ def recognize_teeth_new(
             "selected_partition_quantile": core.partition_quantile,
             "resolution_mm": float(core.partition_maps["resolution_mm"]),
             "height_map_reference": "in-memory multi-scale triangle Z-buffer",
-            "local_gingiva_baseline_method": (
-                "median_multiscale_grayscale_opening"
-            ),
-            "relief_baseline_windows_mm": list(
-                request.profile.relief_baseline_windows_mm
-            ),
+            "local_gingiva_baseline_method": ("median_multiscale_grayscale_opening"),
+            "relief_baseline_windows_mm": list(request.profile.relief_baseline_windows_mm),
             "relative_crown_relief_available": True,
-            "surface_curvature_valley_available": (
-                "surface_valley_score" in core.partition_maps
-            ),
+            "surface_curvature_valley_available": ("surface_valley_score" in core.partition_maps),
             "surface_curvature_valley_method": (
                 "multi_scale_vertex_normal_shape_operator"
-                if "surface_valley_score" in core.partition_maps else None
+                if "surface_valley_score" in core.partition_maps
+                else None
             ),
             "rendered_preview": str(multichannel_path),
             "multi_view_boundary": (
@@ -2157,11 +2093,10 @@ def recognize_teeth_new(
                     **multiview_evidence.summary(),
                     "assignment_pair_evidence": multiview_pair_records,
                 }
-                if multiview_evidence is not None else {
+                if multiview_evidence is not None
+                else {
                     "enabled": False,
-                    "FDI_inference_role": (
-                        "none; component-local boundary-cost refinement only"
-                    ),
+                    "FDI_inference_role": ("none; component-local boundary-cost refinement only"),
                 }
             ),
         },
@@ -2181,9 +2116,7 @@ def recognize_teeth_new(
                     "persistence": item.persistence,
                     "match_cost": item.match_cost,
                     "normalized_alignment_margin": core.alignment_margin,
-                    "counterfactual_margin": core.counterfactual_margin_by_fdi.get(
-                        str(item.fdi)
-                    ),
+                    "counterfactual_margin": core.counterfactual_margin_by_fdi.get(str(item.fdi)),
                 }
                 for item in core.alignment.assignments
             },
@@ -2214,10 +2147,9 @@ def recognize_teeth_new(
             "equivalent_alignment_paths": list(core.equivalent_alignment_paths),
             "structural_evidence": core.structural_diagnostics,
             "counterfactual_margin_by_FDI": core.counterfactual_margin_by_fdi,
-            "unresolved_states": sorted({
-                str(item["kind"])
-                for item in core.structural_diagnostics["conflicts"]
-            }),
+            "unresolved_states": sorted(
+                {str(item["kind"]) for item in core.structural_diagnostics["conflicts"]}
+            ),
         },
         "QA": qa,
         "outputs": {
@@ -2230,9 +2162,7 @@ def recognize_teeth_new(
     }
     if report_path is not None:
         report["outputs"]["report_json"] = str(report_path)
-        report_path.write_text(
-            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     return ToothFdiMappingNewResult(
         case_yaml=request.case_yaml,
         output_dir=request.output_dir,

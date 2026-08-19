@@ -5,8 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +15,7 @@ from scipy.spatial import cKDTree
 from twin_guide.case_schema import normalize_case_definition
 
 from .contact_guide_mapping import (
+    ContactToothLocation,
     fit_measured_contour_arch,
     locate_contact_teeth,
     locate_reported_teeth,
@@ -69,9 +69,7 @@ def configured_anchor_station_fdis(config: dict[str, object]) -> set[int]:
     return required
 
 
-def configured_surgical_references(
-    config: dict[str, object], case_dir: Path
-) -> list[str]:
+def configured_surgical_references(config: dict[str, object], case_dir: Path) -> list[str]:
     """返回病例定义中声明的手术参考体路径。"""
 
     objects = config.get("objects", {})
@@ -88,8 +86,7 @@ def configured_surgical_references(
         if isinstance(item, dict) and item.get("path"):
             paths.append(Path(str(item["path"])))
     return [
-        str(path.resolve() if path.is_absolute() else (case_dir / path).resolve())
-        for path in paths
+        str(path.resolve() if path.is_absolute() else (case_dir / path).resolve()) for path in paths
     ]
 
 
@@ -108,23 +105,68 @@ def _v2_contour_records(
     ]
 
 
+def _preview_instance_records(
+    locations: list[ContactToothLocation],
+    contour_records: list[dict[str, object]],
+    frame: dict[str, object],
+) -> list[dict[str, object]]:
+    """构造满足公共牙位预览渲染器契约的实例记录。"""
+
+    preview_instances: list[dict[str, object]] = []
+    by_fdi = {int(item["FDI"]): item for item in contour_records}
+    curve = frame["curve"]
+    dense = np.column_stack([curve.lr, curve.ap])
+    for item in locations:
+        record = by_fdi.get(item.fdi)
+        if record is None:
+            raise RuntimeError(f"预览契约缺少 FDI {item.fdi} 的牙冠轮廓")
+        contour = np.asarray(record.get("contour_LR_AP_mm"), dtype=float)
+        centroid = np.asarray(item.centroid_lr_ap_mm, dtype=float)
+        crown_point = np.asarray(item.crown_point_global_mm, dtype=float)
+        if contour.ndim != 2 or contour.shape[1:] != (2,) or len(contour) < 3:
+            raise RuntimeError(f"预览契约中 FDI {item.fdi} 的牙冠轮廓无效")
+        if centroid.shape != (2,) or not np.all(np.isfinite(centroid)):
+            raise RuntimeError(f"预览契约中 FDI {item.fdi} 的牙冠质心无效")
+        if crown_point.shape != (3,) or not np.all(np.isfinite(crown_point)):
+            raise RuntimeError(f"预览契约中 FDI {item.fdi} 的牙冠全局坐标无效")
+        # For plotting only, nearest dense-curve samples preserve the original
+        # AP coordinate through the historical (s, AP-offset) convention.
+        nearest = cKDTree(dense).query(contour, k=1)[1]
+        contour_s = np.asarray(curve.s)[nearest]
+        contour_n = contour[:, 1] - np.asarray(curve.ap)[nearest]
+        centroid_arch_ap = float(item.arch_lr_ap_mm[1])
+        preview_instances.append(
+            {
+                "FDI": item.fdi,
+                # ``render_preview`` consumes the original LR/AP geometry to draw
+                # the measured crown and the centroid-to-arch projection.  Keep
+                # these shared fields alongside the directed-arch diagnostics for
+                # both the legacy and fdi_new recognition backends.
+                "contour_lr_ap_mm": contour.astype(float).tolist(),
+                "area_centroid_lr_ap_mm": [float(value) for value in item.centroid_lr_ap_mm],
+                "crown_point_global_mm": crown_point.astype(float).tolist(),
+                "contour_s_n_mm": np.column_stack([contour_s, contour_n]).tolist(),
+                "area_centroid_arch_s_mm": item.arch_s_mm,
+                "area_centroid_normal_n_mm": float(item.centroid_lr_ap_mm[1] - centroid_arch_ap),
+                "mesial_arch_s_mm": item.contour_interval_s_mm[0],
+                "distal_arch_s_mm": item.contour_interval_s_mm[1],
+            }
+        )
+    return preview_instances
+
+
 def run(args: argparse.Namespace) -> dict[str, object]:
     """内部算法说明。"""
     case_yaml = args.case.resolve()
     case_dir = case_yaml.parent
-    config = normalize_case_definition(
-        yaml.safe_load(case_yaml.read_text(encoding="utf-8"))
-    )
+    config = normalize_case_definition(yaml.safe_load(case_yaml.read_text(encoding="utf-8")))
     fdi_mapping_value = getattr(args, "fdi_mapping_report", None)
-    fdi_mapping_path = (
-        Path(fdi_mapping_value).resolve()
-        if fdi_mapping_value is not None
-        else None
-    )
+    fdi_mapping_path = Path(fdi_mapping_value).resolve() if fdi_mapping_value is not None else None
     contact_path = (
         args.contact_report.resolve()
         if getattr(args, "contact_report", None)
-        else case_dir / "输出/contact_chord_contours_v18_semantic_segment_selection/contact_chord_report.json"
+        else case_dir
+        / "输出/contact_chord_contours_v18_semantic_segment_selection/contact_chord_report.json"
     )
     base_path = (
         args.base_mapping_report.resolve()
@@ -147,20 +189,13 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     region_records: list[dict[str, object]] | None = None
     if fdi_mapping_path is not None:
         recognition_source = load_json(fdi_mapping_path)
-        allow_unsafe_recognition = bool(
-            getattr(args, "allow_unsafe_recognition", False)
-        )
+        allow_unsafe_recognition = bool(getattr(args, "allow_unsafe_recognition", False))
         if not allow_unsafe_recognition and (
             recognition_source.get("status") != "complete"
             or not recognition_source.get("safe_for_downstream_use")
         ):
-            raise RuntimeError(
-                "fdi_new mapping report is not approved for downstream use"
-            )
-        if (
-            not allow_unsafe_recognition
-            and not all(recognition_source.get("QA", {}).values())
-        ):
+            raise RuntimeError("fdi_new mapping report is not approved for downstream use")
+        if not allow_unsafe_recognition and not all(recognition_source.get("QA", {}).values()):
             raise RuntimeError("fdi_new mapping report has failed QA gates")
         coordinate = recognition_source.get("coordinate_system")
         profile = recognition_source.get("profile", {})
@@ -170,9 +205,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         if not isinstance(profile, dict) or not isinstance(projection, dict):
             raise RuntimeError("fdi_new mapping report has invalid profile metadata")
         parameters = {
-            "crown_height_quantile": float(
-                projection["selected_partition_quantile"]
-            ),
+            "crown_height_quantile": float(projection["selected_partition_quantile"]),
             "minimum_crown_normal_dot": float(profile["minimum_normal_dot"]),
         }
         raw_regions = recognition_source.get("regions")
@@ -185,13 +218,10 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         recognition_source_kind = "tooth_fdi_mapping_new"
     else:
         recognition_source = load_json(contact_path)
-        if (
-            recognition_source.get("status") != "complete"
-            or not recognition_source.get("safe_for_downstream_use")
+        if recognition_source.get("status") != "complete" or not recognition_source.get(
+            "safe_for_downstream_use"
         ):
-            raise RuntimeError(
-                "contact-chord tooth report is not approved for downstream use"
-            )
+            raise RuntimeError("contact-chord tooth report is not approved for downstream use")
         if not all(recognition_source.get("QA", {}).values()):
             raise RuntimeError("contact-chord tooth report has failed QA gates")
         coordinate = recognition_source.get("coordinate_system")
@@ -250,12 +280,12 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         float(parameters["minimum_crown_normal_dot"]),
     )
     axis_agreement = {
-        "e_patient_right_to_left_dot": float(np.dot(
-            frame["e_lr"], coordinate["e_patient_right_to_left"]
-        )),
-        "e_anterior_to_posterior_dot": float(np.dot(
-            frame["e_ap"], coordinate["e_anterior_to_posterior"]
-        )),
+        "e_patient_right_to_left_dot": float(
+            np.dot(frame["e_lr"], coordinate["e_patient_right_to_left"])
+        ),
+        "e_anterior_to_posterior_dot": float(
+            np.dot(frame["e_ap"], coordinate["e_anterior_to_posterior"])
+        ),
         "e_occ_dot": float(np.dot(frame["e_occ"], coordinate["e_occ"])),
     }
     frame["curve"] = fit_measured_contour_arch(contour_records)
@@ -289,44 +319,42 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             guide_top = coverage["true_top_global_mm"]
         except Exception as error:
             mapping_error = str(error)
-        slots.append({
-            "FDI": item.fdi,
-            "sequence_index": sequence_index,
-            "status": "present",
-            "guide_coverage_status": "mapped" if guide_top is not None else "outside_guide_coverage",
-            "arch_s_mm": item.arch_s_mm,
-            "arch_interval_s_mm": rounded(item.contour_interval_s_mm),
-            "arch_LR_AP_mm": rounded(item.arch_lr_ap_mm),
-            "measured_area_centroid_LR_AP_mm": rounded(item.centroid_lr_ap_mm),
-            "dental_crown_height_mm": rounded(item.crown_height_mm),
-            "dental_crown_point_global_mm": rounded(item.crown_point_global_mm),
-            "crown_height_lift_method": item.lift_method,
-            "crown_height_lift_distance_mm": rounded(item.lift_distance_mm),
-            "local_tangent_global": rounded(tangent),
-            "local_outward_global": rounded(outward),
-            "guide_top_global_mm": None if guide_top is None else rounded(guide_top),
-            "guide_coverage_method": (
-                None if coverage is None else coverage["coverage_method"]
-            ),
-            "guide_coverage_metrics": (
-                None
-                if coverage is None
-                else {
-                    key: value
-                    for key, value in coverage.items()
-                    if key != "true_top_global_mm"
-                }
-            ),
-            "guide_mapping_error": mapping_error,
-        })
-
+        slots.append(
+            {
+                "FDI": item.fdi,
+                "sequence_index": sequence_index,
+                "status": "present",
+                "guide_coverage_status": "mapped"
+                if guide_top is not None
+                else "outside_guide_coverage",
+                "arch_s_mm": item.arch_s_mm,
+                "arch_interval_s_mm": rounded(item.contour_interval_s_mm),
+                "arch_LR_AP_mm": rounded(item.arch_lr_ap_mm),
+                "measured_area_centroid_LR_AP_mm": rounded(item.centroid_lr_ap_mm),
+                "dental_crown_height_mm": rounded(item.crown_height_mm),
+                "dental_crown_point_global_mm": rounded(item.crown_point_global_mm),
+                "crown_height_lift_method": item.lift_method,
+                "crown_height_lift_distance_mm": rounded(item.lift_distance_mm),
+                "local_tangent_global": rounded(tangent),
+                "local_outward_global": rounded(outward),
+                "guide_top_global_mm": None if guide_top is None else rounded(guide_top),
+                "guide_coverage_method": (
+                    None if coverage is None else coverage["coverage_method"]
+                ),
+                "guide_coverage_metrics": (
+                    None
+                    if coverage is None
+                    else {
+                        key: value for key, value in coverage.items() if key != "true_top_global_mm"
+                    }
+                ),
+                "guide_mapping_error": mapping_error,
+            }
+        )
     window_nodes = [
-        dict(node)
-        for node in config.get("design", {}).get("observation_windows", []) or []
+        dict(node) for node in config.get("design", {}).get("observation_windows", []) or []
     ]
-    endpoints = {
-        int(node[key]) for node in window_nodes for key in ("start_fdi", "end_fdi")
-    }
+    endpoints = {int(node[key]) for node in window_nodes for key in ("start_fdi", "end_fdi")}
     if not endpoints <= set(semantics.present_teeth):
         raise RuntimeError(
             "observation-window endpoints require measured present-tooth centres: "
@@ -339,31 +367,20 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         intervals,
         guide,
         tooth_top_points={
-            item.fdi: np.asarray(item.crown_point_global_mm, dtype=float)
-            for item in locations
+            item.fdi: np.asarray(item.crown_point_global_mm, dtype=float) for item in locations
         },
     )
-    contour_windows = [
-        item for item in windows if item["opening_geometry"] == "contour_following"
-    ]
-    axis_sweep_windows = [
-        item for item in windows if item["opening_geometry"] == "axis_sweep"
-    ]
+    contour_windows = [item for item in windows if item["opening_geometry"] == "contour_following"]
+    axis_sweep_windows = [item for item in windows if item["opening_geometry"] == "axis_sweep"]
     axis_diagnostic_requested_sections = sum(
         int(item["requested_sample_count"]) for item in axis_sweep_windows
     )
     axis_diagnostic_mapped_sections = sum(
         int(item["mapped_sample_count"]) for item in axis_sweep_windows
     )
-    requested_sections = sum(
-        int(item["requested_sample_count"]) for item in contour_windows
-    )
-    mapped_sections = sum(
-        int(item["mapped_sample_count"]) for item in contour_windows
-    )
-    mapping_fraction = (
-        1.0 if requested_sections == 0 else mapped_sections / requested_sections
-    )
+    requested_sections = sum(int(item["requested_sample_count"]) for item in contour_windows)
+    mapped_sections = sum(int(item["mapped_sample_count"]) for item in contour_windows)
+    mapping_fraction = 1.0 if requested_sections == 0 else mapped_sections / requested_sections
     slot_fdi = {int(item["FDI"]) for item in slots}
     covered_fdi = {
         int(item["FDI"])
@@ -391,28 +408,20 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         "missing_and_excluded_FDI_have_no_geometric_slots": not bool(slot_fdi & forbidden),
         "physical_guide_coverage_classified_for_every_tooth": all(
             item.get("guide_coverage_status") in {"mapped", "outside_guide_coverage"}
-            and (
-                item.get("guide_coverage_method")
-                == "closed_section_exterior_surface_v1"
-            )
+            and (item.get("guide_coverage_method") == "closed_section_exterior_surface_v1")
             == (item.get("guide_top_global_mm") is not None)
             for item in slots
         ),
         "configured_anchor_station_teeth_have_physical_guide_coverage": (
             required_anchor_fdi <= covered_fdi
         ),
-        "measured_centres_are_strictly_ordered": bool(np.all(
-            np.diff(ordered_centres) > 0.25
-        )),
+        "measured_centres_are_strictly_ordered": bool(np.all(np.diff(ordered_centres) > 0.25)),
         "each_measured_center_lies_inside_its_contour_interval": interval_contains_center,
         "all_contour_intervals_have_nonzero_arch_extent": all(
-            intervals[label][1] - intervals[label][0]
-            >= 1.0
-            for label in present_order
+            intervals[label][1] - intervals[label][0] >= 1.0 for label in present_order
         ),
         "all_centres_lifted_to_measured_crown_top": all(
-            item.lift_distance_mm <= 1.5
-            for item in locations
+            item.lift_distance_mm <= 1.5 for item in locations
         ),
         "observation_window_endpoints_are_measured_present_teeth": endpoints <= slot_fdi,
         "contour_following_window_sections_mostly_mapped": mapping_fraction >= 0.80,
@@ -434,29 +443,11 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     report_path = output_dir / "tooth_guide_mapping.json"
     preview_path = output_dir / "tooth_guide_mapping_preview.png"
     context_path = output_dir / "tooth_guide_mapping_context.glb"
-    preview_instances = []
-    by_fdi = {int(item["FDI"]): item for item in contour_records}
-    for item in locations:
-        contour = np.asarray(by_fdi[item.fdi]["contour_LR_AP_mm"], dtype=float)
-        # For plotting only, nearest dense-curve samples preserve the original
-        # AP coordinate through the historical (s, AP-offset) convention.
-        dense = np.column_stack([frame["curve"].lr, frame["curve"].ap])
-        nearest = cKDTree(dense).query(contour, k=1)[1]
-        contour_s = np.asarray(frame["curve"].s)[nearest]
-        contour_n = contour[:, 1] - np.asarray(frame["curve"].ap)[nearest]
-        centroid_arch_ap = float(item.arch_lr_ap_mm[1])
-        preview_instances.append({
-            "FDI": item.fdi,
-            "contour_s_n_mm": np.column_stack([contour_s, contour_n]).tolist(),
-            "area_centroid_arch_s_mm": item.arch_s_mm,
-            "area_centroid_normal_n_mm": float(item.centroid_lr_ap_mm[1] - centroid_arch_ap),
-            "mesial_arch_s_mm": item.contour_interval_s_mm[0],
-            "distal_arch_s_mm": item.contour_interval_s_mm[1],
-        })
+    preview_instances = _preview_instance_records(locations, contour_records, frame)
     instance_analysis = {"instances": preview_instances, "assignment": {}, "candidates": []}
     report = {
         "schema_version": "6.0-fdi-new-physical-guide-coverage",
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "status": (
             "tooth_guide_mapping_complete"
             if all(qa.values())
@@ -469,27 +460,15 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             "surgical_reference": (
                 configured_surgical_references(config, case_dir)
                 if fdi_mapping_path is not None
-                else list(
-                    recognition_source.get("sources", {}).get(
-                        "surgical_reference", []
-                    ) or []
-                )
+                else list(recognition_source.get("sources", {}).get("surgical_reference", []) or [])
             ),
             "recognition_engine": recognition_source_kind,
-            "fdi_mapping_report": (
-                str(fdi_mapping_path) if fdi_mapping_path is not None else None
-            ),
-            "contact_chord_report": (
-                str(contact_path) if fdi_mapping_path is None else None
-            ),
+            "fdi_mapping_report": (str(fdi_mapping_path) if fdi_mapping_path is not None else None),
+            "contact_chord_report": (str(contact_path) if fdi_mapping_path is None else None),
             "base_coordinate_report": (
-                str(base_path)
-                if fdi_mapping_path is None and base_path.exists()
-                else None
+                str(base_path) if fdi_mapping_path is None and base_path.exists() else None
             ),
-            "enhanced_projection_maps": (
-                str(enhanced_path) if fdi_mapping_path is None else None
-            ),
+            "enhanced_projection_maps": (str(enhanced_path) if fdi_mapping_path is None else None),
         },
         "semantics": {
             "jaw": semantics.jaw,
@@ -542,16 +521,12 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             "axis_sweep_diagnostic_requested_contour_section_count": (
                 axis_diagnostic_requested_sections
             ),
-            "axis_sweep_diagnostic_mapped_contour_section_count": (
-                axis_diagnostic_mapped_sections
-            ),
+            "axis_sweep_diagnostic_mapped_contour_section_count": (axis_diagnostic_mapped_sections),
             "configured_anchor_station_FDI": sorted(required_anchor_fdi),
             "configured_anchor_station_FDI_without_physical_coverage": sorted(
                 required_anchor_fdi - covered_fdi
             ),
-            "base_mapping_status_not_inherited": (
-                None if base is None else base.get("status")
-            ),
+            "base_mapping_status_not_inherited": (None if base is None else base.get("status")),
         },
         "QA": qa,
         "outputs": {
@@ -591,11 +566,17 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     """内部算法说明。"""
     report = run(parse_args())
-    print(json.dumps({
-        "status": report["status"],
-        "QA": report["QA"],
-        "outputs": report["outputs"],
-    }, ensure_ascii=False, indent=2))
+    print(
+        json.dumps(
+            {
+                "status": report["status"],
+                "QA": report["QA"],
+                "outputs": report["outputs"],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
     return 0 if all(report["QA"].values()) else 2
 
 

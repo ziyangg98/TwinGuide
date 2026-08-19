@@ -26,9 +26,7 @@ CLASSIFICATION_ORDER = {
     "maxillary": tuple(range(18, 10, -1)) + tuple(range(21, 29)),
     "mandibular": tuple(range(38, 30, -1)) + tuple(range(41, 49)),
 }
-ALL_PERMANENT_FDI = frozenset(
-    value for order in CLASSIFICATION_ORDER.values() for value in order
-)
+ALL_PERMANENT_FDI = frozenset(value for order in CLASSIFICATION_ORDER.values() for value in order)
 
 # Approximate mesiodistal crown widths.  They are only a regularising prior;
 # actual centres are refined from the current case's crown-support signal.
@@ -47,6 +45,7 @@ WIDTH_PRIOR_MM = {
 @dataclass(frozen=True)
 class AnatomySemantics:
     """内部算法说明。"""
+
     jaw: str
     fdi_order: tuple[int, ...]
     present_teeth: frozenset[int]
@@ -99,9 +98,7 @@ def anatomy_classification_diagnostics(
         )
         for name, values in raw.items()
     }
-    duplicate_teeth = {
-        name: values for name, values in duplicate_teeth.items() if values
-    }
+    duplicate_teeth = {name: values for name, values in duplicate_teeth.items() if values}
     multiply_classified = (
         (sets["present_teeth"] & sets["missing_teeth"])
         | (sets["present_teeth"] & sets["excluded_teeth"])
@@ -201,10 +198,7 @@ def validate_anatomy(anatomy: dict[str, object]) -> AnatomySemantics:
     expected_jaw_quadrants(jaw)
     diagnostics = anatomy_classification_diagnostics(anatomy)
     if not diagnostics["classification_complete_and_exclusive"]:
-        raise FDIError(
-            "invalid FDI present/missing/excluded classification: "
-            f"{diagnostics}"
-        )
+        raise FDIError(f"invalid FDI present/missing/excluded classification: {diagnostics}")
     present = frozenset(_as_unique_ints("present_teeth", anatomy.get("present_teeth")))
     missing = frozenset(_as_unique_ints("missing_teeth", anatomy.get("missing_teeth")))
     excluded = frozenset(_as_unique_ints("excluded_teeth", anatomy.get("excluded_teeth")))
@@ -230,9 +224,7 @@ def configured_missing_gap_pair_indices(
     between two present teeth forces a semantic gap separator.
     """
 
-    present_order = [
-        label for label in semantics.fdi_order if label in semantics.present_teeth
-    ]
+    present_order = [label for label in semantics.fdi_order if label in semantics.present_teeth]
     position = {label: index for index, label in enumerate(semantics.fdi_order)}
     return {
         pair_index

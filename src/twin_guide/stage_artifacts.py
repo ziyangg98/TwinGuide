@@ -85,6 +85,7 @@ def _stage_parameters(config: CaseConfig, stage_number: int) -> object:
             )
         return {
             "sleeve_defaults": _json_value(config.sleeve),
+            "guide_posts": _json_value(config.guide_posts),
             "sleeve_by_ring": sleeve_by_ring,
         }
     if stage_number == 3:
@@ -96,6 +97,7 @@ def _stage_parameters(config: CaseConfig, stage_number: int) -> object:
         return {
             "guide_anchors": _json_value(config.guide_anchors),
             "connector_diameter_mm": config.geometry.connector_diameter_mm,
+            "anchor_selection": _json_value(config.geometry.anchor_selection),
         }
     if stage_number == 5:
         return _json_value(config.press_beam)
@@ -104,6 +106,7 @@ def _stage_parameters(config: CaseConfig, stage_number: int) -> object:
             "connector_diameter_mm": config.geometry.connector_diameter_mm,
             "connector_dental_clearance_mm": (config.geometry.connector_dental_clearance_mm),
             "fusion_voxel_size_mm": config.geometry.fusion_voxel_size_mm,
+            "connector_path": _json_value(config.geometry.connector_path),
         }
     if stage_number == 7:
         return _json_value(config.handpiece_avoidance)
@@ -176,9 +179,7 @@ def _stage_metrics(stage: StageResult) -> dict[str, object]:
         }
     if number == 6:
         avoidance_routes = tuple(
-            route
-            for link in output.links
-            for route in link.platform_avoidance_routes
+            route for link in output.links for route in link.platform_avoidance_routes
         )
         return {
             "main_link_count": len(output.links),
@@ -208,11 +209,18 @@ def _stage_metrics(stage: StageResult) -> dict[str, object]:
     plans = output
     return {
         "handpiece_count": len(plans),
-        "pose_counts": [len(plan.angle_samples_degrees) for plan in plans],
+        "pose_counts": [
+            len(plan.angle_samples_degrees) * len(plan.axial_depth_samples_mm) for plan in plans
+        ],
         "angle_ranges_degrees": [
             [plan.angle_samples_degrees[0], plan.angle_samples_degrees[-1]] for plan in plans
         ],
         "extra_clearances_mm": [plan.extra_clearance_mm for plan in plans],
+        "automatic_clearances_mm": [plan.automatic_clearance_mm for plan in plans],
+        "effective_clearances_mm": [plan.effective_clearance_mm for plan in plans],
+        "axial_depth_ranges_mm": [
+            [plan.axial_depth_samples_mm[0], plan.axial_depth_samples_mm[-1]] for plan in plans
+        ],
     }
 
 

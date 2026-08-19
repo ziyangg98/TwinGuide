@@ -16,8 +16,8 @@ from twin_guide.ui_jobs import write_manifest
 if TYPE_CHECKING:
     from twin_guide.types import GenerationContext
 
-EDITOR_PLAN_SCHEMA = "twin-guide.ui-editor-plan/4.0"
-EDITOR_SNAPSHOT_SCHEMA = "twin-guide.ui-editor-snapshot/4.0"
+EDITOR_PLAN_SCHEMA = "twin-guide.ui-editor-plan/5.0"
+EDITOR_SNAPSHOT_SCHEMA = "twin-guide.ui-editor-snapshot/5.0"
 
 
 def _json_value(value: object) -> object:
@@ -64,13 +64,19 @@ def _semantic_config(config: CaseConfig, *, include_overrides: bool) -> bytes:
     if is_dataclass(config):
         value = asdict(config)
         value.pop("output_directory", None)
+        identification = getattr(config, "tooth_identification", None)
         value["tooth_identification"] = {
-            "enabled": getattr(config, "tooth_identification", None) is not None,
+            "enabled": identification is not None,
             "backend": getattr(
-                getattr(config, "tooth_identification", None),
+                identification,
                 "backend",
                 ToothIdentificationBackend.FDI_NEW,
             ).value,
+            "profile": (
+                None
+                if identification is None
+                else asdict(identification.profile)
+            ),
         }
         if not include_overrides:
             value.pop("editor_overrides", None)
@@ -272,6 +278,7 @@ def build_editor_plan(
                 raise TypeError("第二根导柱编辑几何缺少 parameters")
             first_origin = _coordinate_values(parameters["axis_origin"])
             second_origin = _coordinate_values(second["parameters"]["axis_origin"])
+            geometry["pair_axis_origins"] = [list(first_origin), list(second_origin)]
             parameters["axis_origin"] = [
                 0.5 * (float(left) + float(right))
                 for left, right in zip(first_origin, second_origin, strict=True)

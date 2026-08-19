@@ -58,9 +58,7 @@ class CommandLineTests(unittest.TestCase):
 
         self.assertEqual(parser.prog, "twinguide")
         subparsers_action = next(
-            action
-            for action in parser._actions
-            if hasattr(action, "choices") and action.choices
+            action for action in parser._actions if hasattr(action, "choices") and action.choices
         )
         self.assertEqual(set(subparsers_action.choices), {"generate", "process", "validate"})
 
@@ -69,14 +67,11 @@ class CommandLineTests(unittest.TestCase):
 
         parser = _parser()
 
-        generate = parser.parse_args(
-            ["generate", "--config", "case.yaml", "--force"]
-        )
-        process = parser.parse_args(
-            ["process", "--config", "case.yaml", "--force"]
-        )
+        generate = parser.parse_args(["generate", "--config", "case.yaml", "--force"])
+        process = parser.parse_args(["process", "--config", "case.yaml", "--force"])
         self.assertTrue(generate.force)
         self.assertTrue(process.force)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -379,9 +379,7 @@ class PressBeamPointTests(unittest.TestCase):
 
         context = SimpleNamespace(
             tooth_identification=SimpleNamespace(
-                mapping_report={
-                    "coordinate_system": {"e_occ": [0.0, 0.0, -2.0]}
-                }
+                mapping_report={"coordinate_system": {"e_occ": [0.0, 0.0, -2.0]}}
             )
         )
 

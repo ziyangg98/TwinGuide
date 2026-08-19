@@ -25,9 +25,7 @@ class BlenderUiControlTests(unittest.TestCase):
             begin_edit=Mock(),
         )
         bpy.utils.register_class(blender_ui.TwinGuideState)
-        bpy.types.Scene.twin_guide_state = bpy.props.PointerProperty(
-            type=blender_ui.TwinGuideState
-        )
+        bpy.types.Scene.twin_guide_state = bpy.props.PointerProperty(type=blender_ui.TwinGuideState)
 
     def tearDown(self):
         blender_ui._SESSION = self.previous_session
@@ -137,9 +135,7 @@ class BlenderUiControlTests(unittest.TestCase):
     def test_every_semantic_control_enters_its_drag_operator(self):
         context = SimpleNamespace(
             active_object=None,
-            scene=SimpleNamespace(
-                twin_guide_state=SimpleNamespace(editing_locked=False)
-            ),
+            scene=SimpleNamespace(twin_guide_state=SimpleNamespace(editing_locked=False)),
         )
 
         for control in self._controls():
@@ -148,14 +144,10 @@ class BlenderUiControlTests(unittest.TestCase):
                 before = self._properties(control)
                 self.assertTrue(TwinGuideFeatureGizmoGroup.poll(context))
                 if control["tg_kind"] == "surface_anchor":
-                    self.assertTrue(
-                        blender_ui.TwinGuideSurfaceDragOperator.poll(context)
-                    )
+                    self.assertTrue(blender_ui.TwinGuideSurfaceDragOperator.poll(context))
                 else:
                     self.assertTrue(blender_ui._gizmo_axes(control))
-                    self.assertTrue(
-                        blender_ui.TwinGuideHandleDragOperator.poll(context)
-                    )
+                    self.assertTrue(blender_ui.TwinGuideHandleDragOperator.poll(context))
                 self.assertEqual(self._properties(control), before)
 
     def test_sleeve_height_control_has_pickable_ring_surface(self):
@@ -169,6 +161,45 @@ class BlenderUiControlTests(unittest.TestCase):
 
         self.assertEqual(len(control.data.polygons), 256)
         self.assertGreater(sum(polygon.area for polygon in control.data.polygons), 2.0)
+
+    def test_sleeve_rotation_handle_moves_on_visible_circular_track(self):
+        control = self._control(
+            "sleeve_rotation",
+            ring_index=1,
+            role="rotation_guide_2",
+            guide_number=2,
+            center=[0.0, 0.0, 0.0],
+            axis=[0.0, 0.0, 1.0],
+            reference=[1.0, 0.0, 0.0],
+            radius=2.0,
+            pair_half_span=2.0,
+            platform_height=1.0,
+            total_height=3.0,
+            angle_degrees=0.0,
+        )
+        self._control(
+            "sleeve_rotation",
+            ring_index=1,
+            role="rotation_guide_1",
+            guide_number=1,
+            center=[0.0, 0.0, 0.0],
+            axis=[0.0, 0.0, 1.0],
+            reference=[-1.0, 0.0, 0.0],
+            radius=2.0,
+            pair_half_span=2.0,
+            platform_height=1.0,
+            total_height=3.0,
+            angle_degrees=0.0,
+        )
+        set_active_object(control)
+
+        blender_ui._update_sleeve_rotation_preview(1, 90.0)
+
+        self.assertAlmostEqual(control.location.x, 0.0, places=6)
+        self.assertAlmostEqual(control.location.y, 2.0, places=6)
+        self.assertEqual(control["tg_feature_id"], "sleeve:site_1")
+        self.assertEqual(blender_ui._semantic_values(control)[0][1], 90.0)
+        self.assertTrue(blender_ui.TwinGuideSleeveRotationOperator.poll(bpy.context))
 
     def test_reference_visibility_toggles_template_and_dentition_independently(self):
         for role in ("template", "dentition"):
@@ -185,20 +216,17 @@ class BlenderUiControlTests(unittest.TestCase):
         )
         blender_ui._reference_visibility_updated(state, SimpleNamespace())
 
-        self.assertTrue(
-            bpy.data.objects[f"{blender_ui.SURFACE_PREFIX}template"].hide_get()
-        )
-        self.assertFalse(
-            bpy.data.objects[f"{blender_ui.SURFACE_PREFIX}dentition"].hide_get()
-        )
+        self.assertTrue(bpy.data.objects[f"{blender_ui.SURFACE_PREFIX}template"].hide_get())
+        self.assertFalse(bpy.data.objects[f"{blender_ui.SURFACE_PREFIX}dentition"].hide_get())
 
     def test_every_axis_control_accepts_a_semantic_drag_value(self):
-        with patch.object(blender_ui, "_preview_feature_edit"), patch.object(
-            blender_ui, "_update_connector_overlay"
-        ), patch.object(blender_ui, "_update_observation_overlay"), patch.object(
-            blender_ui, "_update_press_overlay"
-        ), patch.object(blender_ui, "_update_sleeve_hint_label"), patch.object(
-            blender_ui, "_update_window_overlay"
+        with (
+            patch.object(blender_ui, "_preview_feature_edit"),
+            patch.object(blender_ui, "_update_connector_overlay"),
+            patch.object(blender_ui, "_update_observation_overlay"),
+            patch.object(blender_ui, "_update_press_overlay"),
+            patch.object(blender_ui, "_update_sleeve_hint_label"),
+            patch.object(blender_ui, "_update_window_overlay"),
         ):
             for control in self._controls():
                 if control["tg_kind"] == "surface_anchor":
@@ -224,42 +252,62 @@ class BlenderUiControlTests(unittest.TestCase):
         )
         state = bpy.context.scene.twin_guide_state
 
-        with tempfile.TemporaryDirectory() as directory, patch.object(
-            blender_ui,
-            "_CONFIG",
-            SimpleNamespace(output_directory=Path(directory)),
-        ), patch.object(blender_ui, "_SESSION", session), patch.object(
-            blender_ui,
-            "_EDITOR_PLAN_VALUE",
-            snapshot,
-        ), patch.object(
-            blender_ui,
-            "replace",
-            side_effect=lambda source, **values: SimpleNamespace(
-                **(vars(source) | values)
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(
+                blender_ui,
+                "_CONFIG",
+                SimpleNamespace(output_directory=Path(directory)),
             ),
-        ), patch.object(
-            blender_ui,
-            "editor_geometry_fingerprint",
-            return_value="geometry-current",
-        ), patch.object(
-            blender_ui,
-            "preview_directory",
-            return_value=Path(directory),
-        ), patch.object(
-            blender_ui,
-            "_matching_model_snapshot",
-            return_value=(Path("model.stl"), Path("snapshot.json"), snapshot),
-        ), patch.object(blender_ui, "_load_model") as load_model, patch.object(
-            blender_ui,
-            "_create_controls",
-        ) as create_controls:
+            patch.object(blender_ui, "_SESSION", session),
+            patch.object(
+                blender_ui,
+                "_EDITOR_PLAN_VALUE",
+                snapshot,
+            ),
+            patch.object(
+                blender_ui,
+                "replace",
+                side_effect=lambda source, **values: SimpleNamespace(**(vars(source) | values)),
+            ),
+            patch.object(
+                blender_ui,
+                "editor_geometry_fingerprint",
+                return_value="geometry-current",
+            ),
+            patch.object(
+                blender_ui,
+                "preview_directory",
+                return_value=Path(directory),
+            ),
+            patch.object(
+                blender_ui,
+                "_matching_model_snapshot",
+                return_value=(Path("model.stl"), Path("snapshot.json"), snapshot),
+            ),
+            patch.object(blender_ui, "_load_model") as load_model,
+            patch.object(
+                blender_ui,
+                "_create_controls",
+            ) as create_controls,
+        ):
             reused = blender_ui._reuse_matching_preview()
 
-        self.assertTrue(reused)
-        load_model.assert_not_called()
-        create_controls.assert_not_called()
-        self.assertEqual(state.task_status, "已复用现有预览")
+            self.assertTrue(reused)
+            load_model.assert_not_called()
+            create_controls.assert_not_called()
+            self.assertEqual(state.task_status, "已复用现有预览")
+
+    def test_old_editor_snapshot_is_ignored_instead_of_crashing_ui_startup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "twin_guide.stl").write_text("placeholder", encoding="utf-8")
+            (root / "ui-editor-snapshot.json").write_text(
+                json.dumps({"schema_version": "twin-guide.ui-editor-snapshot/4.0"}),
+                encoding="utf-8",
+            )
+
+            self.assertIsNone(blender_ui._matching_model_snapshot(root, "current"))
 
     def test_operation_size_handle_stays_on_parameter_plane(self):
         control = self._control(

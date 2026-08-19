@@ -14,6 +14,7 @@ LABEL_PREFIX = "TG_Label_"
 
 GROUP_BY_KIND = {
     "sleeve_height": "SLEEVE",
+    "sleeve_rotation": "SLEEVE",
     "window_center": "OPERATION",
     "window_size": "OPERATION",
     "window_margin": "OPERATION",
@@ -34,6 +35,7 @@ _COLORS = {
     "observation_endpoint": (0.76, 0.48, 1.0, 1.0),
     "observation_scalar": (0.62, 0.42, 0.94, 1.0),
     "sleeve_height": (0.30, 0.64, 1.0, 1.0),
+    "sleeve_rotation": (1.0, 0.45, 0.08, 1.0),
 }
 
 _GROUP_COLORS = {
@@ -67,6 +69,7 @@ _HANDLE_HINTS = {
         "platform": "平台高度",
         "total": "总高度",
     },
+    "sleeve_rotation": "调整双导柱整体方位",
 }
 
 
@@ -82,7 +85,7 @@ def _handle_hint(kind: str, properties: dict[str, object]) -> str:
 def _feature_id(kind: str, properties: dict[str, object]) -> str:
     """由语义属性生成稳定结构编号。"""
 
-    if kind == "sleeve_height":
+    if kind in {"sleeve_height", "sleeve_rotation"}:
         return f"sleeve:site_{properties['ring_index']}"
     if kind.startswith("window_"):
         return f"operation_window:{properties['site_index']}"
@@ -101,7 +104,7 @@ def _mesh_data(
 ) -> tuple[list[tuple[float, float, float]], list[tuple[int, int]], list[tuple[int, ...]]]:
     """返回一个结构手柄的本地网格。"""
 
-    if kind == "sleeve_height":
+    if kind in {"sleeve_height", "sleeve_rotation"}:
         major_segments = 32
         minor_segments = 8
         major_radius = 0.80
@@ -121,8 +124,7 @@ def _mesh_data(
             (
                 major * minor_segments + minor,
                 ((major + 1) % major_segments) * minor_segments + minor,
-                ((major + 1) % major_segments) * minor_segments
-                + (minor + 1) % minor_segments,
+                ((major + 1) % major_segments) * minor_segments + (minor + 1) % minor_segments,
                 major * minor_segments + (minor + 1) % minor_segments,
             )
             for major in range(major_segments)
@@ -260,6 +262,7 @@ def create_control(
             "observation_endpoint",
         }
         or (kind == "sleeve_height" and properties.get("role") == "platform")
+        or kind == "sleeve_rotation"
     )
     for key, value in properties.items():
         object_[f"tg_{key}"] = value
@@ -271,6 +274,10 @@ def create_control(
             "platform": (1.0, 0.62, 0.18, 1.0),
             "total": (0.28, 0.58, 1.0, 1.0),
         }[str(properties["role"])]
+    elif kind == "sleeve_rotation":
+        object_.rotation_mode = "QUATERNION"
+        object_.rotation_quaternion = Vector(properties["axis"]).to_track_quat("Z", "Y")
+        object_.scale = (1.15, 1.15, 1.15)
     elif kind == "surface_anchor":
         object_.rotation_mode = "QUATERNION"
         object_.rotation_quaternion = Vector(properties["normal"]).to_track_quat("Z", "Y")
@@ -323,6 +330,11 @@ def create_curve(
         object_["tg_group"] = "PRESS"
         object_["tg_feature_id"] = "press_junction"
         object_.color = _GROUP_COLORS["PRESS"]
+    elif name.startswith("Sleeve_Rotation_"):
+        ring_index = name.rsplit("_", 1)[-1]
+        object_["tg_group"] = "SLEEVE"
+        object_["tg_feature_id"] = f"sleeve:site_{ring_index}"
+        object_.color = (1.0, 0.45, 0.08, 1.0)
     if "tg_group" in object_:
         object_["tg_overview_visible"] = True
         object_["tg_base_color"] = list(object_.color)

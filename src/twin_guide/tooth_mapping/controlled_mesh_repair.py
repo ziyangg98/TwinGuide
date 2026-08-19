@@ -40,21 +40,15 @@ class ControlledVolumeRepairPolicy:
         if not 0.0 < self.maximum_boundary_edge_fraction <= 1.0:
             raise ValueError("maximum_boundary_edge_fraction must be in (0, 1]")
         if not 0.0 < self.maximum_boundary_spur_face_fraction <= 1.0:
-            raise ValueError(
-                "maximum_boundary_spur_face_fraction must be in (0, 1]"
-            )
+            raise ValueError("maximum_boundary_spur_face_fraction must be in (0, 1]")
         if not 0.0 < self.maximum_boundary_spur_edge_fraction <= 1.0:
-            raise ValueError(
-                "maximum_boundary_spur_edge_fraction must be in (0, 1]"
-            )
+            raise ValueError("maximum_boundary_spur_edge_fraction must be in (0, 1]")
         if not 0.0 < self.maximum_non_manifold_edge_fraction <= 1.0:
             raise ValueError("maximum_non_manifold_edge_fraction must be in (0, 1]")
         if not 0.0 <= self.maximum_relative_volume_change <= 1.0:
             raise ValueError("maximum_relative_volume_change must be in [0, 1]")
         if not 0.0 < self.maximum_surface_deviation_edge_fraction <= 1.0:
-            raise ValueError(
-                "maximum_surface_deviation_edge_fraction must be in (0, 1]"
-            )
+            raise ValueError("maximum_surface_deviation_edge_fraction must be in (0, 1]")
         if self.minimum_surface_deviation_limit_mm <= 0.0:
             raise ValueError("minimum_surface_deviation_limit_mm must be positive")
         if self.surface_sample_count < 100:
@@ -64,6 +58,7 @@ class ControlledVolumeRepairPolicy:
 @dataclass(frozen=True)
 class ControlledVolumeRepairResult:
     """内部算法说明。"""
+
     mesh: trimesh.Trimesh
     report: dict[str, Any]
 
@@ -125,18 +120,12 @@ def _surface_deviation(
     random_seed: int,
 ) -> tuple[float, float, float]:
     """内部算法说明。"""
-    original_points, _ = trimesh.sample.sample_surface(
-        original, sample_count, seed=random_seed
-    )
+    original_points, _ = trimesh.sample.sample_surface(original, sample_count, seed=random_seed)
     candidate_points, _ = trimesh.sample.sample_surface(
         candidate, sample_count, seed=random_seed + 1
     )
-    _, original_to_candidate, _ = trimesh.proximity.closest_point(
-        candidate, original_points
-    )
-    _, candidate_to_original, _ = trimesh.proximity.closest_point(
-        original, candidate_points
-    )
+    _, original_to_candidate, _ = trimesh.proximity.closest_point(candidate, original_points)
+    _, candidate_to_original, _ = trimesh.proximity.closest_point(original, candidate_points)
     combined = np.concatenate((original_to_candidate, candidate_to_original))
     return (
         float(np.max(combined)),
@@ -181,11 +170,13 @@ def ensure_closed_volume(
         "before": before,
     }
     if bool(before["is_closed_volume"]):
-        report.update({
-            "status": "not_needed",
-            "reason": "source already is a closed volume",
-            "after": before,
-        })
+        report.update(
+            {
+                "status": "not_needed",
+                "reason": "source already is a closed volume",
+                "after": before,
+            }
+        )
         return ControlledVolumeRepairResult(original, report)
 
     edge_lengths = np.asarray(original.edges_unique_length, dtype=float)
@@ -229,8 +220,7 @@ def ensure_closed_volume(
             1,
             int(
                 np.ceil(
-                    int(before["face_count"])
-                    * selected_policy.maximum_boundary_spur_face_fraction
+                    int(before["face_count"]) * selected_policy.maximum_boundary_spur_face_fraction
                 )
             ),
         )
@@ -241,12 +231,8 @@ def ensure_closed_volume(
                 report,
             )
 
-        boundary_face_edge_counts = edge_face_counts[
-            original.faces_unique_edges[boundary_face_ids]
-        ]
-        spur_topology_mask = (
-            (boundary_face_edge_counts == 1).sum(axis=1) == 1
-        ) & (
+        boundary_face_edge_counts = edge_face_counts[original.faces_unique_edges[boundary_face_ids]]
+        spur_topology_mask = ((boundary_face_edge_counts == 1).sum(axis=1) == 1) & (
             (boundary_face_edge_counts > 2).sum(axis=1) == 2
         )
         if not bool(np.all(spur_topology_mask)):
@@ -255,16 +241,9 @@ def ensure_closed_volume(
                 report,
             )
 
-        spur_edge_limit = (
-            median_edge_length
-            * selected_policy.maximum_boundary_spur_edge_fraction
-        )
+        spur_edge_limit = median_edge_length * selected_policy.maximum_boundary_spur_edge_fraction
         maximum_spur_edge_length = float(
-            np.max(
-                original.edges_unique_length[
-                    original.faces_unique_edges[boundary_face_ids]
-                ]
-            )
+            np.max(original.edges_unique_length[original.faces_unique_edges[boundary_face_ids]])
         )
         report["boundary_spur_pruning"] = {
             "face_indices": boundary_face_ids.astype(int).tolist(),
@@ -322,10 +301,12 @@ def ensure_closed_volume(
                 report,
             )
 
-        solid = Manifold(mesh=Mesh(
-            vert_properties=np.asarray(working.vertices, dtype=np.float32),
-            tri_verts=np.asarray(working.faces, dtype=np.uint32),
-        ))
+        solid = Manifold(
+            mesh=Mesh(
+                vert_properties=np.asarray(working.vertices, dtype=np.float32),
+                tri_verts=np.asarray(working.faces, dtype=np.uint32),
+            )
+        )
         status = str(solid.status())
         report["manifold_status"] = status
         if status != "Error.NoError":
@@ -351,15 +332,12 @@ def ensure_closed_volume(
 
     surface_limit = max(
         selected_policy.minimum_surface_deviation_limit_mm,
-        median_edge_length
-        * selected_policy.maximum_surface_deviation_edge_fraction,
+        median_edge_length * selected_policy.maximum_surface_deviation_edge_fraction,
     )
     bounds_change = float(np.max(np.abs(candidate.bounds - original.bounds)))
     original_volume = abs(float(before["signed_volume_mm3"]))
     candidate_volume = abs(float(after["signed_volume_mm3"]))
-    relative_volume_change = abs(candidate_volume - original_volume) / max(
-        original_volume, 1e-12
-    )
+    relative_volume_change = abs(candidate_volume - original_volume) / max(original_volume, 1e-12)
     maximum_deviation, p99_deviation, rms_deviation = _surface_deviation(
         original,
         candidate,
@@ -400,12 +378,14 @@ def ensure_closed_volume(
     else:
         method = "manifold3d_indexed_canonicalization"
         reason = "local non-manifold topology repaired within all safety limits"
-    report.update({
-        "applied": True,
-        "method": method,
-        "status": "repaired",
-        "reason": reason,
-    })
+    report.update(
+        {
+            "applied": True,
+            "method": method,
+            "status": "repaired",
+            "reason": reason,
+        }
+    )
     return ControlledVolumeRepairResult(candidate, report)
 
 

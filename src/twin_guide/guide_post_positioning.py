@@ -9,6 +9,7 @@ DRILL_HANDPIECE_INSERTION_MM = DRILL_LENGTH_INSIDE_HANDPIECE_MM
 def calculate_twin_guide_extension_mm(
     drill_length_mm: float,
     implant_length_mm: float,
+    drill_inside_handpiece_length_mm: float = DRILL_LENGTH_INSIDE_HANDPIECE_MM,
 ) -> float:
     """返回植体顶端到双导止停台的轴向高度，单位为毫米。"""
 
@@ -16,8 +17,10 @@ def calculate_twin_guide_extension_mm(
         raise ValueError("钻针长度必须大于 0 mm")
     if implant_length_mm <= 0.0:
         raise ValueError("植体长度必须大于 0 mm")
+    if drill_inside_handpiece_length_mm <= 0.0:
+        raise ValueError("钻针位于手机内部的长度必须大于 0 mm")
 
-    extension_mm = drill_length_mm - DRILL_LENGTH_INSIDE_HANDPIECE_MM - implant_length_mm
+    extension_mm = drill_length_mm - drill_inside_handpiece_length_mm - implant_length_mm
     if extension_mm <= 0.0:
         raise ValueError("双导导板延长量必须大于 0 mm")
     return extension_mm

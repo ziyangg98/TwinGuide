@@ -6,7 +6,12 @@ import itertools
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from twin_guide.config import ConnectorAvoidanceOverride, PressBeamGuideEndpointParameters
+from twin_guide.config import (
+    ConnectorAvoidanceOverride,
+    EditorOverrides,
+    GeometryParameters,
+    PressBeamGuideEndpointParameters,
+)
 from twin_guide.geometry import Vec3
 from twin_guide.sleeve_anchors import SleevePlatformEnvelope
 from twin_guide.template_link_points import TemplateLinkPointPlan
@@ -39,6 +44,33 @@ class PointLinkingConfig:
     connector_guide_endpoint: PressBeamGuideEndpointParameters = field(
         default_factory=PressBeamGuideEndpointParameters
     )
+
+    @classmethod
+    def from_geometry(
+        cls,
+        geometry: GeometryParameters,
+        editor_overrides: EditorOverrides,
+    ) -> PointLinkingConfig:
+        """从病例配置生成连接算法输入，集中配置到运行时参数的映射。"""
+
+        path = geometry.connector_path
+        blocks = geometry.connection_blocks
+        return cls(
+            radius_mm=geometry.connector_radius_mm,
+            curve_resolution=path.curve_resolution,
+            recut_sleeve_bore=path.recut_sleeve_bore,
+            endpoint_tension=path.endpoint_tension,
+            contact_tension=path.contact_tension,
+            lower_approach_overlap_mm=path.lower_approach_overlap_mm,
+            lower_dive_merge_arc_mm=path.lower_dive_merge_arc_mm,
+            centerline_spacing_mm=path.centerline_spacing_mm,
+            include_lower_main=blocks.lower_main,
+            include_upper_main=blocks.upper_main,
+            include_press_beam=blocks.press_beam,
+            stop_platform_front_avoidance_mm=geometry.sleeve_stop_front_avoidance_mm,
+            stop_platform_overrides=editor_overrides.connector_avoidance,
+            connector_guide_endpoint=geometry.connector_guide_endpoint,
+        )
 
     def __post_init__(self) -> None:
         """校验梁半径、嵌入量、张力和离散参数。"""
@@ -196,9 +228,7 @@ def _curve_through_contact(
     left_length = left.distance_to(contact)
     right_length = contact.distance_to(right)
     left_tangent = (
-        _projected_direction(contact - left, left_normal)
-        * left_length
-        * config.endpoint_tension
+        _projected_direction(contact - left, left_normal) * left_length * config.endpoint_tension
     )
     contact_tangent = (
         _projected_direction(right - left, contact_normal)
@@ -207,9 +237,7 @@ def _curve_through_contact(
         * config.contact_tension
     )
     right_tangent = (
-        _projected_direction(right - contact, right_normal)
-        * right_length
-        * config.endpoint_tension
+        _projected_direction(right - contact, right_normal) * right_length * config.endpoint_tension
     )
     left_curve = _quintic_segment(
         left,
@@ -268,9 +296,7 @@ def _curve_through_multiple_contacts(
             points[index + 1],
             tangents[index],
             tangents[index + 1],
-            _segment_sample_count(
-                points[index], points[index + 1], config.centerline_spacing_mm
-            ),
+            _segment_sample_count(points[index], points[index + 1], config.centerline_spacing_mm),
         )
         centerline = centerline + (segment if not centerline else segment[1:])
         waypoint_indices.append(len(centerline) - 1)
@@ -510,9 +536,7 @@ def _multi_upper_curve_with_platform_avoidance(
                 }
             )
 
-    def build() -> tuple[
-        tuple[Vec3, ...], tuple[int, ...], tuple[int, ...], tuple[Vec3, ...]
-    ]:
+    def build() -> tuple[tuple[Vec3, ...], tuple[int, ...], tuple[int, ...], tuple[Vec3, ...]]:
         """按当前各导柱双侧偏移量重建跨种植位曲线。"""
 
         waypoints: list[Vec3] = []
@@ -554,9 +578,7 @@ def _multi_upper_curve_with_platform_avoidance(
             end_normal,
             config,
         )
-        contact_indices = tuple(
-            waypoint_indices[3 * index + 1] for index in range(len(sleeves))
-        )
+        contact_indices = tuple(waypoint_indices[3 * index + 1] for index in range(len(sleeves)))
         return curve, waypoint_indices, contact_indices, tuple(route_points)
 
     centerline, _waypoint_indices, contact_indices, route_points = build()
@@ -638,11 +660,13 @@ def _lower_curve_with_local_dive(
         (arc_lengths[-1] - middle_arc) * 0.8,
     )
     left_index = max(
-        index for index, arc in enumerate(arc_lengths[: outer_index + 1])
+        index
+        for index, arc in enumerate(arc_lengths[: outer_index + 1])
         if arc <= middle_arc - merge_arc
     )
     right_index = next(
-        index for index, arc in enumerate(arc_lengths[outer_index:], outer_index)
+        index
+        for index, arc in enumerate(arc_lengths[outer_index:], outer_index)
         if arc >= middle_arc + merge_arc
     )
     left_merge = base_curve[left_index]
@@ -655,9 +679,7 @@ def _lower_curve_with_local_dive(
         base_curve[min(right_index + 1, len(base_curve) - 1)] - right_merge,
         contact_normal,
     )
-    deep_contact_direction = _projected_direction(
-        right_merge - left_merge, contact_normal
-    )
+    deep_contact_direction = _projected_direction(right_merge - left_merge, contact_normal)
     left_tangent = left_approach_direction * (
         left_merge.distance_to(deep_contact) * config.endpoint_tension
     )
@@ -718,8 +740,7 @@ def link_selected_points(
     links: list[PointLink] = []
     if points.template_points.multi_site_paths:
         sleeve_by_index = {
-            selection.guide_index: selection
-            for selection in points.sleeve_anchors.selections
+            selection.guide_index: selection for selection in points.sleeve_anchors.selections
         }
         for path in points.template_points.multi_site_paths:
             ordered_sleeves = tuple(
@@ -776,20 +797,22 @@ def link_selected_points(
                         path.start_source,
                         path.end_source,
                         guide_indices=path.guide_indices,
-                        tube_contacts=tuple(
-                            anchor.position for anchor in sleeve_points
-                        ),
+                        tube_contacts=tuple(anchor.position for anchor in sleeve_points),
                         contact_indices=contact_indices,
                         platform_avoidance_routes=platform_avoidance_routes,
                     )
                 )
     else:
         links = []
-    for sleeve, template in (() if points.template_points.multi_site_paths else zip(
-        points.sleeve_anchors.selections,
-        points.template_points.selections,
-        strict=True,
-    )):
+    for sleeve, template in (
+        ()
+        if points.template_points.multi_site_paths
+        else zip(
+            points.sleeve_anchors.selections,
+            points.template_points.selections,
+            strict=True,
+        )
+    ):
         if not template.feasible:
             raise ValueError(f"导管 {sleeve.guide_index} 的牙科导板侧锚点不可行")
         left_surface = template.left.position
@@ -868,28 +891,36 @@ def link_selected_points(
         press_trajectories = press_beam_points.trajectories
         press_guide_endpoint = press_beam_points.guide_endpoint
         sleeve = press_beam_points.sleeve_anchor
-        sleeve_links = () if sleeve is None else (
-            PressBeamLink(
-                f"inner_sleeve_{sleeve.guide_index}_upper",
-                "inner_sleeve_upper",
-                sleeve.surface_contact,
-                sleeve.surface_normal,
-                sleeve.centerline_anchor,
-                press_junction,
-                (sleeve.centerline_anchor, press_junction),
-            ),
+        sleeve_links = (
+            ()
+            if sleeve is None
+            else (
+                PressBeamLink(
+                    f"inner_sleeve_{sleeve.guide_index}_upper",
+                    "inner_sleeve_upper",
+                    sleeve.surface_contact,
+                    sleeve.surface_normal,
+                    sleeve.centerline_anchor,
+                    press_junction,
+                    (sleeve.centerline_anchor, press_junction),
+                ),
+            )
         )
         extension = press_beam_points.extension_anchor
-        extension_links = () if extension is None else (
-            PressBeamLink(
-                f"terminal_u_{extension.segment}_farthest",
-                "guide_terminal_u_extension",
-                extension.surface_contact,
-                extension.surface_normal,
-                extension.centerline_anchor,
-                press_junction,
-                (extension.centerline_anchor, press_junction),
-            ),
+        extension_links = (
+            ()
+            if extension is None
+            else (
+                PressBeamLink(
+                    f"terminal_u_{extension.segment}_farthest",
+                    "guide_terminal_u_extension",
+                    extension.surface_contact,
+                    extension.surface_normal,
+                    extension.centerline_anchor,
+                    press_junction,
+                    (extension.centerline_anchor, press_junction),
+                ),
+            )
         )
         press_links = (
             *sleeve_links,

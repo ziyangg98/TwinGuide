@@ -39,11 +39,16 @@ def _read_json(path: Path) -> dict[str, object] | None:
 def _write_summary(records: list[dict[str, object]]) -> None:
     SUMMARY_PATH.parent.mkdir(parents=True, exist_ok=True)
     SUMMARY_PATH.write_text(
-        json.dumps({
-            "recognition_profile": "standard_sleeve_reconstruction",
-            "core_grouping_policy": "arch_progress",
-            "cases": records,
-        }, ensure_ascii=False, indent=2, default=str),
+        json.dumps(
+            {
+                "recognition_profile": "standard_sleeve_reconstruction",
+                "core_grouping_policy": "arch_progress",
+                "cases": records,
+            },
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        ),
         encoding="utf-8",
     )
 
@@ -56,8 +61,7 @@ def _read_stage_statuses(output_directory: Path) -> dict[str, str]:
         reports = tuple(output_directory.glob(f"stage-{number:02d}-*.json"))
         if len(reports) != 1:
             raise RuntimeError(
-                f"阶段 {number} 报告数量应为 1，实际为 {len(reports)}："
-                f"{output_directory}"
+                f"阶段 {number} 报告数量应为 1，实际为 {len(reports)}：{output_directory}"
             )
         report = _read_json(reports[0])
         if report is None:
@@ -107,10 +111,7 @@ def main() -> int:
                 validations = validate_guide(artifacts.model_path, config)
             finally:
                 timings["validation"] = time.monotonic() - step_started
-            stage_2_result = _read_json(
-                config.output_directory
-                / "stage-02-tooth-mapping.json"
-            )
+            stage_2_result = _read_json(config.output_directory / "stage-02-tooth-mapping.json")
             validation_rows = [
                 {
                     "name": item.name,
@@ -121,38 +122,32 @@ def main() -> int:
             ]
             stage_statuses = _read_stage_statuses(config.output_directory)
             all_validations_passed = all(item["passed"] for item in validation_rows)
-            all_stages_completed = all(
-                status == "completed" for status in stage_statuses.values()
+            all_stages_completed = all(status == "completed" for status in stage_statuses.values())
+            record.update(
+                {
+                    "status": (
+                        "complete"
+                        if all_validations_passed and all_stages_completed
+                        else ("incomplete" if all_validations_passed else "validation_failed")
+                    ),
+                    "stage_statuses": stage_statuses,
+                    "output_directory": str(config.output_directory),
+                    "model": str(artifacts.model_path),
+                    "model_sha256": hashlib.sha256(artifacts.model_path.read_bytes()).hexdigest(),
+                    "stage_2_result": stage_2_result,
+                    "validation": validation_rows,
+                }
             )
-            record.update({
-                "status": (
-                    "complete"
-                    if all_validations_passed and all_stages_completed
-                    else (
-                        "incomplete"
-                        if all_validations_passed
-                        else "validation_failed"
-                    )
-                ),
-                "stage_statuses": stage_statuses,
-                "output_directory": str(config.output_directory),
-                "model": str(artifacts.model_path),
-                "model_sha256": hashlib.sha256(
-                    artifacts.model_path.read_bytes()
-                ).hexdigest(),
-                "stage_2_result": stage_2_result,
-                "validation": validation_rows,
-            })
         except Exception as error:
-            record.update({
-                "status": "error",
-                "error_type": type(error).__name__,
-                "error": str(error),
-                "traceback": traceback.format_exc(),
-            })
-        record["timings_seconds"] = {
-            name: round(value, 3) for name, value in timings.items()
-        }
+            record.update(
+                {
+                    "status": "error",
+                    "error_type": type(error).__name__,
+                    "error": str(error),
+                    "traceback": traceback.format_exc(),
+                }
+            )
+        record["timings_seconds"] = {name: round(value, 3) for name, value in timings.items()}
         record["elapsed_seconds"] = round(time.monotonic() - started, 3)
         records.append(record)
         _write_summary(records)

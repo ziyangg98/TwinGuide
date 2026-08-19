@@ -99,8 +99,7 @@ class PublicApiTests(unittest.TestCase):
         """验证层消费公开规划结果，不复制阶段选择器。"""
 
         source = (
-            Path(__file__).resolve().parents[2]
-            / "src/twin_guide/guide_validation.py"
+            Path(__file__).resolve().parents[2] / "src/twin_guide/guide_validation.py"
         ).read_text(encoding="utf-8")
         self.assertIn("process = run_generation_process(config)", source)
         for duplicated_selector in (

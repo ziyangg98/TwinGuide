@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from argparse import Namespace
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -18,12 +18,10 @@ from twin_guide.tooth_fdi_mapping_new.recognition import (
 )
 
 from .map_contact_chord_teeth_to_guide import run as _map_to_guide
-
 from .tooth_recognition import (
     ToothRecognitionResult,
     load_tooth_recognition_result,
 )
-
 
 LOCKED_GUIDE_MAPPING_PARAMETERS = {
     "maximum_crown_height_fallback_mm": 1.5,
@@ -79,6 +77,7 @@ class GuideMappingRequest:
 @dataclass(frozen=True)
 class GuideMappingResult:
     """内部算法说明。"""
+
     case_yaml: Path
     output_dir: Path
     profile: GuideMappingProfile
@@ -91,9 +90,7 @@ class GuideMappingResult:
     @property
     def status(self) -> str:
         """内部算法说明。"""
-        return str(
-            self.mapping_report.get("status", "tooth_guide_mapping_needs_review")
-        )
+        return str(self.mapping_report.get("status", "tooth_guide_mapping_needs_review"))
 
     @property
     def complete(self) -> bool:
@@ -118,9 +115,7 @@ class GuideMappingResult:
             "unsafe_recognition_override": self.allow_unsafe_recognition,
             "case_yaml": str(self.case_yaml),
             "profile": asdict(self.profile),
-            "locked_implementation_parameters": dict(
-                LOCKED_GUIDE_MAPPING_PARAMETERS
-            ),
+            "locked_implementation_parameters": dict(LOCKED_GUIDE_MAPPING_PARAMETERS),
             "recognition_manifest": str(self.recognition_manifest_path),
             "outputs": {
                 "guide_mapping_report": str(self.report_path),
@@ -154,17 +149,10 @@ def map_recognized_teeth_to_guide(
                 f"{TOOTH_FDI_MAPPING_NEW_PROFILE_ID!r}, got "
                 f"{recognition.profile.profile_id!r}"
             )
-        if (
-            not recognition.safe_for_downstream_use
-            and not request.allow_unsafe_recognition
-        ):
-            raise GuideMappingError(
-                "fdi_new mapping has not passed all downstream safety gates"
-            )
+        if not recognition.safe_for_downstream_use and not request.allow_unsafe_recognition:
+            raise GuideMappingError("fdi_new mapping has not passed all downstream safety gates")
         if recognition.report_path is None or not recognition.report_path.is_file():
-            raise GuideMappingError(
-                "fdi_new mapping must persist its report before guide mapping"
-            )
+            raise GuideMappingError("fdi_new mapping must persist its report before guide mapping")
         recognition_reference_path = recognition.report_path.resolve()
     else:
         if not recognition.safe_for_guide_mapping:
@@ -211,7 +199,7 @@ def map_recognized_teeth_to_guide(
         case_yaml=case_yaml,
         output_dir=output_dir,
         profile=request.profile,
-        created_at=datetime.now(timezone.utc).isoformat(),
+        created_at=datetime.now(UTC).isoformat(),
         recognition_manifest_path=recognition_reference_path,
         mapping_report=mapping_report,
         manifest_path=manifest_path,
@@ -225,8 +213,8 @@ def map_recognized_teeth_to_guide(
 
 
 __all__ = [
-    "GuideMappingError",
     "LOCKED_GUIDE_MAPPING_PARAMETERS",
+    "GuideMappingError",
     "GuideMappingProfile",
     "GuideMappingRequest",
     "GuideMappingResult",

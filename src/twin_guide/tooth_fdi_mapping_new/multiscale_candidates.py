@@ -14,7 +14,6 @@ from .arch_coordinates import transform_mesh
 from .models import ArchFrame, CoreObservation, CoreTrack, ToothFdiMappingNewProfile
 from .surface_valleys import SurfaceValleyEvidence
 
-
 EPS = 1.0e-9
 
 
@@ -36,11 +35,11 @@ def add_relative_relief_fields(
 ) -> dict[str, object]:
     """算法说明。
 
-Attach a local gingival baseline and relative crown-relief channels.
+    Attach a local gingival baseline and relative crown-relief channels.
 
-    The baseline is the median of several physical-scale grayscale openings.
-    This removes slow scan tilt and gingival-height drift while preserving
-    crown-scale protrusions.  Existing projection fields remain untouched.
+        The baseline is the median of several physical-scale grayscale openings.
+        This removes slow scan tilt and gingival-height drift while preserving
+        crown-scale protrusions.  Existing projection fields remain untouched.
     """
 
     output = dict(maps)
@@ -50,11 +49,13 @@ Attach a local gingival baseline and relative crown-relief channels.
     valid = mask & np.isfinite(height)
     if not np.any(valid):
         shape = mask.shape
-        output.update({
-            "local_gingiva_baseline_mm": np.full(shape, np.nan),
-            "relative_crown_relief_mm": np.full(shape, np.nan),
-            "relative_crown_relief_score": np.zeros(shape, dtype=float),
-        })
+        output.update(
+            {
+                "local_gingiva_baseline_mm": np.full(shape, np.nan),
+                "relative_crown_relief_mm": np.full(shape, np.nan),
+                "relative_crown_relief_score": np.zeros(shape, dtype=float),
+            }
+        )
         return output
     # Nearest-value extension prevents the missing exterior from becoming an
     # artificial low basin during opening.  Results are masked again below.
@@ -63,7 +64,7 @@ Attach a local gingival baseline and relative crown-relief channels.
     filled[~valid] = height[nearest[0][~valid], nearest[1][~valid]]
     baselines = []
     for window_mm in baseline_windows_mm:
-        pixels = max(3, int(round(window_mm / resolution)))
+        pixels = max(3, round(window_mm / resolution))
         if pixels % 2 == 0:
             pixels += 1
         baselines.append(grey_opening(filled, size=(pixels, pixels), mode="nearest"))
@@ -72,12 +73,14 @@ Attach a local gingival baseline and relative crown-relief channels.
     relief = np.maximum(filled - baseline, 0.0)
     baseline[~mask] = np.nan
     relief[~mask] = np.nan
-    output.update({
-        "local_gingiva_baseline_mm": baseline,
-        "relative_crown_relief_mm": relief,
-        "relative_crown_relief_score": _robust_score(relief, mask),
-        "relief_baseline_windows_mm": tuple(float(v) for v in baseline_windows_mm),
-    })
+    output.update(
+        {
+            "local_gingiva_baseline_mm": baseline,
+            "relative_crown_relief_mm": relief,
+            "relative_crown_relief_score": _robust_score(relief, mask),
+            "relief_baseline_windows_mm": tuple(float(v) for v in baseline_windows_mm),
+        }
+    )
     return output
 
 
@@ -100,21 +103,18 @@ def render_multiscale_maps(
             resolution_mm=profile.projection_resolution_mm,
             vertex_scalar_fields=(
                 {
-                    "minimum_curvature_per_mm": (
-                        surface_valleys.minimum_curvature_per_mm
-                    ),
+                    "minimum_curvature_per_mm": (surface_valleys.minimum_curvature_per_mm),
                     "surface_valley_score": surface_valleys.valley_score,
                 }
-                if surface_valleys is not None else None
+                if surface_valleys is not None
+                else None
             ),
         )
         if surface_valleys is not None:
             rendered["surface_valley_metadata"] = {
                 "method": "multi_scale_vertex_normal_shape_operator",
                 "valid_vertex_fraction": surface_valleys.valid_vertex_fraction,
-                "normalization_scale_mm": (
-                    surface_valleys.normalization_scale_mm
-                ),
+                "normalization_scale_mm": (surface_valleys.normalization_scale_mm),
                 "smoothing_iterations": surface_valleys.smoothing_iterations,
             }
         maps_by_quantile[quantile] = add_relative_relief_fields(
@@ -184,10 +184,8 @@ def _raw_core_observations(
     depth = distance_transform_edt(mask) * resolution
     silhouette_components = label(mask, connectivity=2)
     component_pixel_counts = np.bincount(silhouette_components.ravel())
-    largest_component_pixels = int(
-        np.max(component_pixel_counts[1:], initial=1)
-    )
-    peak_window = max(3, int(round(1.6 / resolution)))
+    largest_component_pixels = int(np.max(component_pixel_counts[1:], initial=1))
+    peak_window = max(3, round(1.6 / resolution))
     if peak_window % 2 == 0:
         peak_window += 1
     peaks = mask & (depth >= max(0.75, 3.0 * resolution))
@@ -201,18 +199,17 @@ def _raw_core_observations(
         if not len(rows):
             continue
         weights = np.maximum(depth[rows, columns], 0.05) ** 2
-        center = np.asarray([
-            np.average(lr[rows], weights=weights),
-            np.average(ap[columns], weights=weights),
-        ])
+        center = np.asarray(
+            [
+                np.average(lr[rows], weights=weights),
+                np.average(ap[columns], weights=weights),
+            ]
+        )
         center_row = int(np.argmin(np.abs(lr - center[0])))
         center_column = int(np.argmin(np.abs(ap - center[1])))
-        silhouette_component = int(
-            silhouette_components[center_row, center_column]
-        )
+        silhouette_component = int(silhouette_components[center_row, center_column])
         component_area_mm2 = float(
-            np.count_nonzero(silhouette_components == silhouette_component)
-            * resolution**2
+            np.count_nonzero(silhouette_components == silhouette_component) * resolution**2
         )
         if silhouette_component == 0 or component_area_mm2 < 4.0:
             continue
@@ -228,27 +225,28 @@ def _raw_core_observations(
             depth,
         )
         radius_quality = float(np.clip(radius / 4.0, 0.0, 1.0))
-        output.append(CoreObservation(
-            scale_index=scale_index,
-            height_quantile=quantile,
-            center_lr_ap_mm=(float(center[0]), float(center[1])),
-            s_mm=s_mm,
-            u_mm=u_mm,
-            interior_radius_mm=radius,
-            # V2.1 records relative relief for gingiva release and transparent
-            # QA, but deliberately leaves the proven V2 alignment likelihood
-            # unchanged.  Promoting relief into the hypothesis cost requires a
-            # larger labelled development set rather than a new hand-tuned mix.
-            quality=radius_quality,
-            mesiodistal_width_mm=mesiodistal,
-            buccolingual_width_mm=buccolingual,
-            relative_crown_height_mm=relative_height,
-            relief_quality=relief_quality,
-            projection_component_area_ratio=float(
-                component_pixel_counts[silhouette_component]
-                / max(largest_component_pixels, 1)
-            ),
-        ))
+        output.append(
+            CoreObservation(
+                scale_index=scale_index,
+                height_quantile=quantile,
+                center_lr_ap_mm=(float(center[0]), float(center[1])),
+                s_mm=s_mm,
+                u_mm=u_mm,
+                interior_radius_mm=radius,
+                # V2.1 records relative relief for gingiva release and transparent
+                # QA, but deliberately leaves the proven V2 alignment likelihood
+                # unchanged.  Promoting relief into the hypothesis cost requires a
+                # larger labelled development set rather than a new hand-tuned mix.
+                quality=radius_quality,
+                mesiodistal_width_mm=mesiodistal,
+                buccolingual_width_mm=buccolingual,
+                relative_crown_height_mm=relative_height,
+                relief_quality=relief_quality,
+                projection_component_area_ratio=float(
+                    component_pixel_counts[silhouette_component] / max(largest_component_pixels, 1)
+                ),
+            )
+        )
     return output
 
 
@@ -257,8 +255,10 @@ def _track_center(observations: list[CoreObservation]) -> tuple[np.ndarray, floa
     weights = np.asarray([max(item.interior_radius_mm, 0.1) ** 2 for item in observations])
     centers = np.asarray([item.center_lr_ap_mm for item in observations])
     center = np.average(centers, axis=0, weights=weights)
-    return center, float(np.average([item.s_mm for item in observations], weights=weights)), float(
-        np.average([item.u_mm for item in observations], weights=weights)
+    return (
+        center,
+        float(np.average([item.s_mm for item in observations], weights=weights)),
+        float(np.average([item.u_mm for item in observations], weights=weights)),
     )
 
 
@@ -270,9 +270,9 @@ def detect_core_tracks(
     """算法说明。"""
     all_observations: list[CoreObservation] = []
     for scale_index, quantile in enumerate(profile.height_quantiles):
-        all_observations.extend(_raw_core_observations(
-            maps_by_quantile[quantile], frame, scale_index, quantile
-        ))
+        all_observations.extend(
+            _raw_core_observations(maps_by_quantile[quantile], frame, scale_index, quantile)
+        )
     # Start with high-depth observations, but prevent two observations from the
     # same scale being silently collapsed into one atomic track.
     grouped: list[list[CoreObservation]] = []
@@ -299,67 +299,71 @@ def detect_core_tracks(
         else:
             grouped.append([observation])
 
-    raw_scales = [
-        2.0 * np.median([item.interior_radius_mm for item in group])
-        for group in grouped
-    ]
+    raw_scales = [2.0 * np.median([item.interior_radius_mm for item in group]) for group in grouped]
     median_scale = float(np.median(raw_scales)) if raw_scales else 8.0
     lower, upper = 0.65 * median_scale, 1.35 * median_scale
     tracks: list[CoreTrack] = []
     for group in grouped:
         center, s_mm, u_mm = _track_center(group)
         support_scales = tuple(sorted({item.scale_index for item in group}))
-        local_scale = float(np.clip(
-            2.0 * np.median([item.interior_radius_mm for item in group]),
-            lower,
-            upper,
-        ))
+        local_scale = float(
+            np.clip(
+                2.0 * np.median([item.interior_radius_mm for item in group]),
+                lower,
+                upper,
+            )
+        )
         persistence = len(support_scales) / len(profile.height_quantiles)
         quality = float(np.mean([item.quality for item in group]))
         mesiodistal = float(np.median([item.mesiodistal_width_mm for item in group]))
         buccolingual = float(np.median([item.buccolingual_width_mm for item in group]))
-        relative_height = float(np.median([
-            item.relative_crown_height_mm for item in group
-        ]))
+        relative_height = float(np.median([item.relative_crown_height_mm for item in group]))
         relief_quality = float(np.mean([item.relief_quality for item in group]))
-        component_area_ratio = float(np.median([
-            item.projection_component_area_ratio for item in group
-        ]))
+        component_area_ratio = float(
+            np.median([item.projection_component_area_ratio for item in group])
+        )
         crownness = float(np.clip(0.65 * persistence + 0.35 * quality, 1.0e-4, 0.9999))
         # Geometry far outside the local arch corridor is an interference
         # component, not an atomic tooth candidate.  The threshold is scaled
         # by measured crown diameter rather than a fixed global millimetre cut.
         if abs(u_mm) > 1.35 * local_scale:
             continue
-        tracks.append(CoreTrack(
-            track_id=0,
-            observations=tuple(sorted(group, key=lambda item: item.scale_index)),
-            center_lr_ap_mm=(float(center[0]), float(center[1])),
-            s_mm=s_mm,
-            u_mm=u_mm,
-            local_scale_mm=local_scale,
-            persistence=persistence,
-            crownness=crownness,
-            support_scale_indices=support_scales,
-            mesiodistal_width_mm=mesiodistal,
-            buccolingual_width_mm=buccolingual,
-            relative_crown_height_mm=relative_height,
-            relief_quality=relief_quality,
-            projection_component_area_ratio=component_area_ratio,
-        ))
+        tracks.append(
+            CoreTrack(
+                track_id=0,
+                observations=tuple(sorted(group, key=lambda item: item.scale_index)),
+                center_lr_ap_mm=(float(center[0]), float(center[1])),
+                s_mm=s_mm,
+                u_mm=u_mm,
+                local_scale_mm=local_scale,
+                persistence=persistence,
+                crownness=crownness,
+                support_scale_indices=support_scales,
+                mesiodistal_width_mm=mesiodistal,
+                buccolingual_width_mm=buccolingual,
+                relative_crown_height_mm=relative_height,
+                relief_quality=relief_quality,
+                projection_component_area_ratio=component_area_ratio,
+            )
+        )
     tracks.sort(key=lambda item: item.s_mm)
     stable_reference = [
-        item for item in tracks
+        item
+        for item in tracks
         if item.persistence >= profile.minimum_track_persistence
         and item.relative_crown_height_mm > 0.0
         and item.relief_quality > 0.0
     ]
-    reference_height = float(np.median([
-        item.relative_crown_height_mm for item in stable_reference
-    ])) if stable_reference else 0.0
-    reference_quality = float(np.median([
-        item.relief_quality for item in stable_reference
-    ])) if stable_reference else 0.0
+    reference_height = (
+        float(np.median([item.relative_crown_height_mm for item in stable_reference]))
+        if stable_reference
+        else 0.0
+    )
+    reference_quality = (
+        float(np.median([item.relief_quality for item in stable_reference]))
+        if stable_reference
+        else 0.0
+    )
     if reference_height > 0.0 and reference_quality > 0.0:
         rescored = []
         for track in tracks:
@@ -371,23 +375,17 @@ def detect_core_tracks(
                 and track.projection_component_area_ratio
                 < profile.maximum_low_relief_component_area_ratio
             ):
-                support = float(np.clip(
-                    (
-                        height_ratio
-                        / profile.minimum_relative_crown_height_ratio
+                support = float(
+                    np.clip(
+                        (height_ratio / profile.minimum_relative_crown_height_ratio)
+                        * (quality_ratio / profile.minimum_relative_relief_quality_ratio),
+                        0.05,
+                        1.0,
                     )
-                    * (
-                        quality_ratio
-                        / profile.minimum_relative_relief_quality_ratio
-                    ),
-                    0.05,
-                    1.0,
-                ))
+                )
             else:
                 support = 1.0
-            rescored.append(replace(
-                track, relative_3d_tooth_support=support
-            ))
+            rescored.append(replace(track, relative_3d_tooth_support=support))
         tracks = rescored
     tracks = [replace(track, track_id=index + 1) for index, track in enumerate(tracks)]
     if tracks:

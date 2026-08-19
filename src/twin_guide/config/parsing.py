@@ -11,6 +11,7 @@ from twin_guide.errors import ConfigurationError
 
 CASE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
+
 def _mapping(value: object, name: str) -> dict[str, object]:
     """校验配置值为字符串键映射并返回该映射。"""
 
@@ -41,14 +42,21 @@ def _reject_unknown(values: dict[str, object], allowed: set[str], section: str) 
         raise ConfigurationError(f"{section} 包含未知字段：{', '.join(unknown)}")
 
 
-def _number(value: object, name: str, *, positive: bool = False) -> float:
-    """将配置值校验为有限非负数或正数。"""
+def _finite_number(value: object, name: str) -> float:
+    """将配置值校验为允许正负号的有限数。"""
 
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise ConfigurationError(f"{name} 必须为数值")
     number = float(value)
     if not math.isfinite(number):
         raise ConfigurationError(f"{name} 必须为有限数")
+    return number
+
+
+def _number(value: object, name: str, *, positive: bool = False) -> float:
+    """将配置值校验为有限非负数或正数。"""
+
+    number = _finite_number(value, name)
     if positive and number <= 0:
         raise ConfigurationError(f"{name} 必须为正数")
     if not positive and number < 0:
@@ -129,7 +137,6 @@ def _json_path(value: object, base_directory: Path, name: str) -> Path:
     if path.suffix.lower() != ".json" or not path.is_file():
         raise ConfigurationError(f"{name} 必须指向已存在的 JSON 文件：{path}")
     return path
-
 
 
 __all__ = [

@@ -14,11 +14,7 @@ from twin_guide.config import CaseConfig, require_production_review
 def _command_arguments() -> list[str]:
     """返回标准命令行或 Blender ``--`` 之后的参数。"""
 
-    return (
-        sys.argv[sys.argv.index("--") + 1 :]
-        if "--" in sys.argv
-        else sys.argv[1:]
-    )
+    return sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else sys.argv[1:]
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -71,9 +67,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         命令成功时返回 ``None``；参数或验证失败时以非零状态退出。
     """
 
-    arguments = _parser().parse_args(
-        _command_arguments() if argv is None else list(argv)
-    )
+    arguments = _parser().parse_args(_command_arguments() if argv is None else list(argv))
     config = CaseConfig.from_yaml(arguments.config)
     if arguments.command == "generate":
         from twin_guide.guide_generation import generate_guide

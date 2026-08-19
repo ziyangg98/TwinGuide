@@ -46,7 +46,9 @@ t_i^{U}=t_i^+-c_U-r_c,\qquad
 t_i^{L}=t_i^-+c_L+r_c,
 $$
 
-默认 $c_U=2.0$ mm、$c_L=1.0$ mm。令闭合低端为
+其中 $c_U$ 由 `sleeve_stop_clearance_mm` 配置，$c_L$ 由
+`anchor_selection.lower_edge_clearance_mm` 配置。
+令闭合低端为
 $\mathbf E_i=\mathbf C_i+t_i^+\mathbf a_i$，则任一轴向位置 $t$ 的截面中心与外壁
 $Q$ 点为
 
@@ -77,7 +79,8 @@ $$
 o_i^U=\min(2r_c,w_i-c_b),
 $$
 
-其中 $c_b=0.01$ mm 是导孔余量。低端允许全直径预埋：
+其中 $c_b$ 是 `anchor_selection.upper_cutter_clearance_mm`。
+低端允许全直径预埋：
 
 $$
 o_i^L=2r_c.
@@ -197,7 +200,8 @@ $$
 \right\}.
 $$
 
-当前生成流程传入的 $c_T$ 等于连接梁半径加融合体素尺寸。解析导孔/操作窗按
+默认 $c_T$ 等于连接梁半径加融合体素尺寸，也可通过
+`anchor_selection.clearance_mm` 显式覆盖。解析导孔/操作窗按
 有符号距离筛选；轴扫观察窗则读取实际 PLY cutter，同时要求候选点位于切除体外且
 到其表面的距离不小于 $c_T$。对导管上下 $P$ 中点 $\mathbf m_P$，左右方向为
 
@@ -209,8 +213,11 @@ $$
 
 $$
 \|\mathbf A^- -\mathbf A^+\|\ge
-\max(r_s,2.5r_c).
+\max(r_s,2k_s r_c).
 $$
+
+其中 $k_s$ 是 `anchor_selection.minimum_span_connector_diameters`；
+$2r_c$ 为连接梁直径。
 
 可行点对按
 

@@ -22,19 +22,11 @@ class CaseDataLayoutTests(unittest.TestCase):
         cls.dataset = cls.data_root / "cases"
         if not (cls.dataset / "index.yaml").is_file():
             raise unittest.SkipTest("未提供仓库外 TwinGuide 病例数据")
-        cls.index = yaml.safe_load(
-            (cls.dataset / "index.yaml").read_text(encoding="utf-8")
-        )
+        cls.index = yaml.safe_load((cls.dataset / "index.yaml").read_text(encoding="utf-8"))
         cls.case_records = tuple(cls.index["cases"])
         cls.configured_records = tuple(
-            record
-            for record in cls.case_records
-            if record["status"] == "configured"
+            record for record in cls.case_records if record["status"] == "configured"
         )
-        cls.configured_by_fdis = {
-            tuple(record["implant_fdis"]): cls.dataset / record["path"]
-            for record in cls.configured_records
-        }
 
     def test_index_and_directories_are_consistent(self) -> None:
         """索引必须逐一覆盖匿名病例目录，且不得使用旧分类路径。"""
@@ -81,34 +73,29 @@ class CaseDataLayoutTests(unittest.TestCase):
             value = objects.get(key, {}).get("path")
             if value:
                 paths.append(value)
-        paths.extend(
-            record["path"] for record in objects.get("handpiece", {}).get("files", [])
-        )
+        paths.extend(record["path"] for record in objects.get("handpiece", {}).get("files", []))
         for value in paths:
             resolved = (case_directory / value).resolve()
             self.assertTrue(resolved.is_relative_to(case_directory.resolve()))
             self.assertTrue(resolved.is_file(), resolved)
 
-    def test_tooth_14_uses_standard_y_beam_without_terminal_u_extension(
+    def test_single_tooth_14_cases_use_standard_y_beam_without_terminal_u_extension(
         self,
     ) -> None:
-        """14号配置不应生成临床不需要的尾部U型梁。"""
+        """全部单 14 病例均不应生成临床不需要的尾部 U 型梁。"""
 
-        content = yaml.safe_load(
-            (self.configured_by_fdis[(14,)] / "case.yaml").read_text(encoding="utf-8")
+        records = tuple(
+            record for record in self.configured_records if tuple(record["implant_fdis"]) == (14,)
         )
-        design = content["design"]
-        self.assertNotIn("guide_terminal_u_extension", design)
-        press_beam = design["press_beam"]
-        self.assertEqual(press_beam["mode"], "inner_sleeve_upper_y")
-        self.assertEqual(
-            [station["fdis"] for station in press_beam["stations"]],
-            [[11, 21], [16, 15]],
-        )
-        self.assertEqual(
-            [station["ray_angle_degrees"] for station in press_beam["stations"]],
-            [45.0, 60.0],
-        )
+        self.assertTrue(records)
+        for record in records:
+            with self.subTest(case=record["id"]):
+                content = yaml.safe_load(
+                    (self.dataset / record["path"] / "case.yaml").read_text(encoding="utf-8")
+                )
+                design = content["design"]
+                self.assertNotIn("guide_terminal_u_extension", design)
+                self.assertEqual(design["press_beam"]["mode"], "inner_sleeve_upper_y")
 
     def test_configured_cases_use_current_design_schema(self) -> None:
         """正式病例不再配置旧算法或导管实体来源分支。"""

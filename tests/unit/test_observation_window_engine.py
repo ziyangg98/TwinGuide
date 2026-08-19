@@ -16,16 +16,10 @@ from twin_guide.observation_window_engine._core import (
 class ObservationWindowConstraintSolverTests(unittest.TestCase):
     def test_structured_sweep_contains_axis_without_cell_booleans(self) -> None:
         angles = np.deg2rad((0.0, 45.0, 90.0))
-        directions = np.column_stack(
-            (np.cos(angles), np.sin(angles), np.zeros(len(angles)))
-        )
-        outer = np.stack(
-            (2.0 * directions, 2.0 * directions + (0.0, 0.0, 1.0))
-        )
+        directions = np.column_stack((np.cos(angles), np.sin(angles), np.zeros(len(angles))))
+        outer = np.stack((2.0 * directions, 2.0 * directions + (0.0, 0.0, 1.0)))
         inner_directions = directions[::-1]
-        inner = np.stack(
-            (-inner_directions, -inner_directions + (0.0, 0.0, 1.0))
-        )
+        inner = np.stack((-inner_directions, -inner_directions + (0.0, 0.0, 1.0)))
 
         cutter = _structured_sweep_volume(outer, inner)
 

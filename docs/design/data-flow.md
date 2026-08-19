@@ -5,7 +5,9 @@
 `CaseConfig` 是文件路径和数值参数的唯一入口；`analyze_case()` 读取网格并建立
 各步骤共用的 `CaseAnalysis`。每个种植位置的导柱参数由全局 `SleeveParameters`、
 该位置的三项高度覆盖和编辑器三项高度调整合并得到；其余 9 项保持全局一致。
-连接梁参数由 `GeometryParameters` 提供。
+连接梁参数由 `GeometryParameters` 提供，其中 `anchor_selection` 控制第 4 阶段
+导柱/导板锚点，`connector_path` 控制第 6 阶段中心线。第 3 阶段观察窗的布尔体和
+QA 阈值由 `WindowParameters.observation_solver` 提供；这些参数都会进入生成缓存指纹。
 `SleeveEstimate.c_opening_direction` 保存世界坐标单位向量。它是两导管中心连线
 在各自轴线法平面上的投影，因此两个 C 口相对。
 

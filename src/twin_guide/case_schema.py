@@ -6,7 +6,6 @@ from copy import deepcopy
 
 from twin_guide.errors import ConfigurationError
 
-
 _OBSERVATION_DEFAULTS: dict[str, object] = {
     "extent_mode": "center_to_center",
     "height_mm": 5.0,
@@ -127,7 +126,9 @@ def _normalize_observation_windows(value: object) -> object:
         if "fdi" in window:
             _reject_unknown(window, {"id", "fdi", *_OBSERVATION_OVERRIDE_FIELDS}, section)
             teeth = _sequence(window.get("fdi"), f"{section}.fdi")
-            overrides = {key: item for key, item in window.items() if key in _OBSERVATION_OVERRIDE_FIELDS}
+            overrides = {
+                key: item for key, item in window.items() if key in _OBSERVATION_OVERRIDE_FIELDS
+            }
         else:
             _reject_unknown(window, {"id", "teeth", "extent", "overrides"}, section)
             teeth = _sequence(window.get("teeth"), f"{section}.teeth")
@@ -135,9 +136,7 @@ def _normalize_observation_windows(value: object) -> object:
                 window.get("overrides"), _OBSERVATION_OVERRIDE_FIELDS, f"{section}.overrides"
             )
             if "extent" in window and "extent_mode" in overrides:
-                raise ConfigurationError(
-                    f"{section} 不得同时配置 extent 和 overrides.extent_mode"
-                )
+                raise ConfigurationError(f"{section} 不得同时配置 extent 和 overrides.extent_mode")
             if "extent" in window:
                 overrides["extent_mode"] = window["extent"]
         if len(teeth) != 2 or any(
@@ -178,9 +177,7 @@ def _expand_guide_terminal(
         f"{section}.terminal",
     )
     if "missing_fdi" not in terminal or "reference_fdi" not in terminal:
-        raise ConfigurationError(
-            f"{section}.terminal 必须配置 missing_fdi 和 reference_fdi"
-        )
+        raise ConfigurationError(f"{section}.terminal 必须配置 missing_fdi 和 reference_fdi")
     terminal_overrides = _overrides(
         terminal.get("overrides"),
         {"node_radius_factor", "distal_offset_sleeve_diameters"},
@@ -250,9 +247,7 @@ def _normalize_guide_anchors(value: object) -> object:
         _reject_unknown(compact, {"mode", "endpoints", "terminal"}, section)
         endpoints = _sequence(compact.get("endpoints"), f"{section}.endpoints")
         if len(endpoints) != len(expected_ids):
-            raise ConfigurationError(
-                f"{section}.{mode} 必须配置 {len(expected_ids)} 个 endpoints"
-            )
+            raise ConfigurationError(f"{section}.{mode} 必须配置 {len(expected_ids)} 个 endpoints")
         for index, raw_endpoint in enumerate(endpoints):
             name = f"{section}.endpoints[{index}]"
             endpoint = _mapping(raw_endpoint, name)
@@ -261,9 +256,7 @@ def _normalize_guide_anchors(value: object) -> object:
             has_common = "station" in endpoint or "angles" in endpoint
             has_independent = "u" in endpoint or "back_u" in endpoint
             if has_common == has_independent:
-                raise ConfigurationError(
-                    f"{name} 必须选择 station+angles 或 u+back_u 之一"
-                )
+                raise ConfigurationError(f"{name} 必须选择 station+angles 或 u+back_u 之一")
             if has_common:
                 if "station" not in endpoint or "angles" not in endpoint:
                     raise ConfigurationError(f"{name} 必须同时配置 station 和 angles")
@@ -314,11 +307,12 @@ def _normalize_press_beam(value: object) -> object:
     """内部算法说明。"""
     if not isinstance(value, dict):
         return deepcopy(value)
-    is_compact = "anchors" in value or any(
-        key in value for key in ("overrides", "extension")
-    ) or any(
-        isinstance(item, dict) and "teeth" in item
-        for item in value.get("stations", []) or []
+    is_compact = (
+        "anchors" in value
+        or any(key in value for key in ("overrides", "extension"))
+        or any(
+            isinstance(item, dict) and "teeth" in item for item in value.get("stations", []) or []
+        )
     )
     if not is_compact:
         return deepcopy(value)

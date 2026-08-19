@@ -120,10 +120,7 @@ def _line_samples(
     """按最大步长在线段上均匀采样。"""
 
     count = max(2, math.ceil(float(np.linalg.norm(end - start)) / maximum_step_mm) + 1)
-    return tuple(
-        start + (end - start) * (index / (count - 1))
-        for index in range(count)
-    )
+    return tuple(start + (end - start) * (index / (count - 1)) for index in range(count))
 
 
 def _turnaround_distal_positions(
@@ -140,9 +137,7 @@ def _turnaround_distal_positions(
     apex_distal_mm = distal_surface_extent_mm + centerline_clearance_mm
     entry_distal_mm = apex_distal_mm - turnaround_depth_mm
     if entry_distal_mm <= 0.0:
-        raise GeometryError(
-            "末端 U 型梁 turnaround_depth_mm 过大：回转入口会越过末端牙中心"
-        )
+        raise GeometryError("末端 U 型梁 turnaround_depth_mm 过大：回转入口会越过末端牙中心")
     return entry_distal_mm, apex_distal_mm
 
 
@@ -269,10 +264,7 @@ def _terminal_contour_extents(
     e_lr = _unit(np.asarray(raw_lr, dtype=float), "牙冠轮廓左右轴")
     e_ap = _unit(np.asarray(raw_ap, dtype=float), "牙冠轮廓前后轴")
     contour = np.asarray(
-        [
-            origin + e_lr * float(point[0]) + e_ap * float(point[1])
-            for point in contour_value
-        ],
+        [origin + e_lr * float(point[0]) + e_ap * float(point[1]) for point in contour_value],
         dtype=float,
     )
     relative = contour - terminal_center
@@ -292,8 +284,7 @@ def _station_center(
     """计算牙位站所有牙冠中心的平均位置。"""
 
     values = [
-        np.asarray(positions[fdi].crown_point.as_tuple(), dtype=float)
-        for fdi in station_fdis
+        np.asarray(positions[fdi].crown_point.as_tuple(), dtype=float) for fdi in station_fdis
     ]
     return np.mean(values, axis=0)
 
@@ -315,9 +306,7 @@ def select_guide_terminal_u_extension(
     ):
         raise GeometryError("末端 U 型延伸梁配置不完整")
 
-    positions = {
-        position.fdi: position for position in context.tooth_identification.positions
-    }
+    positions = {position.fdi: position for position in context.tooth_identification.positions}
     required_fdis = {
         *config.anchor_station.fdis,
         config.terminal_fdi,
@@ -327,17 +316,11 @@ def select_guide_terminal_u_extension(
     if missing:
         raise GeometryError(f"末端 U 型延伸梁引用了未识别牙位：{missing}")
     terminal_quadrant, terminal_position = divmod(config.terminal_fdi, 10)
-    neighbor_quadrant, neighbor_position = divmod(
-        config.reference_neighbor_fdi, 10
-    )
-    if (
-        terminal_quadrant != neighbor_quadrant
-        or terminal_position != neighbor_position + 1
-    ):
+    neighbor_quadrant, neighbor_position = divmod(config.reference_neighbor_fdi, 10)
+    if terminal_quadrant != neighbor_quadrant or terminal_position != neighbor_position + 1:
         raise GeometryError("末端 U 型延伸梁参考牙必须是终末牙的直接近中邻牙")
     if any(
-        divmod(fdi, 10)[0] == terminal_quadrant
-        and divmod(fdi, 10)[1] > terminal_position
+        divmod(fdi, 10)[0] == terminal_quadrant and divmod(fdi, 10)[1] > terminal_position
         for fdi in positions
     ):
         raise GeometryError("末端 U 型延伸梁 terminal_fdi 不是当前牙列末端")
@@ -346,21 +329,19 @@ def select_guide_terminal_u_extension(
         context.case,
         context.tooth_identification,
         (config.anchor_station,),
-        ((
-            config.u_side_ray_angle_degrees,
-            config.back_u_side_ray_angle_degrees,
-        ),),
+        (
+            (
+                config.u_side_ray_angle_degrees,
+                config.back_u_side_ray_angle_degrees,
+            ),
+        ),
     )[0]
     terminal = positions[config.terminal_fdi]
     neighbor = positions[config.reference_neighbor_fdi]
-    coordinate_system = context.tooth_identification.mapping_report.get(
-        "coordinate_system"
-    )
+    coordinate_system = context.tooth_identification.mapping_report.get("coordinate_system")
     if not isinstance(coordinate_system, dict):
         raise GeometryError("牙位报告缺少 coordinate_system")
-    occlusal = _unit(
-        np.asarray(coordinate_system.get("e_occ"), dtype=float), "牙合轴"
-    )
+    occlusal = _unit(np.asarray(coordinate_system.get("e_occ"), dtype=float), "牙合轴")
 
     terminal_center = np.asarray(terminal.crown_point.as_tuple(), dtype=float)
     neighbor_center = np.asarray(neighbor.crown_point.as_tuple(), dtype=float)
@@ -387,9 +368,7 @@ def select_guide_terminal_u_extension(
     )
     if contour_extents is None:
         dentition = _load_mesh(context.case.config.inputs.patient_dentition)
-        terminal_slot = _slot(
-            context.tooth_identification.mapping_report, config.terminal_fdi
-        )
+        terminal_slot = _slot(context.tooth_identification.mapping_report, config.terminal_fdi)
         distal_extent = _distal_extent_from_slot(
             terminal_slot,
             terminal.arch_s_mm,
@@ -405,23 +384,14 @@ def select_guide_terminal_u_extension(
         )
     else:
         distal_extent, u_surface, back_u_surface = contour_extents
-    centerline_clearance = (
-        config.radius_mm
-        + config.dental_clearance_mm
-        + config.safety_margin_mm
-    )
+    centerline_clearance = config.radius_mm + config.dental_clearance_mm + config.safety_margin_mm
     u_offset = u_surface - centerline_clearance
     back_u_offset = back_u_surface + centerline_clearance
 
     u_anchor = np.asarray(selection.first.position.as_tuple(), dtype=float)
     back_anchor = np.asarray(selection.second.position.as_tuple(), dtype=float)
-    anchor_height = 0.5 * (
-        float(np.dot(u_anchor, occlusal))
-        + float(np.dot(back_anchor, occlusal))
-    )
-    base = terminal_center + occlusal * (
-        anchor_height - float(np.dot(terminal_center, occlusal))
-    )
+    anchor_height = 0.5 * (float(np.dot(u_anchor, occlusal)) + float(np.dot(back_anchor, occlusal)))
+    base = terminal_center + occlusal * (anchor_height - float(np.dot(terminal_center, occlusal)))
     u_terminal = base + outward * u_offset
     back_terminal = base + outward * back_u_offset
     entry_s, apex_distal_s = _turnaround_distal_positions(
@@ -455,12 +425,7 @@ def select_guide_terminal_u_extension(
     lateral_radius = 0.5 * (back_u_offset - u_offset)
     arc_sample_count = max(
         33,
-        math.ceil(
-            math.pi
-            * max(config.turnaround_depth_mm, lateral_radius)
-            / 0.30
-        )
-        + 1,
+        math.ceil(math.pi * max(config.turnaround_depth_mm, lateral_radius) / 0.30) + 1,
     )
     arc = tuple(
         base
@@ -473,8 +438,7 @@ def select_guide_terminal_u_extension(
         + outward
         * (
             lateral_mid
-            + lateral_radius
-            * math.sin(-math.pi / 2.0 + math.pi * index / (arc_sample_count - 1))
+            + lateral_radius * math.sin(-math.pi / 2.0 + math.pi * index / (arc_sample_count - 1))
         )
         for index in range(arc_sample_count)
     )
@@ -488,9 +452,7 @@ def select_guide_terminal_u_extension(
     centerline = tuple(_vec3(point) for point in centerline_arrays)
     u_side_centerline = tuple(_vec3(point) for point in (*u_side, *u_run[1:]))
     turnaround_centerline = tuple(_vec3(point) for point in arc)
-    back_u_side_centerline = tuple(
-        _vec3(point) for point in (*back_run, *back_side[1:])
-    )
+    back_u_side_centerline = tuple(_vec3(point) for point in (*back_run, *back_side[1:]))
     apex = base + distal * apex_distal_s + outward * lateral_mid
     return GuideTerminalUExtensionPlan(
         centerline=centerline,
@@ -513,9 +475,7 @@ def select_guide_terminal_u_extension(
         distal_surface_extent_mm=distal_extent,
         turnaround_entry_distal_mm=entry_s,
         turnaround_apex_distal_mm=apex_distal_s,
-        turnaround_surface_clearance_mm=(
-            apex_distal_s - config.radius_mm - distal_extent
-        ),
+        turnaround_surface_clearance_mm=(apex_distal_s - config.radius_mm - distal_extent),
         u_centerline_offset_mm=u_offset,
         back_u_centerline_offset_mm=back_u_offset,
     )

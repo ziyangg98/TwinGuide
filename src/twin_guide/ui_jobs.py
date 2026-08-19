@@ -142,6 +142,7 @@ def start_background_job(
     config_path: Path,
     output_directory: Path,
     manifest_path: Path,
+    formal_output_directory: Path | None = None,
     revision: int = 0,
     changed_feature_ids: tuple[str, ...] = (),
 ) -> BackgroundJob:
@@ -152,9 +153,12 @@ def start_background_job(
         "from twin_guide.blender_ui_worker import launch_worker_from_argv; "
         "launch_worker_from_argv()"
     )
-    worker_root = (
-        CaseConfig.from_yaml(config_path).output_directory / ".cache" / "ui-worker"
+    formal_output = (
+        CaseConfig.from_yaml(config_path).output_directory
+        if formal_output_directory is None
+        else formal_output_directory.resolve()
     )
+    worker_root = formal_output / ".cache" / "ui-worker"
     request_path = worker_root / "request.json"
     if (
         _WORKER_PROCESS is None
@@ -201,6 +205,7 @@ def start_background_job(
             "mode": mode,
             "config_path": str(config_path),
             "output_directory": str(output_directory),
+            "formal_output_directory": str(formal_output),
             "manifest_path": str(manifest_path),
             "revision": revision,
             "changed_feature_ids": list(changed_feature_ids),

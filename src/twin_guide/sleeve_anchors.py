@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from twin_guide.config import DEFAULT_CONNECTOR_DIAMETER_MM
+from twin_guide.config import DEFAULT_CONNECTOR_DIAMETER_MM, GeometryParameters
 from twin_guide.geometry import Vec3, project_to_plane
 from twin_guide.models import CaseAnalysis, GuideSleeve
 from twin_guide.types import SleeveGenerationResult
@@ -28,17 +28,33 @@ class SleeveAnchorSelectionConfig:
     axial_margin_mm: float = 0.8
     upper_cutter_clearance_mm: float = 0.01
 
+    @classmethod
+    def from_geometry(cls, geometry: GeometryParameters) -> SleeveAnchorSelectionConfig:
+        """从病例几何配置生成算法输入，避免调用方重复搬运字段。"""
+
+        anchors = geometry.anchor_selection
+        return cls(
+            connector_radius_mm=geometry.connector_radius_mm,
+            upper_edge_clearance_mm=geometry.sleeve_stop_clearance_mm,
+            lower_edge_clearance_mm=anchors.lower_edge_clearance_mm,
+            axial_margin_mm=anchors.axial_margin_mm,
+            upper_cutter_clearance_mm=anchors.upper_cutter_clearance_mm,
+        )
+
     def __post_init__(self) -> None:
         """校验半径、净距和安全余量。"""
 
         if self.connector_radius_mm <= 0.0:
             raise ValueError("连接梁半径必须为正")
-        if min(
-            self.upper_edge_clearance_mm,
-            self.lower_edge_clearance_mm,
-            self.axial_margin_mm,
-            self.upper_cutter_clearance_mm,
-        ) < 0.0:
+        if (
+            min(
+                self.upper_edge_clearance_mm,
+                self.lower_edge_clearance_mm,
+                self.axial_margin_mm,
+                self.upper_cutter_clearance_mm,
+            )
+            < 0.0
+        ):
             raise ValueError("导管锚点净距和安全余量不得为负")
 
 
@@ -134,9 +150,7 @@ def _contact_position(
     contact_radius = (surface_contact - section_center).dot(direction)
     wall_thickness = contact_radius - guide.bore_radius_mm
     if wall_thickness <= config.upper_cutter_clearance_mm:
-        raise ValueError(
-            f"导管 {guide.guide_index} 主体壁厚不足以保留固定孔安全余量"
-        )
+        raise ValueError(f"导管 {guide.guide_index} 主体壁厚不足以保留固定孔安全余量")
 
     if label == "upper":
         # 上梁尽量嵌入已知参数壁厚，但在固定孔边界前保留安全余量。
@@ -181,10 +195,7 @@ def _select_for_guide(
             f"导管 {guide.guide_index} 的稳定外壁区间无法容纳直径 "
             f"{2.0 * config.connector_radius_mm:g} mm 的上下连接梁"
         )
-    if (
-        t_upper > t_max - config.axial_margin_mm
-        or t_lower < t_min + config.axial_margin_mm
-    ):
+    if t_upper > t_max - config.axial_margin_mm or t_lower < t_min + config.axial_margin_mm:
         raise ValueError(f"导管 {guide.guide_index} 的 Q 点违反轴向安全余量")
     return SleeveAnchorSelection(
         guide_index=guide.guide_index,
@@ -199,9 +210,7 @@ def _select_for_guide(
             axial_min_mm=guide.parameters.height - guide.parameters.platform_height,
             axial_max_mm=guide.parameters.height,
             opening_min_mm=0.0,
-            opening_max_mm=(
-                guide.parameters.outer_radius + guide.parameters.platform_overhang
-            ),
+            opening_max_mm=(guide.parameters.outer_radius + guide.parameters.platform_overhang),
             across_min_mm=-guide.parameters.outer_radius,
             across_max_mm=guide.parameters.outer_radius,
         ),
@@ -245,9 +254,7 @@ def select_sleeve_anchors(
         for guide in pair:
             direction = _body_wall_direction(guide)
             if (guide.center - pair_midpoint).dot(direction) <= 0.0:
-                raise ValueError(
-                    f"导管 {guide.guide_index} 的 C 口反方向没有远离所属双导管中点"
-                )
+                raise ValueError(f"导管 {guide.guide_index} 的 C 口反方向没有远离所属双导管中点")
             selections.append(
                 _select_for_guide(
                     guide,

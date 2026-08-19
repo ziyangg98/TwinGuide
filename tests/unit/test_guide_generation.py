@@ -24,15 +24,19 @@ class GuideGenerationTests(unittest.TestCase):
         process = SimpleNamespace(context=context)
         artifacts = Mock()
 
-        with patch(
-            "twin_guide.guide_generation.run_generation_process",
-            return_value=process,
-        ) as run_process, patch(
-            "twin_guide.guide_generation.build_guide_from_links",
-            return_value=artifacts,
-        ) as build, patch(
-            "twin_guide.guide_generation.compose_stage_overviews",
-        ) as compose:
+        with (
+            patch(
+                "twin_guide.guide_generation.run_generation_process",
+                return_value=process,
+            ) as run_process,
+            patch(
+                "twin_guide.guide_generation.build_guide_from_links",
+                return_value=artifacts,
+            ) as build,
+            patch(
+                "twin_guide.guide_generation.compose_stage_overviews",
+            ) as compose,
+        ):
             result, returned_process = _generate_guide_with_process(
                 config,
                 preview=True,
@@ -80,15 +84,18 @@ class GuideGenerationTests(unittest.TestCase):
             )
             config = SimpleNamespace(output_directory=output)
 
-            with patch(
-                "twin_guide.guide_generation._formal_fingerprint",
-                return_value="formal-test",
-            ), patch(
-                "twin_guide.guide_generation._generate_guide_with_process"
-            ) as generate:
+            with (
+                patch(
+                    "twin_guide.guide_generation._formal_fingerprint",
+                    return_value="formal-test",
+                ),
+                patch("twin_guide.guide_generation._generate_guide_with_process") as generate,
+                patch("twin_guide.guide_generation.write_effective_case") as write_effective,
+            ):
                 artifacts = generate_guide(config)
 
             generate.assert_not_called()
+            write_effective.assert_called_once_with(config)
             self.assertEqual(artifacts.model_path, model)
             self.assertEqual(artifacts.image_paths, (image,))
 
@@ -97,14 +104,15 @@ class GuideGenerationTests(unittest.TestCase):
         artifacts = Mock()
         process = Mock()
 
-        with patch(
-            "twin_guide.guide_generation._cached_formal_artifacts"
-        ) as cached, patch(
-            "twin_guide.guide_generation._generate_guide_with_process",
-            return_value=(artifacts, process),
-        ) as generate, patch(
-            "twin_guide.guide_generation._write_formal_artifacts_cache"
-        ) as write_cache:
+        with (
+            patch("twin_guide.guide_generation._cached_formal_artifacts") as cached,
+            patch(
+                "twin_guide.guide_generation._generate_guide_with_process",
+                return_value=(artifacts, process),
+            ) as generate,
+            patch("twin_guide.guide_generation._write_formal_artifacts_cache") as write_cache,
+            patch("twin_guide.guide_generation.write_effective_case") as write_effective,
+        ):
             result = generate_guide(config, force_rebuild=True)
 
         self.assertIs(result, artifacts)
@@ -115,6 +123,7 @@ class GuideGenerationTests(unittest.TestCase):
             force_rebuild=True,
         )
         write_cache.assert_called_once_with(config, artifacts)
+        write_effective.assert_called_once_with(config)
 
 
 if __name__ == "__main__":

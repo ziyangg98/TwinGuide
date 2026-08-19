@@ -73,12 +73,15 @@ class ToothIdentificationCacheTests(unittest.TestCase):
             sentinel = object()
             config = SimpleNamespace(output_directory=output)
 
-            with patch(
-                "twin_guide.tooth_identification._input_fingerprint",
-                return_value={"case": "current"},
-            ), patch(
-                "twin_guide.tooth_identification._validated_result",
-                return_value=sentinel,
+            with (
+                patch(
+                    "twin_guide.tooth_identification._input_fingerprint",
+                    return_value={"case": "current"},
+                ),
+                patch(
+                    "twin_guide.tooth_identification._validated_result",
+                    return_value=sentinel,
+                ),
             ):
                 result = _load_current_result(config, write_overview=False)
 

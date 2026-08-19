@@ -64,7 +64,4 @@ def load_case_yaml(path: Path) -> object:
         raise ConfigurationError(f"无法读取病例 YAML {path}：{error}") from error
 
 
-
-
 __all__ = ["load_case_yaml"]
-

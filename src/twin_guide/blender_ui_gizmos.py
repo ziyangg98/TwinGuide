@@ -13,6 +13,7 @@ DRAGGABLE_KINDS = {
     "observation_endpoint",
     "observation_scalar",
     "sleeve_height",
+    "sleeve_rotation",
     "surface_anchor",
     "window_center",
     "window_margin",
@@ -70,6 +71,15 @@ class TwinGuideFeatureGizmoGroup(bpy.types.GizmoGroup):
         self.surface_gizmo.alpha_highlight = 1.0
         self.surface_gizmo.scale_basis = 1.05
         self.surface_gizmo.target_set_operator("twinguide.drag_surface_anchor")
+        self.rotation_gizmo = self.gizmos.new("GIZMO_GT_arrow_3d")
+        self.rotation_gizmo.color = (1.0, 0.38, 0.05)
+        self.rotation_gizmo.alpha = 0.9
+        self.rotation_gizmo.color_highlight = (1.0, 0.8, 0.15)
+        self.rotation_gizmo.alpha_highlight = 1.0
+        self.rotation_gizmo.scale_basis = 1.2
+        self.rotation_gizmo.use_draw_modal = True
+        self.rotation_gizmo.use_draw_value = False
+        self.rotation_gizmo.target_set_operator("twinguide.drag_sleeve_rotation")
 
     def refresh(self, context: bpy.types.Context) -> None:
         """把箭头放到当前代理的局部轴上。"""
@@ -78,11 +88,10 @@ class TwinGuideFeatureGizmoGroup(bpy.types.GizmoGroup):
 
         object_ = context.active_object
         axes = () if object_ is None else blender_ui._gizmo_axes(object_)
-        surface_anchor = bool(
-            object_ is not None and object_.get("tg_kind") == "surface_anchor"
-        )
+        surface_anchor = bool(object_ is not None and object_.get("tg_kind") == "surface_anchor")
+        sleeve_rotation = bool(object_ is not None and object_.get("tg_kind") == "sleeve_rotation")
         for index, gizmo in enumerate(self.axis_gizmos):
-            gizmo.hide = surface_anchor or index >= len(axes)
+            gizmo.hide = surface_anchor or sleeve_rotation or index >= len(axes)
             if gizmo.hide:
                 continue
             _origin, axis = axes[index]
@@ -91,9 +100,15 @@ class TwinGuideFeatureGizmoGroup(bpy.types.GizmoGroup):
         self.surface_gizmo.hide = not surface_anchor
         if surface_anchor:
             normal = object_.rotation_quaternion.to_matrix().to_4x4()
-            self.surface_gizmo.matrix_basis = (
-                Matrix.Translation(object_.location) @ normal
-            )
+            self.surface_gizmo.matrix_basis = Matrix.Translation(object_.location) @ normal
+        self.rotation_gizmo.hide = not sleeve_rotation
+        if sleeve_rotation:
+            center = blender_ui.Vector(object_["tg_center"])
+            axis = blender_ui.Vector(object_["tg_axis"]).normalized()
+            radial = (object_.location - center).normalized()
+            tangent = axis.cross(radial).normalized()
+            rotation = tangent.to_track_quat("Z", "Y").to_matrix().to_4x4()
+            self.rotation_gizmo.matrix_basis = Matrix.Translation(object_.location) @ rotation
 
 
 __all__ = ["TwinGuideFeatureGizmoGroup"]

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import math
 from pathlib import Path
 
@@ -29,6 +28,7 @@ from twin_guide.config import (
     CaseConfig,
     PressBeamMode,
 )
+from twin_guide.errors import GeometryError
 from twin_guide.generation_process import run_generation_process
 from twin_guide.geometry import Vec3, point_axis_coordinates
 from twin_guide.models import (
@@ -40,6 +40,7 @@ from twin_guide.models import (
     WindowCutout,
 )
 from twin_guide.point_linking import PointLinkingPlan
+from twin_guide.terminal_distal_common_node import _terminal_arch_direction
 from twin_guide.types import ConnectorEndpointSource
 
 REFERENCE_SAMPLE_LIMIT = 3_000
@@ -84,8 +85,7 @@ def _operation_window_result(
         blocked = sum(
             point_inside_mesh(model_bvh, point)
             and not (
-                (side := nearest_mesh_surface_side(model_bvh, point)) is not None
-                and side > 1e-6
+                (side := nearest_mesh_surface_side(model_bvh, point)) is not None and side > 1e-6
             )
             for point in probes
         )
@@ -113,8 +113,7 @@ def _point_is_outside_guide_bores(
     """返回梁中心点是否位于全部关联导管的计划导孔之外。"""
 
     return all(
-        point_axis_coordinates(point, guide.center, guide.axis)[0]
-        >= guide.bore_radius_mm
+        point_axis_coordinates(point, guide.center, guide.axis)[0] >= guide.bore_radius_mm
         for guide in guides
     )
 
@@ -226,15 +225,11 @@ def _connector_result(
             _point_is_retained(model_bvh, point, voxel_tolerance_mm)
             for point in retained_centerline
         )
-        inside_fraction = (
-            inside_count / len(retained_centerline) if retained_centerline else 0.0
-        )
+        inside_fraction = inside_count / len(retained_centerline) if retained_centerline else 0.0
         tube_contacts = connector.tube_contacts or (connector.tube_contact,)
         tube_contact_distances = tuple(
             nearest_mesh_distance(sleeve_bvhs[guide_index - 1], contact)
-            for guide_index, contact in zip(
-                guide_indices, tube_contacts, strict=True
-            )
+            for guide_index, contact in zip(guide_indices, tube_contacts, strict=True)
         )
         tube_contact_distance = max(tube_contact_distances)
         left_anchor_distance = (
@@ -264,9 +259,7 @@ def _connector_result(
         for route in connector.platform_avoidance_routes:
             route_prefix = f"guide_{route.guide_index}_upper_{route.side}"
             metrics[f"{route_prefix}_platform_offset_mm"] = route.actual_offset_mm
-            metrics[f"{route_prefix}_platform_clearance_mm"] = (
-                route.minimum_clearance_mm
-            )
+            metrics[f"{route_prefix}_platform_clearance_mm"] = route.minimum_clearance_mm
         passed &= (
             inside_fraction >= CONNECTOR_INSIDE_FRACTION_MINIMUM
             and tube_contact_distance <= connector_radius_mm + 0.4
@@ -319,44 +312,27 @@ def _terminal_distal_common_node_result(
         case.config.geometry.fusion_voxel_size_mm,
     )
     maximum_endpoint_error = max(endpoint_errors, default=float("inf"))
-    lower_links = tuple(
-        link
-        for link in connector_plan.links
-        if link.sleeve_label == "lower"
-    )
-    lower_contacts = tuple(
-        (link.tube_contacts or (link.tube_contact,))[-1]
-        for link in lower_links
-    )
+    lower_links = tuple(link for link in connector_plan.links if link.sleeve_label == "lower")
+    lower_contacts = tuple((link.tube_contacts or (link.tube_contact,))[-1] for link in lower_links)
     expected_projection_base = (
-        (lower_contacts[0] + lower_contacts[1]) * 0.5
-        if len(lower_contacts) == 2
-        else None
+        (lower_contacts[0] + lower_contacts[1]) * 0.5 if len(lower_contacts) == 2 else None
     )
     projection_base_error = (
         terminal.projection_base.distance_to(expected_projection_base)
-        if terminal.projection_base is not None
-        and expected_projection_base is not None
+        if terminal.projection_base is not None and expected_projection_base is not None
         else float("inf")
     )
     terminal_guide_indices = tuple(
-        (link.guide_indices or (link.guide_index,))[-1]
-        for link in lower_links
+        (link.guide_indices or (link.guide_index,))[-1] for link in lower_links
     )
-    terminal_guides = tuple(
-        case.guide_sleeves[index - 1] for index in terminal_guide_indices
-    )
+    terminal_guides = tuple(case.guide_sleeves[index - 1] for index in terminal_guide_indices)
     expected_offset = (
         sum(2.0 * guide.body_radius_mm for guide in terminal_guides)
         / len(terminal_guides)
-        * case.config.guide_anchors.terminal_distal_common_node.
-        distal_offset_sleeve_diameters
+        * case.config.guide_anchors.terminal_distal_common_node.distal_offset_sleeve_diameters
     )
     offset_error = abs(terminal.distal_offset_mm - expected_offset)
-    expected_node = (
-        terminal.projection_base
-        + terminal.distal_direction * expected_offset
-    )
+    expected_node = terminal.projection_base + terminal.distal_direction * expected_offset
     node_formula_error = terminal.centerline_node.distance_to(expected_node)
     centers = tuple(guide.center for guide in terminal_guides)
     sleeve_line = (centers[1] - centers[0]).normalized()
@@ -364,35 +340,30 @@ def _terminal_distal_common_node_result(
     if axes[0].dot(axes[1]) < 0.0:
         axes[1] = axes[1] * -1.0
     common_axis = (axes[0] + axes[1]).normalized()
-    perpendicular_error = (
-        max(
-            abs(terminal.distal_direction.dot(sleeve_line)),
-            abs(terminal.distal_direction.dot(common_axis)),
-        )
+    perpendicular_error = max(
+        abs(terminal.distal_direction.dot(sleeve_line)),
+        abs(terminal.distal_direction.dot(common_axis)),
     )
     distal_alignment = -1.0
-    mapping_report = getattr(tooth_identification, "mapping_report", {})
-    sources = mapping_report.get("sources") if isinstance(mapping_report, dict) else None
-    base_path = sources.get("base_coordinate_report") if isinstance(sources, dict) else None
-    if isinstance(base_path, str):
-        try:
-            base_report = json.loads(Path(base_path).read_text(encoding="utf-8"))
-            slots = base_report.get("tooth_slots", [])
-            missing_slot = next(
-                slot for slot in slots if slot.get("FDI") == terminal.missing_fdi
-            )
-            neighbor_slot = next(
-                slot
-                for slot in slots
-                if slot.get("FDI") == terminal.reference_neighbor_fdi
-            )
-            missing_point = Vec3(*missing_slot["dental_crown_point_global_mm"])
-            neighbor_point = Vec3(*neighbor_slot["dental_crown_point_global_mm"])
-            distal_alignment = terminal.distal_direction.dot(
-                (missing_point - neighbor_point).normalized()
-            )
-        except (OSError, ValueError, KeyError, StopIteration, json.JSONDecodeError):
-            distal_alignment = -1.0
+    try:
+        neighbor = next(
+            position
+            for position in tooth_identification.positions
+            if position.fdi == terminal.reference_neighbor_fdi
+        )
+        parameters = case.config.guide_anchors.terminal_distal_common_node
+        expected_distal = _terminal_arch_direction(
+            tooth_identification.fdi_order,
+            terminal.missing_fdi,
+            terminal.reference_neighbor_fdi,
+            neighbor.local_tangent,
+            () if parameters is None else parameters.implant_fdis,
+        )
+        distal_alignment = terminal.distal_direction.dot(
+            Vec3(*(float(value) for value in expected_distal))
+        )
+    except (GeometryError, StopIteration):
+        distal_alignment = -1.0
     passed = (
         len(distal_node_links) == 4
         and maximum_endpoint_error <= 1e-6
@@ -433,9 +404,7 @@ def _guide_component_bridge_result(
 
     bridge = connector_plan.guide_component_bridge
     if bridge is None:
-        return ValidationResult(
-            "guide_component_bridge", False, {"missing_bridge_plan": 1}
-        )
+        return ValidationResult("guide_component_bridge", False, {"missing_bridge_plan": 1})
     tolerance = case.config.geometry.fusion_voxel_size_mm
     metrics: dict[str, int | float] = {
         "link_count": len(bridge.links),
@@ -445,13 +414,10 @@ def _guide_component_bridge_result(
     passed = len(bridge.links) == 2
     for index, link in enumerate(bridge.links, 1):
         inside_count = sum(
-            _point_is_retained(model_bvh, point, tolerance)
-            for point in link.centerline
+            _point_is_retained(model_bvh, point, tolerance) for point in link.centerline
         )
         inside_fraction = inside_count / len(link.centerline)
-        start_distance = nearest_mesh_distance(
-            template_bvh, link.start_surface_anchor
-        )
+        start_distance = nearest_mesh_distance(template_bvh, link.start_surface_anchor)
         end_distance = nearest_mesh_distance(template_bvh, link.end_surface_anchor)
         prefix = f"link_{index}_{link.side}"
         metrics[f"{prefix}_sample_count"] = len(link.centerline)
@@ -480,36 +446,23 @@ def _guide_terminal_u_extension_result(
 
     extension = connector_plan.guide_terminal_u_extension
     if extension is None:
-        return ValidationResult(
-            "guide_terminal_u_extension", False, {"missing_extension_plan": 1}
-        )
+        return ValidationResult("guide_terminal_u_extension", False, {"missing_extension_plan": 1})
     tolerance = case.config.geometry.fusion_voxel_size_mm
     inside_count = sum(
-        _point_is_retained(model_bvh, point, tolerance)
-        for point in extension.centerline
+        _point_is_retained(model_bvh, point, tolerance) for point in extension.centerline
     )
     inside_fraction = inside_count / len(extension.centerline)
-    u_anchor_distance = nearest_mesh_distance(
-        template_bvh, extension.u_surface_anchor
-    )
-    back_u_anchor_distance = nearest_mesh_distance(
-        template_bvh, extension.back_u_surface_anchor
-    )
-    apex_retained = _point_is_retained(
-        model_bvh, extension.turnaround_apex, tolerance
-    )
+    u_anchor_distance = nearest_mesh_distance(template_bvh, extension.u_surface_anchor)
+    back_u_anchor_distance = nearest_mesh_distance(template_bvh, extension.back_u_surface_anchor)
+    apex_retained = _point_is_retained(model_bvh, extension.turnaround_apex, tolerance)
     positions = {
-        position.fdi: position
-        for position in getattr(tooth_identification, "positions", ())
+        position.fdi: position for position in getattr(tooth_identification, "positions", ())
     }
     terminal_position = positions.get(extension.terminal_fdi)
     neighbor_position = positions.get(extension.reference_neighbor_fdi)
     distal_alignment = (
         extension.distal_direction.dot(
-            (
-                terminal_position.crown_point
-                - neighbor_position.crown_point
-            ).normalized()
+            (terminal_position.crown_point - neighbor_position.crown_point).normalized()
         )
         if terminal_position is not None and neighbor_position is not None
         else -1.0
@@ -524,8 +477,7 @@ def _guide_terminal_u_extension_result(
         and back_u_anchor_distance <= 0.5
         and apex_retained
         and distal_alignment > 0.0
-        and extension.turnaround_surface_clearance_mm
-        >= required_clearance - tolerance
+        and extension.turnaround_surface_clearance_mm >= required_clearance - tolerance
     )
     return ValidationResult(
         "guide_terminal_u_extension",
@@ -542,9 +494,7 @@ def _guide_terminal_u_extension_result(
             "distal_surface_extent_mm": extension.distal_surface_extent_mm,
             "turnaround_entry_distal_mm": extension.turnaround_entry_distal_mm,
             "turnaround_apex_distal_mm": extension.turnaround_apex_distal_mm,
-            "turnaround_surface_clearance_mm": (
-                extension.turnaround_surface_clearance_mm
-            ),
+            "turnaround_surface_clearance_mm": (extension.turnaround_surface_clearance_mm),
             "required_turnaround_clearance_mm": required_clearance,
             "distal_alignment": distal_alignment,
         },
@@ -589,8 +539,7 @@ def _press_beam_result(
             for sample in range(sample_count)
         )
         inside_count = sum(
-            _point_is_retained(model_bvh, point, tolerance)
-            for point in centerline_samples
+            _point_is_retained(model_bvh, point, tolerance) for point in centerline_samples
         )
         inside_fraction = inside_count / sample_count
         prefix = f"arm_{index}_{link.label}"
@@ -601,15 +550,23 @@ def _press_beam_result(
             continue
         guide_endpoint_count += 1
         outward_tangent = (link.start - link.end).normalized()
-        bulb_center = (
-            link.start + outward_tangent * endpoint.bulb_forward_offset_mm
-        )
+        bulb_center = link.start + outward_tangent * endpoint.bulb_forward_offset_mm
         bulb_probe_radius = radius_mm * endpoint.bulb_radius_factor * 0.65
-        bulb_probes = (bulb_center, *tuple(bulb_center + axis * bulb_probe_radius for axis in (Vec3(1.0, 0.0, 0.0), Vec3(-1.0, 0.0, 0.0), Vec3(0.0, 1.0, 0.0), Vec3(0.0, -1.0, 0.0), Vec3(0.0, 0.0, 1.0), Vec3(0.0, 0.0, -1.0))))
-        bulb_inside = sum(
-            _point_is_retained(model_bvh, point, tolerance)
-            for point in bulb_probes
+        bulb_probes = (
+            bulb_center,
+            *tuple(
+                bulb_center + axis * bulb_probe_radius
+                for axis in (
+                    Vec3(1.0, 0.0, 0.0),
+                    Vec3(-1.0, 0.0, 0.0),
+                    Vec3(0.0, 1.0, 0.0),
+                    Vec3(0.0, -1.0, 0.0),
+                    Vec3(0.0, 0.0, 1.0),
+                    Vec3(0.0, 0.0, -1.0),
+                )
+            ),
         )
+        bulb_inside = sum(_point_is_retained(model_bvh, point, tolerance) for point in bulb_probes)
         bulb_fraction = bulb_inside / len(bulb_probes)
         metrics[f"{prefix}_bulb_inside_fraction"] = bulb_fraction
 
@@ -638,9 +595,7 @@ def _press_beam_result(
                 + tangent * (rho * endpoint.foot_major_radius_mm * math.cos(angle))
                 + bitangent * (rho * endpoint.foot_minor_radius_mm * math.sin(angle))
             )
-            location, local_normal, _, _ = local_surface_bvh.find_nearest(
-                to_blender_vector(query)
-            )
+            location, local_normal, _, _ = local_surface_bvh.find_nearest(to_blender_vector(query))
             if location is None or local_normal is None:
                 continue
             projected_normal = to_vec3(local_normal).normalized()
@@ -650,22 +605,15 @@ def _press_beam_result(
                 endpoint.foot_peak_height_mm
                 * (1.0 - maximum_relative_rho * maximum_relative_rho) ** 2
             )
-            foot_probes.append(
-                to_vec3(location) + projected_normal * (height * 0.60)
-            )
-        foot_inside = sum(
-            _point_is_retained(model_bvh, point, tolerance)
-            for point in foot_probes
-        )
+            foot_probes.append(to_vec3(location) + projected_normal * (height * 0.60))
+        foot_inside = sum(_point_is_retained(model_bvh, point, tolerance) for point in foot_probes)
         foot_fraction = foot_inside / len(foot_probes) if foot_probes else 0.0
         metrics[f"{prefix}_foot_probe_count"] = len(foot_probes)
         metrics[f"{prefix}_foot_inside_fraction"] = foot_fraction
         passed &= bulb_fraction >= 0.85 and foot_fraction >= 0.75
     metrics["guide_endpoint_count"] = guide_endpoint_count
     expected_guide_endpoints = (
-        3
-        if case.config.press_beam.mode is PressBeamMode.THREE_TOOTH_ANCHORS_Y
-        else 2
+        3 if case.config.press_beam.mode is PressBeamMode.THREE_TOOTH_ANCHORS_Y else 2
     )
     metrics["expected_guide_endpoint_count"] = expected_guide_endpoints
     passed &= guide_endpoint_count == expected_guide_endpoints
@@ -731,19 +679,29 @@ def _connector_endpoint_reinforcement_result(
         "root_radius_mm": radius_mm * endpoint.root_radius_factor,
         "bulb_radius_mm": radius_mm * endpoint.bulb_radius_factor,
     }
-    expected_endpoint_count = (
-        2 if connector_plan.terminal_distal_common_node is not None else 4
-    )
+    expected_endpoint_count = 2 if connector_plan.terminal_distal_common_node is not None else 4
     metrics["expected_endpoint_count"] = expected_endpoint_count
     passed = len(groups) == expected_endpoint_count
     for label, surface_anchor, surface_normal, center, incidents in groups.values():
         incident = sum(incidents, Vec3(0.0, 0.0, 0.0)).normalized()
         bulb_center = center - incident * endpoint.bulb_forward_offset_mm
         bulb_probe_radius = radius_mm * endpoint.bulb_radius_factor * 0.65
-        bulb_probes = (bulb_center, *tuple(bulb_center + axis * bulb_probe_radius for axis in (Vec3(1.0, 0.0, 0.0), Vec3(-1.0, 0.0, 0.0), Vec3(0.0, 1.0, 0.0), Vec3(0.0, -1.0, 0.0), Vec3(0.0, 0.0, 1.0), Vec3(0.0, 0.0, -1.0))))
+        bulb_probes = (
+            bulb_center,
+            *tuple(
+                bulb_center + axis * bulb_probe_radius
+                for axis in (
+                    Vec3(1.0, 0.0, 0.0),
+                    Vec3(-1.0, 0.0, 0.0),
+                    Vec3(0.0, 1.0, 0.0),
+                    Vec3(0.0, -1.0, 0.0),
+                    Vec3(0.0, 0.0, 1.0),
+                    Vec3(0.0, 0.0, -1.0),
+                )
+            ),
+        )
         bulb_fraction = sum(
-            _point_is_retained(model_bvh, point, tolerance)
-            for point in bulb_probes
+            _point_is_retained(model_bvh, point, tolerance) for point in bulb_probes
         ) / len(bulb_probes)
 
         normal = surface_normal.normalized()
@@ -766,8 +724,7 @@ def _connector_endpoint_reinforcement_result(
         rho = 0.44
         maximum_relative_rho = rho / MINIMUM_CONFORMAL_FOOTPRINT_SCALE
         height = (
-            endpoint.foot_peak_height_mm
-            * (1.0 - maximum_relative_rho * maximum_relative_rho) ** 2
+            endpoint.foot_peak_height_mm * (1.0 - maximum_relative_rho * maximum_relative_rho) ** 2
         )
         foot_probes = []
         for angle_index in range(8):
@@ -777,22 +734,15 @@ def _connector_endpoint_reinforcement_result(
                 + tangent * (rho * endpoint.foot_major_radius_mm * math.cos(angle))
                 + bitangent * (rho * endpoint.foot_minor_radius_mm * math.sin(angle))
             )
-            location, local_normal, _, _ = local_surface_bvh.find_nearest(
-                to_blender_vector(query)
-            )
+            location, local_normal, _, _ = local_surface_bvh.find_nearest(to_blender_vector(query))
             if location is None or local_normal is None:
                 continue
             projected_normal = to_vec3(local_normal).normalized()
             if projected_normal.dot(normal) < 0.0:
                 projected_normal = projected_normal * -1.0
-            foot_probes.append(
-                to_vec3(location) + projected_normal * (height * 0.60)
-            )
+            foot_probes.append(to_vec3(location) + projected_normal * (height * 0.60))
         foot_fraction = (
-            sum(
-                _point_is_retained(model_bvh, point, tolerance)
-                for point in foot_probes
-            )
+            sum(_point_is_retained(model_bvh, point, tolerance) for point in foot_probes)
             / len(foot_probes)
             if foot_probes
             else 0.0
@@ -819,12 +769,8 @@ def _observation_window_result(
     for profile in profile_windows:
         if len(profile.window_ids) != len(profile.window_crest_points):
             raise ValueError("观察窗 ID 与最终修正轴点组数量不一致")
-        for window_id, points in zip(
-            profile.window_ids, profile.window_crest_points, strict=True
-        ):
-            clearances = tuple(
-                nearest_mesh_distance(model_bvh, point) for point in points
-            )
+        for window_id, points in zip(profile.window_ids, profile.window_crest_points, strict=True):
+            clearances = tuple(nearest_mesh_distance(model_bvh, point) for point in points)
             blocked = sum(
                 point_inside_mesh(model_bvh, point)
                 or clearance < OBSERVATION_CREST_CLEARANCE_MINIMUM_MM
@@ -849,11 +795,7 @@ def validate_guide(
 
     process = run_generation_process(config)
     context = process.context
-    if (
-        context.case is None
-        or context.window_cutouts is None
-        or context.point_linking is None
-    ):
+    if context.case is None or context.window_cutouts is None or context.point_linking is None:
         raise RuntimeError("验证未获得完整的公开几何计划")
     case = context.case
     cutout_plan = context.window_cutouts
@@ -964,18 +906,13 @@ def validate_guide(
     )
     blocked_channel_count = sum(
         point_inside_mesh(model_bvh, point)
-        and not (
-            (side := nearest_mesh_surface_side(model_bvh, point)) is not None
-            and side > 1e-6
-        )
+        and not ((side := nearest_mesh_surface_side(model_bvh, point)) is not None and side > 1e-6)
         for point in channel_probe_points
     )
     channel_metrics: dict[str, int | float] = {
         "sample_count": len(channel_probe_points),
         "blocked_sample_count": blocked_channel_count,
-        "global_bore_recut_applied": int(
-            connector_plan.recut_sleeve_bore
-        ),
+        "global_bore_recut_applied": int(connector_plan.recut_sleeve_bore),
     }
     for guide, radius in zip(case.guide_sleeves, usable_bore_radii, strict=True):
         channel_metrics[f"guide_{guide.guide_index}_usable_bore_radius_mm"] = radius
@@ -988,7 +925,5 @@ def validate_guide(
     )
     results.append(_operation_window_result(model_bvh, cutout_plan.windows))
     if tooth_identification is not None:
-        results.append(
-            _observation_window_result(model_bvh, cutout_plan.profile_windows)
-        )
+        results.append(_observation_window_result(model_bvh, cutout_plan.profile_windows))
     return tuple(results)

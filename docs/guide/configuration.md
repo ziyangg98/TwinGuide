@@ -126,6 +126,8 @@ $$
 | `sleeve_stop_front_avoidance_mm` | `4.0` | 避让控制点相对导柱接触点的固定龈向总位移，$\geq0$；下颌向下、上颌向上，不与原路径落差叠加，也不参与搜索或优化 |
 | `connection_blocks` | 全部启用 | 分别控制 `lower_main`、`upper_main` 和 `press_beam` |
 | `connector_guide_endpoint` | 见下表 | 连接梁在导板端的渐粗、根部球和贴合脚参数 |
+| `anchor_selection` | 见下表 | 第 4 阶段导板表面锚点筛选 |
+| `connector_path` | 见下表 | 第 6 阶段连接梁中心线形态与离散 |
 
 `connector_guide_endpoint` 也被 `runtime.press_beam.guide_endpoint` 复用：
 
@@ -139,6 +141,30 @@ $$
 | `foot_minor_radius_mm` | `2.2` | 贴合脚短轴半径，$0<r_{minor}\leq r_{major}$ |
 | `foot_peak_height_mm` | `2.55` | 贴合脚峰高，$>0$ |
 | `foot_embed_depth_mm` | `0.25` | 贴合脚嵌入导板的深度，$>0$ |
+
+`anchor_selection` 把原先散落在选点实现中的阈值集中到配置：
+
+| 字段 | 默认 | 约束/含义 |
+| --- | --- | --- |
+| `lower_edge_clearance_mm` | `1.0` | 低位梁外缘到稳定外壁下边缘的净距，$\geq0$ |
+| `axial_margin_mm` | `0.8` | 导柱接触截面到稳定区间端部的安全余量，$\geq0$ |
+| `upper_cutter_clearance_mm` | `0.01` | 高位梁嵌入后到导孔边界的余量，$\geq0$ |
+| `clearance_mm` | 梁半径 + `fusion_voxel_size_mm` | 候选锚点到窗口和导孔的最小净距，$\geq0$ |
+| `minimum_span_connector_diameters` | `1.25` | 左右锚点最小跨度相对连接梁直径的倍数，$>0$ |
+| `surface_sample_limit` | `4096` | 进入选点的表面样本上限，正整数 |
+| `candidate_limit` | `512` | 每侧进入成对评分的候选上限，正整数 |
+
+`connector_path` 控制连接梁路径。前五项会直接改变形态；分辨率和中心线间距还会影响离散精度：
+
+| 字段 | 默认 | 约束/含义 |
+| --- | --- | --- |
+| `curve_resolution` | `64` | 梁截面细分数，$\geq8$ |
+| `recut_sleeve_bore` | `true` | 融合后是否重新切通导柱内孔 |
+| `endpoint_tension` | `0.45` | 导板端 Hermite 张力，$>0$ |
+| `contact_tension` | `0.90` | 导柱接触点 Hermite 张力，$>0$ |
+| `lower_approach_overlap_mm` | `1.45` | 低位梁进入导柱外层的深度，$0\le d<$ 梁直径 |
+| `lower_dive_merge_arc_mm` | `5.0` | 低位梁局部下潜的合并弧长，$>0$ |
+| `centerline_spacing_mm` | `0.30` | 中心线目标采样间距，$>0$ |
 
 ## 操作窗与观察窗通用参数
 
@@ -157,6 +183,27 @@ $$
 | `observation_adaptive_fallback_enabled` | `false` | 确定性求解失败后是否允许局部下沉 fallback |
 | `observation_local_failure_drop_targets_mm` | `[0.5, 1.0, 2.0]` | fallback 依次尝试的绝对下沉目标 |
 | `observation_local_failure_transition_rows` | `1` | 局部下沉区与正常区之间的平滑过渡行数 |
+| `observation_solver` | 见下表 | 观察窗布尔体、可见性 QA 和 fallback 求解阈值 |
+
+`observation_solver` 的长度单位均为毫米，体积单位均为立方毫米：
+
+| 字段 | 默认 | 含义 |
+| --- | --- | --- |
+| `top_extension_mm` / `side_extension_mm` / `outward_margin_mm` | `0.40` | 自适应 cutter 的顶部、侧面和外向扩展；`side_extension_mm` 也用于确定性求解 |
+| `wall_overcut_mm` | `0.40` | 穿透导板壁的附加切除量 |
+| `maximum_wall_thickness_mm` | `5.0` | fallback 允许的最大壁厚 |
+| `ray_entry_tolerance_mm` | `0.65` | fallback 射线入射容差 |
+| `following_wall_safety_mm` | `0.10` | 沿壁方向安全余量 |
+| `axis_core_overcut_mm` | `0.30` | 语义轴核心附加切除量 |
+| `minimum_axis_visibility_row_fraction` | `0.50` | 轴可见行比例下限，$(0,1]$ |
+| `minimum_axis_clear_corridor_fraction` | `0.95` | 轴净空走廊比例下限，$(0,1]$ |
+| `union_batch_size` | `16` | 布尔并集批大小，正整数 |
+| `fragment_volume_tolerance_mm3` | `2.0` | 可忽略碎片体积上限 |
+| `minimum_removed_volume_mm3` | `1.0` | 有效切除体积下限 |
+| `residual_volume_tolerance_mm3` | `0.0001` | 残余体积绝对容差 |
+| `volume_identity_tolerance_mm3` | `0.05` | 确定性求解体积恒等式绝对容差 |
+| `adaptive_volume_identity_tolerance_mm3` | `0.005` | fallback 体积恒等式绝对容差 |
+| `volume_identity_relative_tolerance` | `0.0001` | 体积恒等式相对容差，$(0,1]$ |
 
 `planning.operation_windows` 可以用病例语义名称覆盖四个操作窗数值：
 
@@ -185,13 +232,15 @@ $$
 ### `planning.guide_posts`
 
 每个已识别圆环分别配置 `ring_index`、`drill_length_mm`、`implant_length_mm`、
-`sleeve_template_extension_mm` 和可选的 `sleeve`。模板延伸长度用于从传统模板
+`drill_inside_handpiece_length_mm`、`sleeve_template_extension_mm` 和可选的 `sleeve`。
+模板延伸长度用于从传统模板
 止停面恢复植体顶端。`sleeve` 只接受 `height_mm`、`platform_height_mm` 和
 `closed_bore_height_mm`，且三个字段均可省略；出现的字段只覆盖当前种植位，
 左右两根同步使用。
 `ring_index` 对应传统模板圆环识别结果中的编号，不依赖 FDI、sleeve 或 handpiece。
-系统按 `drill_length_mm - 12 mm - implant_length_mm` 计算双导导板延长量；12 mm
-为钻针位于手机内部的固定长度，不作为病例参数。模板延伸长度与双导延伸长度不要求
+系统按 `drill_length_mm - drill_inside_handpiece_length_mm - implant_length_mm`
+计算双导导板延长量。`drill_inside_handpiece_length_mm` 默认 `12.0`，但应按实际手机和
+钻针系统逐圆环确认。模板延伸长度与双导延伸长度不要求
 相等；两者之差决定新止停平面相对传统模板圆环上平面的轴向偏移。当前示例起始值为
 钻针 33 mm、植体 12 mm、模板延伸长度 8 mm，因此计算得到的双导延伸长度为 9 mm；
 这三项仍须按种植位显式填写。正式流程要求至少
@@ -203,6 +252,7 @@ planning:
     - ring_index: 1
       drill_length_mm: 33.00
       implant_length_mm: 12.00
+      drill_inside_handpiece_length_mm: 12.00
       sleeve_template_extension_mm: 8.00
       sleeve:
         height_mm: 16.00
@@ -220,11 +270,31 @@ planning:
 runtime:
   tooth_identification:
     backend: fdi_new  # 兼容回退：standard
+    profile:
+      projection_resolution_mm: 0.12
+      height_quantiles: [0.35, 0.40, 0.45, 0.50, 0.55]
+      run_stability: true
 ```
 
 `fdi_new` 是默认牙位识别流程，启用多尺度牙冠核心、单调 FDI 序列对齐、局部
 三维分隔证据和缺牙语义锚点，并继续复用线上导板物理覆盖映射、阶段缓存和 UI。
 `standard` 仅作为旧病例的显式兼容回退；两种后端的缓存指纹互不复用。
+
+`profile` 可覆盖 FDI New 的全部稳定算法参数；未写字段使用版本化默认值。为避免在文档中
+维护第二份容易失真的默认值清单，完整字段及默认值以
+[`examples/case.example.yaml`](../../examples/case.example.yaml) 为唯一可复制示例：
+
+| 参数组 | 主要字段 | 作用 |
+| --- | --- | --- |
+| 投影与多尺度 | `height_quantiles`、`projection_resolution_mm`、`candidate_detection_resolution_mm`、`component_segmentation_resolution_mm` | 控制原始投影、候选检测和最终分区使用的栅格精度；候选检测采用固定物理栅格以避免源像素偏移改变牙冠中心 |
+| 核心与对齐 | `minimum_track_persistence`、`minimum_alignment_margin_per_tooth`、`minimum_independent_core_separation_scale` | 控制候选保留和 FDI 序列安全门 |
+| 局部分割 | `maximum_local_assignment_robust_z`、`maximum_bilateral_region_area_ratio`、`minimum_relative_*` | 控制局部牙冠归属及伪影排除 |
+| 表面谷证据 | `surface_valley_*`、`minimum_surface_valley_*` | 控制三维谷线平滑、权重与覆盖阈值 |
+| 多视图证据 | `multi_view_*` | 控制视角数量、倾角、分辨率和边界权重 |
+| 稳定性 | `stability_resolutions_mm`、`boundary_smoothing_scales`、`run_stability` | 控制跨分辨率与边界尺度复核 |
+
+这些字段都会改变识别、分割或 QA 结果，因此会写入有效配置；`EPS`、数组哨兵值等仅用于
+浮点稳定性的内部常量不属于病例参数。
 
 ### `design.observation_windows`
 
@@ -248,12 +318,12 @@ design:
 | `id` | 默认 `window` | 观察窗稳定标识 |
 | `start_fdi`, `end_fdi` | 必填 | 窗的两个端点牙位；必须是已测量的现存牙 |
 | `extent_mode` | `center_to_center` | `center_to_center` 取两牙中心；`full_teeth` 扩展到两牙外边界 |
-| `height_mm` | `4.0` | 轮廓采样深度；轴扫切除体的径向范围由导板穿透求交决定 |
+| `height_mm` | `5.0` | 轮廓采样深度；轴扫切除体的径向范围由导板穿透求交决定 |
 | `top_open` | `true` | 是否从导板牙合侧开放 |
 | `top_bridge_margin_mm` | `0.5` | `top_open: false` 时保留的顶部连接高度 |
 | `opening_side` | `labial_buccal_exterior` | 当前唯一支持的开放侧 |
-| `opening_geometry` | 必填 | `axis_sweep` |
-| `axis_drop_mm` | `1.0` | 本窗公共轴下沉量，$>0$；与 `runtime.windows.observation_axis_drop_mm` 一致 |
+| `opening_geometry` | `axis_sweep` | 当前统一的观察窗构造方式 |
+| `axis_drop_mm` | `0.2` | 本窗公共轴下沉量，$>0$；与 `runtime.windows.observation_axis_drop_mm` 一致 |
 | `sweep_angle_deg` | `90.0` | 本窗扫角，$0<\theta\leq180$；与运行参数一致 |
 | `angular_spacing_deg` | `3.0` | 角向采样间距，$>0$ |
 | `axis_sections` | 按轴长自动 | 显式轴向采样数，$\geq2$ |
@@ -437,8 +507,8 @@ sleeve_anchor_selection:
 
 ## 手机避让
 
-`runtime.handpiece_avoidance` 可写为单个对象或对象数组。每项独立构造当前装配深度下的
-手机旋转包络，并在第 7 阶段从完整模型中差集。新病例默认使用
+`runtime.handpiece_avoidance` 可写为单个对象或对象数组。每项独立构造轴向位移与
+手机旋转的二维包络，并在第 7 阶段从完整模型中差集。新病例默认使用
 `buccal_outward + adaptive`；带有 `stop_report` 且未写模式的旧病例继续按
 `symmetric_lr + exact_uniform` 解析。
 
@@ -456,16 +526,20 @@ sleeve_anchor_selection:
 | `collision_refinement_degrees` | `0.1` | 碰撞边界二分精度，$>0$ |
 | `envelope_step_degrees` | `0.5` | 最终包络采样步长，$>0$ |
 | `envelope_simplify_tolerance_mm` | `0.05` | 分层布尔并集后的受控简化容差 |
+| `axial_depth_range_mm` | `[0.0, 0.0]` | 相对当前止挡姿态的轴向范围，递增且必须包含 0；正方向为导管顶部到下部 |
+| `axial_step_mm` | `0.5` | 轴向包络最大采样步长，$>0$ |
 | `extra_clearance_mm` | `0.0` | 对包络追加的净距，$\geq0$ |
 | `tooth_clearance_mm` | `0.0` | 牙冠保护面的附加净距 |
 | `connector_clearance_mm` | `0.20` | 背 U 侧连接梁保护净距 |
+| `fragment_volume_tolerance_mm3` | `0.0001` | 可忽略的非封闭数值碎片体积上限，$>0$ |
 
 ## 渲染与输出位置
 
 `runtime.render.width_px` 和 `height_px` 全部必填，且必须是正整数。它们控制
 Blender 阶段结果图和最终标准视图的像素尺寸。
 
-默认输出目录是代码仓库的 `output/<case.id>/`。只有
+默认输出目录是代码仓库的 `output/<case.id>/`。正式生成同时写出
+`effective-case.json`，记录源病例 SHA-256、紧凑配置展开结果和所有实际默认值。只有
 `generate --output DIRECTORY` 会对本次生成覆盖该目录；它不会回写 `case.yaml`。
 输出文件和 JSON 字段的详细含义见 {doc}`outputs`。
 
@@ -473,11 +547,26 @@ Blender 阶段结果图和最终标准视图的像素尺寸。
 
 `editor_overrides` 由 Blender 面板管理。导柱参数的生效顺序为：`runtime.sleeve`
 全局标准值、`planning.guide_posts[].sleeve` 三项种植位高度覆盖、`sleeve_sites`
-三项高度调整。
-`sleeve_sites` 按 `ring_index` 保存总高、平台总高度和 C 口闭合段高度，一组控制点
-同步作用于该种植位左右两根导柱。其余分组为 `operation_windows`、
+三项高度调整及圆心旋转。
+`sleeve_sites` 按 `ring_index` 保存总高、平台总高度、C 口闭合段高度和
+`rotation_degrees`（UI 名称为“双导柱整体方位角”）。`0`表示自动对齐的基准
+姿态，取值范围为 `[-180, 180]`，正角遵循右手定则。两根导柱作为一个刚性整体：
+共同中心是两导柱轴心原点的中点，旋转轴与两导柱统一朝向后的平均轴同向。旋转时
+两个轴心、导柱轴向和 C 口方向同步变化，两柱间距、高度和相对姿态不变。其余分组为 `operation_windows`、
 `observation_windows`、`connector_avoidance`、`surface_anchors` 和
 `press_junction_mm`。
+
+所有 UI 可微调项与 YAML 字段的对应如下。未调整的结构不写入
+`editor_overrides`，仍由自动规划给出；点击“保存调整”后才写入对应记录。
+
+| UI 结构 | YAML 分组 | 可微调字段 | 约束 |
+| --- | --- | --- | --- |
+| 双导柱 | `sleeve_sites[]` | `height_mm`, `platform_height_mm`, `closed_bore_height_mm`, `rotation_degrees` | 底部高度 < 平台高度 < 总高；角度 `[-180,180]` |
+| 操作窗 | `operation_windows[]` | `tangent_margin_mm`, `bitangent_margin_mm`, `front_axial_margin_mm`, `rear_axial_margin_mm`, `center_offset_mm` | 四个边距非负；中心偏移是三维有符号向量 |
+| 观察窗 | `observation_windows[]` | `start_fdi`, `end_fdi`, `axis_drop_mm`, `height_mm`, `sweep_angle_degrees` | FDI 必须在当前牙位候选中；下沉非负；高度为正；扫掠角 `(0,180]` |
+| 连接避让节点 | `connector_avoidance[]` | `path_fraction`, `downward_offset_mm` | 沿线比例 `[0,1]`；向下偏移非负；`side` 明确为 `left`/`right` |
+| 按压与支撑锚点 | `surface_anchors[]` | `surface_role`, `position_mm` | 表面为 `template`/`dentition`；位置会重新吸附，`normal` 由 UI 一并保存 |
+| 按压梁交点 | `press_junction_mm` | 三维位置 | UI 在工作平面内调整，YAML 保存世界坐标 |
 
 ```yaml
 editor_overrides:
@@ -486,6 +575,32 @@ editor_overrides:
       height_mm: 16.00
       platform_height_mm: 10.50
       closed_bore_height_mm: 4.90
+      rotation_degrees: -15.0
+  operation_windows:
+    - site_index: 1
+      tangent_margin_mm: 1.0
+      bitangent_margin_mm: 3.0
+      front_axial_margin_mm: 1.0
+      rear_axial_margin_mm: 1.0
+      center_offset_mm: [0.0, 0.0, 0.0]
+  observation_windows:
+    - window_id: anterior
+      start_fdi: 11
+      end_fdi: 21
+      axis_drop_mm: 0.2
+      height_mm: 5.0
+      sweep_angle_degrees: 90.0
+  connector_avoidance:
+    - guide_index: 1
+      side: left
+      path_fraction: 0.35
+      downward_offset_mm: 2.0
+  surface_anchors:
+    - anchor_id: press_anchor_1
+      surface_role: template
+      position_mm: [0.0, 0.0, 0.0]
+      normal: [0.0, 0.0, 1.0]
+  press_junction_mm: [0.0, 0.0, 0.0]
 ```
 
 旧式 `sleeve_guides` 仅在同一种植位的两个 `guide_index` 同时存在，且三项高度各自

@@ -22,6 +22,7 @@ EPS = 1e-9
 @dataclass(frozen=True)
 class EllipseInstance:
     """内部算法说明。"""
+
     instance_id: int
     center_lr_ap_mm: tuple[float, float]
     semi_axes_mm: tuple[float, float]
@@ -173,10 +174,12 @@ def _sample_map(
     resolution_mm: float,
 ) -> np.ndarray:
     """内部算法说明。"""
-    indices = np.vstack([
-        (points[:, 0] - lr_centres[0]) / resolution_mm,
-        (points[:, 1] - ap_centres[0]) / resolution_mm,
-    ])
+    indices = np.vstack(
+        [
+            (points[:, 0] - lr_centres[0]) / resolution_mm,
+            (points[:, 1] - ap_centres[0]) / resolution_mm,
+        ]
+    )
     return map_coordinates(values, indices, order=1, mode="nearest")
 
 
@@ -211,15 +214,15 @@ def _refine_scale_against_projection(
         outer = _ellipse_polygon(center, vectors, candidate_axes * 1.14)
         normalized_radius = np.sum((local_owned / candidate_axes) ** 2, axis=1)
         coverage = float(np.mean(normalized_radius <= 1.0))
-        edge = float(np.mean(_sample_map(
-            edge_score, contour, lr_centres, ap_centres, resolution_mm
-        )))
-        inside_score = float(np.mean(_sample_map(
-            feature_score, inner, lr_centres, ap_centres, resolution_mm
-        )))
-        outside_score = float(np.mean(_sample_map(
-            feature_score, outer, lr_centres, ap_centres, resolution_mm
-        )))
+        edge = float(
+            np.mean(_sample_map(edge_score, contour, lr_centres, ap_centres, resolution_mm))
+        )
+        inside_score = float(
+            np.mean(_sample_map(feature_score, inner, lr_centres, ap_centres, resolution_mm))
+        )
+        outside_score = float(
+            np.mean(_sample_map(feature_score, outer, lr_centres, ap_centres, resolution_mm))
+        )
         contrast = inside_score - outside_score
         boundary_distance, _ = occupied_tree.query(contour, k=1)
         mean_distance = float(np.mean(boundary_distance))
@@ -324,24 +327,26 @@ def fit_unlabelled_ellipse_instances(
         )
         angle = float(np.degrees(np.arctan2(vectors[1, 0], vectors[0, 0])))
         covariance = vectors @ np.diag(semi_axes**2) @ vectors.T
-        instances.append(EllipseInstance(
-            instance_id=int(component),
-            center_lr_ap_mm=(float(center[0]), float(center[1])),
-            semi_axes_mm=(float(semi_axes[0]), float(semi_axes[1])),
-            angle_degrees=angle,
-            covariance=(
-                (float(covariance[0, 0]), float(covariance[0, 1])),
-                (float(covariance[1, 0]), float(covariance[1, 1])),
-            ),
-            support_pixel_count=len(selected),
-            boundary_mean_distance_mm=refinement["boundary_mean_distance_mm"],
-            boundary_p95_distance_mm=refinement["boundary_p95_distance_mm"],
-            owned_support_coverage=refinement["coverage"],
-            boundary_edge_support=refinement["edge_support"],
-            boundary_inside_outside_contrast=refinement["inside_outside_contrast"],
-            contour_scale_from_initial_fit=refinement["scale"],
-            contour_lr_ap_mm=contour.tolist(),
-        ))
+        instances.append(
+            EllipseInstance(
+                instance_id=int(component),
+                center_lr_ap_mm=(float(center[0]), float(center[1])),
+                semi_axes_mm=(float(semi_axes[0]), float(semi_axes[1])),
+                angle_degrees=angle,
+                covariance=(
+                    (float(covariance[0, 0]), float(covariance[0, 1])),
+                    (float(covariance[1, 0]), float(covariance[1, 1])),
+                ),
+                support_pixel_count=len(selected),
+                boundary_mean_distance_mm=refinement["boundary_mean_distance_mm"],
+                boundary_p95_distance_mm=refinement["boundary_p95_distance_mm"],
+                owned_support_coverage=refinement["coverage"],
+                boundary_edge_support=refinement["edge_support"],
+                boundary_inside_outside_contrast=refinement["inside_outside_contrast"],
+                contour_scale_from_initial_fit=refinement["scale"],
+                contour_lr_ap_mm=contour.tolist(),
+            )
+        )
 
     component_grid = np.full(occupied.shape, -1, dtype=int)
     posterior_max_grid = np.zeros(occupied.shape, dtype=float)

@@ -79,6 +79,11 @@ TwinGuide 是基于 Blender 的双导管牙科导板建模工具。程序从带�
 状态。所有输入路径相对于该 YAML 所在目录解析。程序生成结果默认写入代码仓库的
 `output/<case_id>/`，不会覆盖病例目录中的参考输出。
 
+影响几何结果的常用参数集中在 `runtime.sleeve`、`runtime.geometry`、
+`runtime.windows`、`runtime.press_beam`、`planning.guide_posts` 和 `design`；其中
+锚点筛选、连接梁路径和观察窗求解阈值分别位于 `anchor_selection`、
+`connector_path` 和 `observation_solver`，无需修改 Python 源码。
+
 牙位识别默认使用 `fdi_new`；需要兼容旧病例时，可逐病例显式切换到 `standard`。
 两种后端的缓存指纹互不复用。观察窗优先使用确定性约束求解；只有显式启用时，
 局部自适应下沉才作为失败 fallback。手机避让支持颊侧自适应旋转和旧版左右对称
@@ -127,7 +132,19 @@ brew install --cask blender
 ./twinguide ui --config ../data/cases/case-3af68d1cfda4/case.yaml
 ```
 
-界面提供保存调整、更新预览和导出检验三个操作。
+打开由 `generate --output` 生成的指定结果目录：
+
+```bash
+./twinguide ui \
+  --config ../data/cases/case-3af68d1cfda4/case.yaml \
+  --output output/tooth-11-check
+```
+
+界面会立即加载该目录中的正式模型，并复用其中的牙位识别及生成缓存。首次没有缓存时，
+“后台任务”会明确显示正在识别牙位；编辑控制点准备完成后自动出现。
+
+界面提供保存调整、快速预览和最终导出检验三个操作。快速预览用于确认位置与形态，
+不代替最终融合和 QA。
 
 生成命令默认拒绝标记为 `pending`、`pending_user_input` 或 `unreviewed` 的病例。
 `--allow-unreviewed` 可在诊断运行中跳过本次审核检查。

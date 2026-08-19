@@ -97,7 +97,8 @@ $$
 \end{aligned}
 $$
 
-$\tau_e$ 和 $\tau_c$ 分别是端点与接触点张力，默认 0.45 和 0.90。
+$\tau_e$ 和 $\tau_c$ 分别由 `connector_path.endpoint_tension` 和
+`connector_path.contact_tension` 配置；默认值见[病例配置](../guide/configuration.md#runtimegeometry)。
 $\mathbf L\rightarrow\mathbf P$ 与 $\mathbf P\rightarrow\mathbf R$ 两段共用
 $\mathbf m_P$。
 
@@ -160,7 +161,8 @@ N=\operatorname{nextOdd}\!\left(
 \right).
 $$
 
-默认 $\Delta s=0.30$ mm。Blender 只消费这些中心线：沿折线使用平行传输
+`connector_path.centerline_spacing_mm` 控制 $\Delta s$；
+`curve_resolution` 控制梁截面细分。Blender 只消费这些中心线：沿折线使用平行传输
 标架扫掠圆形截面，不重新选择锚点或改变拓扑。按压梁三臂是
 $\mathbf p_i\rightarrow\mathbf J$ 的直线扫掠，汇合球半径为 $1.12r$。
 

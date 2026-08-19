@@ -12,6 +12,44 @@ objects:
 runtime:
   tooth_identification:
     backend: fdi_new  # 兼容回退：standard
+    # 第 2 阶段：FDI New 的稳定算法配置；修改任一项都会影响识别或 QA 结果。
+    profile:
+      profile_id: tooth_fdi_mapping_new_intercore_separator_exclusion
+      height_quantiles: [0.35, 0.40, 0.45, 0.50, 0.55]
+      projection_resolution_mm: 0.12
+      candidate_detection_resolution_mm: 0.12
+      component_segmentation_resolution_mm: 0.12
+      minimum_normal_dot: 0.05
+      minimum_track_persistence: 0.60
+      minimum_alignment_margin_per_tooth: 0.05
+      minimum_independent_core_separation_scale: 0.35
+      boundary_first_segmentation: true
+      require_anatomical_split_evidence: true
+      maximum_local_assignment_robust_z: 4.0
+      maximum_bilateral_region_area_ratio: 1.80
+      midline_offset_search_local_scale: 1.50
+      minimum_relative_crown_height_ratio: 0.60
+      minimum_relative_relief_quality_ratio: 0.75
+      maximum_low_relief_component_area_ratio: 0.50
+      relief_baseline_windows_mm: [6.0, 8.0, 10.0]
+      unassigned_relief_quantile: 0.08
+      unassigned_seed_protection_scale: 0.55
+      minimum_unassigned_area_mm2: 1.50
+      surface_valley_evidence_enabled: true
+      surface_valley_normalization_scale_mm: 8.0
+      surface_valley_smoothing_iterations: [1, 2, 4]
+      surface_valley_watershed_weight: 0.22
+      minimum_surface_valley_mean_support: 0.36
+      minimum_surface_valley_coverage: 0.32
+      multi_view_boundary_enabled: true
+      multi_view_azimuth_count: 8
+      multi_view_obliquity_degrees: 45.0
+      multi_view_resolution_mm: 0.24
+      multi_view_edge_support_quantile: 0.75
+      multi_view_watershed_weight: 0.12
+      stability_resolutions_mm: [0.10, 0.12, 0.14]
+      boundary_smoothing_scales: [0.85, 1.0, 1.15]
+      run_stability: true
   sleeve:
     inner_diameter_mm: 2.05
     outer_diameter_mm: 5.10
@@ -45,6 +83,24 @@ runtime:
       foot_minor_radius_mm: 2.2
       foot_peak_height_mm: 2.55
       foot_embed_depth_mm: 0.25
+    # 第 4 阶段：导板表面锚点筛选。clearance_mm 省略时使用梁半径 + 融合体素。
+    anchor_selection:
+      lower_edge_clearance_mm: 1.00
+      axial_margin_mm: 0.80
+      upper_cutter_clearance_mm: 0.01
+      clearance_mm: null  # 自动使用梁半径 + fusion_voxel_size_mm；需要时可显式覆盖
+      minimum_span_connector_diameters: 1.25
+      surface_sample_limit: 4096
+      candidate_limit: 512
+    # 第 6 阶段：连接梁路径形态与离散精度。
+    connector_path:
+      curve_resolution: 64
+      recut_sleeve_bore: true
+      endpoint_tension: 0.45
+      contact_tension: 0.90
+      lower_approach_overlap_mm: 1.45
+      lower_dive_merge_arc_mm: 5.0
+      centerline_spacing_mm: 0.30
   windows:
     operation_tangent_margin_mm: 1.0
     operation_bitangent_margin_mm: 3.0
@@ -56,6 +112,31 @@ runtime:
     observation_sweep_angle_degrees: 90.0
     # 确定性约束求解失败时才启用局部 0.5/1.0/2.0 mm 下沉 fallback。
     observation_adaptive_fallback_enabled: false
+    # 第 3 阶段：观察窗实体、可见性 QA 和 fallback 的求解参数。
+    observation_solver:
+      top_extension_mm: 0.40
+      side_extension_mm: 0.40
+      outward_margin_mm: 0.40
+      wall_overcut_mm: 0.40
+      maximum_wall_thickness_mm: 5.0
+      ray_entry_tolerance_mm: 0.65
+      following_wall_safety_mm: 0.10
+      axis_core_overcut_mm: 0.30
+      minimum_axis_visibility_row_fraction: 0.50
+      minimum_axis_clear_corridor_fraction: 0.95
+      union_batch_size: 16
+      fragment_volume_tolerance_mm3: 2.0
+      minimum_removed_volume_mm3: 1.0
+      residual_volume_tolerance_mm3: 0.0001
+      volume_identity_tolerance_mm3: 0.05
+      adaptive_volume_identity_tolerance_mm3: 0.005
+      volume_identity_relative_tolerance: 0.0001
+  # 可选：每台手机各写一项；完整字段约束见 docs/guide/configuration.md。
+  # handpiece_avoidance:
+  #   - id: handpiece_1
+  #     handpiece: input/handpiece.stl
+  #     motion_mode: buccal_outward
+  #     fragment_volume_tolerance_mm3: 0.0001
   press_beam:
     diameter_mm: 4.6
     guide_overlap_mm: 0.3
@@ -94,11 +175,12 @@ design:
     anchors: []
 
 planning:
-  # 每个已识别圆环分别输入钻针长度和植体长度；钻针位于手机内部的长度固定为 12 mm。
+  # 每个已识别圆环分别输入钻针、植体和手机内钻针长度。
   guide_posts:
     - ring_index: 1
       drill_length_mm: 33.00
       implant_length_mm: 12.00
+      drill_inside_handpiece_length_mm: 12.00
       sleeve_template_extension_mm: 8.00
       # sleeve 仅允许覆盖三项轴向高度；左右两根同步使用。
       sleeve:

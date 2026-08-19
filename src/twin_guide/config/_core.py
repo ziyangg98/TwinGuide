@@ -8,13 +8,26 @@ from dataclasses import dataclass, replace
 from dataclasses import field as dataclass_field
 from pathlib import Path
 
-from twin_guide.config.loading import load_case_yaml
 from twin_guide.case_schema import normalize_case_definition
+from twin_guide.config.algorithm_parameters import (
+    parse_anchor_selection as _parse_anchor_selection,
+)
+from twin_guide.config.algorithm_parameters import (
+    parse_connector_path as _parse_connector_path,
+)
+from twin_guide.config.algorithm_parameters import (
+    parse_observation_solver as _parse_observation_solver,
+)
+from twin_guide.config.algorithm_parameters import (
+    parse_tooth_identification as _parse_tooth_identification,
+)
+from twin_guide.config.loading import load_case_yaml
 from twin_guide.config.parsing import (
     CASE_ID_PATTERN,
     _boolean,
     _case_id,
     _case_yaml_jaw,
+    _finite_number,
     _json_path,
     _mapping,
     _number,
@@ -66,7 +79,6 @@ from twin_guide.config.types import (
     SurfaceAnchorOverride,
     TerminalDistalCommonNodeParameters,
     ToothAnchorStation,
-    ToothIdentificationBackend,
     ToothIdentificationInputs,
     WindowParameters,
 )
@@ -156,9 +168,9 @@ class CaseConfig:
             "design",
         )
         yaml_planning = _mapping(root.get("planning", {}), "planning")
-        tooth_identification = ToothIdentificationInputs(
+        tooth_identification = _parse_tooth_identification(
+            runtime.get("tooth_identification"),
             path,
-            _parse_tooth_identification_backend(runtime.get("tooth_identification")),
         )
         guide_anchor_raw = _merge_case_design_section(
             None,
@@ -278,27 +290,6 @@ def _parse_case_objects(raw: dict[str, object], base_directory: Path) -> InputMe
             _required(dental, "path"), base_directory, "objects.dental.path"
         ),
     )
-
-
-def _parse_tooth_identification_backend(value: object) -> ToothIdentificationBackend:
-    """读取可选牙位识别后端。"""
-
-    if value is None:
-        return ToothIdentificationBackend.FDI_NEW
-    raw = _mapping(value, "runtime.tooth_identification")
-    _reject_unknown(
-        raw,
-        {"backend", "case_yaml"},
-        "runtime.tooth_identification",
-    )
-    try:
-        return ToothIdentificationBackend(
-            str(raw.get("backend", ToothIdentificationBackend.FDI_NEW))
-        )
-    except ValueError as error:
-        raise ConfigurationError(
-            "runtime.tooth_identification.backend 必须为 standard 或 fdi_new"
-        ) from error
 
 
 def _parse_sleeve(raw: dict[str, object]) -> SleeveParameters:
@@ -586,9 +577,11 @@ def _parse_geometry(raw: dict[str, object]) -> GeometryParameters:
         "sleeve_stop_front_avoidance_mm",
         "connection_blocks",
         "connector_guide_endpoint",
+        "anchor_selection",
+        "connector_path",
     }
     _reject_unknown(raw, fields, "geometry")
-    return GeometryParameters(
+    parameters = GeometryParameters(
         channel_axial_margin_mm=_number(
             _required(raw, "channel_axial_margin_mm"), "geometry.channel_axial_margin_mm"
         ),
@@ -619,7 +612,14 @@ def _parse_geometry(raw: dict[str, object]) -> GeometryParameters:
             raw.get("connector_guide_endpoint", {}),
             "geometry.connector_guide_endpoint",
         ),
+        anchor_selection=_parse_anchor_selection(raw.get("anchor_selection")),
+        connector_path=_parse_connector_path(raw.get("connector_path")),
     )
+    if parameters.connector_path.lower_approach_overlap_mm >= parameters.connector_diameter_mm:
+        raise ConfigurationError(
+            "geometry.connector_path.lower_approach_overlap_mm 必须小于连接梁直径"
+        )
+    return parameters
 
 
 def _parse_windows(
@@ -641,6 +641,7 @@ def _parse_windows(
         "observation_local_failure_drop_targets_mm",
         "observation_local_failure_transition_rows",
         "observation_adaptive_fallback_enabled",
+        "observation_solver",
     }
     _reject_unknown(raw, fields, "windows")
     axis_drop_mm = _number(
@@ -724,6 +725,7 @@ def _parse_windows(
             raw.get("observation_adaptive_fallback_enabled", False),
             "windows.observation_adaptive_fallback_enabled",
         ),
+        observation_solver=_parse_observation_solver(raw.get("observation_solver")),
     )
 
 
@@ -751,9 +753,12 @@ def _parse_single_handpiece_avoidance(
             "collision_refinement_degrees",
             "envelope_step_degrees",
             "envelope_simplify_tolerance_mm",
+            "axial_depth_range_mm",
+            "axial_step_mm",
             "extra_clearance_mm",
             "tooth_clearance_mm",
             "connector_clearance_mm",
+            "fragment_volume_tolerance_mm3",
         },
         section,
     )
@@ -765,9 +770,7 @@ def _parse_single_handpiece_avoidance(
         else HandpieceMotionMode.BUCCAL_OUTWARD
     )
     try:
-        motion_mode = HandpieceMotionMode(
-            raw.get("motion_mode", default_motion_mode.value)
-        )
+        motion_mode = HandpieceMotionMode(raw.get("motion_mode", default_motion_mode.value))
     except ValueError as error:
         raise ConfigurationError(
             "handpiece_avoidance.motion_mode 必须为 symmetric_lr 或 buccal_outward"
@@ -778,9 +781,7 @@ def _parse_single_handpiece_avoidance(
         else HandpieceSamplingMode.EXACT_UNIFORM
     )
     try:
-        sampling_mode = HandpieceSamplingMode(
-            raw.get("sampling_mode", default_sampling.value)
-        )
+        sampling_mode = HandpieceSamplingMode(raw.get("sampling_mode", default_sampling.value))
     except ValueError as error:
         raise ConfigurationError(
             "handpiece_avoidance.sampling_mode 必须为 exact_uniform 或 adaptive"
@@ -798,13 +799,10 @@ def _parse_single_handpiece_avoidance(
         "handpiece_avoidance.maximum_angle_degrees",
         positive=True,
     )
-    maximum_allowed = (
-        45.0 if motion_mode is HandpieceMotionMode.SYMMETRIC_LR else 180.0
-    )
+    maximum_allowed = 45.0 if motion_mode is HandpieceMotionMode.SYMMETRIC_LR else 180.0
     if maximum_angle_degrees > maximum_allowed:
         raise ConfigurationError(
-            f"{motion_mode.value} 的 maximum_angle_degrees 必须小于或等于 "
-            f"{maximum_allowed:g}"
+            f"{motion_mode.value} 的 maximum_angle_degrees 必须小于或等于 {maximum_allowed:g}"
         )
     pose_samples = _positive_integer(
         raw.get(
@@ -813,19 +811,15 @@ def _parse_single_handpiece_avoidance(
         ),
         "handpiece_avoidance.pose_samples",
     )
-    if (
-        motion_mode is HandpieceMotionMode.SYMMETRIC_LR
-        and (pose_samples < 3 or pose_samples % 2 == 0)
+    if motion_mode is HandpieceMotionMode.SYMMETRIC_LR and (
+        pose_samples < 3 or pose_samples % 2 == 0
     ):
         raise ConfigurationError(
             "handpiece_avoidance.pose_samples 必须为不小于 3 的奇数，以包含 0° 姿态"
         )
     if motion_mode is HandpieceMotionMode.BUCCAL_OUTWARD and pose_samples < 2:
         raise ConfigurationError("buccal_outward 的 pose_samples 必须不小于 2")
-    if (
-        motion_mode is HandpieceMotionMode.SYMMETRIC_LR
-        and raw.get("stop_report") is None
-    ):
+    if motion_mode is HandpieceMotionMode.SYMMETRIC_LR and raw.get("stop_report") is None:
         raise ConfigurationError("symmetric_lr 的 stop_report 为必填项")
     union_batch_size = _positive_integer(
         raw.get("union_batch_size", 7),
@@ -833,6 +827,24 @@ def _parse_single_handpiece_avoidance(
     )
     if union_batch_size < 2:
         raise ConfigurationError("handpiece_avoidance.union_batch_size 必须不小于 2")
+    raw_axial_range = raw.get("axial_depth_range_mm", [0.0, 0.0])
+    if not isinstance(raw_axial_range, list) or len(raw_axial_range) != 2:
+        raise ConfigurationError("handpiece_avoidance.axial_depth_range_mm 必须为两个数值的数组")
+    axial_depth_values = []
+    for range_index, value in enumerate(raw_axial_range):
+        name = f"handpiece_avoidance.axial_depth_range_mm[{range_index}]"
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            raise ConfigurationError(f"{name} 必须为数值")
+        number = float(value)
+        if not math.isfinite(number):
+            raise ConfigurationError(f"{name} 必须为有限数")
+        axial_depth_values.append(number)
+    axial_depth_range = tuple(axial_depth_values)
+    axial_min, axial_max = axial_depth_range
+    if axial_min > axial_max:
+        raise ConfigurationError("handpiece_avoidance.axial_depth_range_mm 必须按从小到大排列")
+    if axial_min > 0.0 or axial_max < 0.0:
+        raise ConfigurationError("handpiece_avoidance.axial_depth_range_mm 必须包含 0 mm 当前姿态")
     return HandpieceAvoidanceParameters(
         avoidance_id=avoidance_id,
         handpiece=_stl_path(
@@ -873,6 +885,12 @@ def _parse_single_handpiece_avoidance(
             raw.get("envelope_simplify_tolerance_mm", 0.05),
             "handpiece_avoidance.envelope_simplify_tolerance_mm",
         ),
+        axial_depth_range_mm=(float(axial_min), float(axial_max)),
+        axial_step_mm=_number(
+            raw.get("axial_step_mm", 0.5),
+            "handpiece_avoidance.axial_step_mm",
+            positive=True,
+        ),
         extra_clearance_mm=_number(
             raw.get("extra_clearance_mm", 0.0),
             "handpiece_avoidance.extra_clearance_mm",
@@ -884,6 +902,11 @@ def _parse_single_handpiece_avoidance(
         connector_clearance_mm=_number(
             raw.get("connector_clearance_mm", 0.20),
             "handpiece_avoidance.connector_clearance_mm",
+        ),
+        fragment_volume_tolerance_mm3=_number(
+            raw.get("fragment_volume_tolerance_mm3", 1.0e-4),
+            "handpiece_avoidance.fragment_volume_tolerance_mm3",
+            positive=True,
         ),
     )
 
@@ -1038,7 +1061,13 @@ def _parse_editor_overrides(
         item = _mapping(value, f"editor_overrides.sleeve_sites[{index}]")
         _reject_unknown(
             item,
-            {"ring_index", "height_mm", "platform_height_mm", "closed_bore_height_mm"},
+            {
+                "ring_index",
+                "height_mm",
+                "platform_height_mm",
+                "closed_bore_height_mm",
+                "rotation_degrees",
+            },
             f"editor_overrides.sleeve_sites[{index}]",
         )
         try:
@@ -1061,6 +1090,10 @@ def _parse_editor_overrides(
                     _required(item, "closed_bore_height_mm"),
                     f"editor_overrides.sleeve_sites[{index}].closed_bore_height_mm",
                     positive=True,
+                ),
+                rotation_degrees=_finite_number(
+                    item.get("rotation_degrees", 0.0),
+                    f"editor_overrides.sleeve_sites[{index}].rotation_degrees",
                 ),
             )
         except ValueError as error:
@@ -1408,6 +1441,7 @@ def _parse_guide_posts(
                 "drill_length_mm",
                 "implant_length_mm",
                 "sleeve_template_extension_mm",
+                "drill_inside_handpiece_length_mm",
                 "sleeve",
             },
             name,
@@ -1431,8 +1465,17 @@ def _parse_guide_posts(
             f"{name}.sleeve_template_extension_mm",
             positive=True,
         )
+        drill_inside_handpiece_length = _number(
+            item.get("drill_inside_handpiece_length_mm", 12.0),
+            f"{name}.drill_inside_handpiece_length_mm",
+            positive=True,
+        )
         try:
-            calculate_twin_guide_extension_mm(drill_length, implant_length)
+            calculate_twin_guide_extension_mm(
+                drill_length,
+                implant_length,
+                drill_inside_handpiece_length,
+            )
         except ValueError as error:
             raise ConfigurationError(f"{name}: {error}") from error
         guide_posts.append(
@@ -1441,6 +1484,7 @@ def _parse_guide_posts(
                 drill_length_mm=drill_length,
                 implant_length_mm=implant_length,
                 sleeve_template_extension_mm=sleeve_template_extension,
+                drill_inside_handpiece_length_mm=drill_inside_handpiece_length,
                 sleeve=_parse_sleeve_overrides(
                     item.get("sleeve"),
                     f"{name}.sleeve",

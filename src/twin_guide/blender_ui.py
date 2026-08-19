@@ -14,10 +14,22 @@ from pathlib import Path
 from typing import ClassVar
 
 import bpy
-from mathutils import Vector
+from mathutils import Quaternion, Vector
 
+from twin_guide.blender_ui_actions import (
+    TwinGuideCancelOperator,
+    TwinGuideFinalOperator,
+    TwinGuideModelViewOperator,
+    TwinGuidePreviewOperator,
+    TwinGuideRedoOperator,
+    TwinGuideResetSelectedOperator,
+    TwinGuideRestoreOperator,
+    TwinGuideSaveOperator,
+    TwinGuideSleeveRotationStepOperator,
+)
 from twin_guide.blender_ui_gizmos import TwinGuideFeatureGizmoGroup
 from twin_guide.blender_ui_panel import (
+    PanelBindings,
     TWINGUIDE_UL_feature_list,
     TwinGuideFeatureItem,
     TwinGuidePanel,
@@ -243,11 +255,7 @@ def _load_reference_surfaces(*, visible: bool = False) -> None:
         if target is None:
             target = import_stl_mesh(path, name)
         target.display_type = "WIRE" if role == "template" else "SOLID"
-        target.color = (
-            (0.28, 0.52, 0.82, 1.0)
-            if role == "template"
-            else (0.78, 0.70, 0.56, 1.0)
-        )
+        target.color = (0.28, 0.52, 0.82, 1.0) if role == "template" else (0.78, 0.70, 0.56, 1.0)
         target.hide_render = True
         target.hide_select = True
         target.hide_set(not visible)
@@ -298,7 +306,7 @@ def _surface_point(role: str, point: Vector) -> Vector:
 
 
 def _create_sleeve_controls() -> None:
-    """为每个种植位建立一组成对同步的三项高度手柄。"""
+    """为每个种植位建立成对高度和圆心旋转手柄。"""
     for feature in _plan_features("sleeve"):
         raw = feature.get("geometry")
         if not isinstance(raw, dict):
@@ -331,6 +339,56 @@ def _create_sleeve_controls() -> None:
                 origin=list(origin),
                 axis=list(axis),
             )
+        pair_origins = raw.get("pair_axis_origins")
+        if isinstance(pair_origins, list) and len(pair_origins) == 2:
+            first = _vec(pair_origins[0])
+            second = _vec(pair_origins[1])
+            current_direction = (second - first).normalized()
+            angle = 0.0 if override is None else override.rotation_degrees
+            reference = Quaternion(axis, math.radians(-angle)) @ current_direction
+            perpendicular = axis.cross(reference).normalized()
+            pair_half_span = 0.5 * (second - first).length
+            radius = pair_half_span
+            display_center = origin + axis * values["platform"]
+            first_display = first + axis * values["platform"]
+            second_display = second + axis * values["platform"]
+            pivot_circle = [
+                display_center
+                + reference * (0.45 * math.cos(math.tau * index / 32))
+                + perpendicular * (0.45 * math.sin(math.tau * index / 32))
+                for index in range(32)
+            ]
+            _curve(f"Sleeve_Rotation_Pivot_{ring_index}", pivot_circle, True)
+            _curve(
+                f"Sleeve_Rotation_Direction_{ring_index}",
+                [first_display, second_display],
+            )
+            for guide_number, direction in (
+                (1, -current_direction),
+                (2, current_direction),
+            ):
+                guide_reference = Quaternion(axis, math.radians(-angle)) @ direction
+                _control(
+                    f"Sleeve_Site_{ring_index}_guide_{guide_number}_rotation",
+                    display_center + direction * radius,
+                    "sleeve_rotation",
+                    ring_index=ring_index,
+                    role=f"rotation_guide_{guide_number}",
+                    guide_number=guide_number,
+                    center=list(display_center),
+                    axis=list(axis),
+                    reference=list(guide_reference),
+                    radius=radius,
+                    pair_half_span=pair_half_span,
+                    platform_height=values["platform"],
+                    total_height=values["total"],
+                    angle_degrees=angle,
+                )
+                base = display_center + direction * radius - axis * values["platform"]
+                _curve(
+                    f"Sleeve_Rotation_Guide{guide_number}_{ring_index}",
+                    [base, base + axis * values["total"]],
+                )
         _hint_label(
             f"Sleeve_Site_{ring_index}",
             f"种植位 {ring_index} · 双导柱",
@@ -746,6 +804,44 @@ def _update_sleeve_hint_label(ring_index: int) -> None:
     )
 
 
+def _update_sleeve_rotation_preview(ring_index: int, angle_degrees: float) -> None:
+    """同步旋转手柄、成对轴心方向线和精确角度值。"""
+
+    controls = [
+        object_
+        for object_ in bpy.data.objects
+        if object_.get("tg_kind") == "sleeve_rotation"
+        and object_.get("tg_ring_index") == ring_index
+    ]
+    if not controls:
+        return
+    angle = min(180.0, max(-180.0, float(angle_degrees)))
+    positions: dict[int, Vector] = {}
+    for control in controls:
+        center = Vector(control["tg_center"])
+        axis = Vector(control["tg_axis"]).normalized()
+        reference = Vector(control["tg_reference"]).normalized()
+        direction = Quaternion(axis, math.radians(angle)) @ reference
+        radius = float(control["tg_radius"])
+        control["tg_angle_degrees"] = angle
+        control.location = center + direction * radius
+        guide_number = int(control["tg_guide_number"])
+        positions[guide_number] = control.location.copy()
+        platform_height = float(control["tg_platform_height"])
+        total_height = float(control["tg_total_height"])
+        base = control.location - axis * platform_height
+        _update_curve(
+            f"Sleeve_Rotation_Guide{guide_number}_{ring_index}",
+            [base, base + axis * total_height],
+        )
+    if len(positions) != 2:
+        return
+    _update_curve(
+        f"Sleeve_Rotation_Direction_{ring_index}",
+        [positions[1], positions[2]],
+    )
+
+
 def _update_curve(name: str, points: list[Vector], cyclic: bool = False) -> None:
     """用新折线替换同名轻量预览。"""
     existing = bpy.data.objects.get(f"{OVERLAY_PREFIX}{name}")
@@ -861,6 +957,18 @@ def _feature_label(feature_id: str) -> tuple[str, str]:
     return "其他", feature_id
 
 
+def _panel_bindings() -> PanelBindings:
+    """把主控制器状态以只读边界提供给面板渲染器。"""
+
+    return PanelBindings(
+        editor_ready=_EDITOR_PLAN_PATH is not None,
+        job_active=_JOB is not None,
+        config=_CONFIG,
+        feature_label=_feature_label,
+        find_control=_find_control,
+    )
+
+
 def _observation_display_name(identifier: str) -> str:
     """把内部观察窗编号转换为界面显示名称。"""
 
@@ -927,6 +1035,17 @@ def _controls_for_feature(feature_id: str) -> dict[str, bpy.types.Object]:
         if object_.name.startswith(CONTROL_PREFIX) and object_.get("tg_feature_id") == feature_id:
             controls[str(object_.get("tg_role", object_.get("tg_kind", "main")))] = object_
     return controls
+
+
+def _sleeve_rotation_control(
+    controls: dict[str, bpy.types.Object],
+) -> bpy.types.Object | None:
+    """返回一根可代表成对同步角度的导柱旋转标记。"""
+
+    return next(
+        (control for control in controls.values() if control.get("tg_kind") == "sleeve_rotation"),
+        None,
+    )
 
 
 def _axis_distance(object_: bpy.types.Object) -> float:
@@ -1014,6 +1133,8 @@ def _sync_feature_values(feature_id: str) -> None:
         state.feature_value_1 = _axis_distance(controls["closed"])
         state.feature_value_2 = _axis_distance(controls["platform"])
         state.feature_value_3 = _axis_distance(controls["total"])
+        rotation = _sleeve_rotation_control(controls)
+        state.feature_value_4 = 0.0 if rotation is None else float(rotation["tg_angle_degrees"])
     elif feature_id.startswith("observation_window:"):
         state.feature_fdi_start = int(controls["start"]["tg_fdi"])
         state.feature_fdi_end = int(controls["end"]["tg_fdi"])
@@ -1096,7 +1217,9 @@ def _feature_values_updated(
         _move_on_axes(controls["closed"], (state.feature_value_1,))
         _move_on_axes(controls["platform"], (state.feature_value_2,))
         _move_on_axes(controls["total"], (state.feature_value_3,))
-        _update_sleeve_hint_label(int(controls["platform"]["tg_ring_index"]))
+        ring_index = int(controls["platform"]["tg_ring_index"])
+        _update_sleeve_rotation_preview(ring_index, state.feature_value_4)
+        _update_sleeve_hint_label(ring_index)
     elif feature_id.startswith("observation_window:"):
         _move_on_axes(controls["drop"], (state.feature_value_1,))
         _update_observation_overlay(
@@ -1607,11 +1730,16 @@ def _feature_adapter_value(feature_id: str) -> EditorOverrides:
         return with_operation_window(current, value)
     if feature_id.startswith("sleeve:"):
         ring_index = int(controls["platform"]["tg_ring_index"])
+        rotation = _sleeve_rotation_control(controls)
         value = SleeveSiteOverride(
             ring_index,
             round(_axis_distance(controls["total"]), 3),
             round(_axis_distance(controls["platform"]), 3),
             round(_axis_distance(controls["closed"]), 3),
+            round(
+                0.0 if rotation is None else float(rotation["tg_angle_degrees"]),
+                3,
+            ),
         )
         return with_sleeve(current, value)
     if feature_id.startswith("observation_window:"):
@@ -1693,7 +1821,10 @@ def _matching_model_snapshot(
     snapshot_path = directory / "ui-editor-snapshot.json"
     if not model.is_file() or not snapshot_path.is_file():
         return None
-    snapshot = _load_editor_plan(snapshot_path)
+    try:
+        snapshot = _load_editor_plan(snapshot_path)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
     revision = int(snapshot.get("revision", -1))
     if not editor_snapshot_matches(
         snapshot,
@@ -1807,13 +1938,14 @@ def _start_job(mode: str) -> None:
         config_path=_JOB_CONFIG_PATH,
         output_directory=output,
         manifest_path=manifest,
+        formal_output_directory=_CONFIG.output_directory,
         revision=0 if _SESSION is None else _SESSION.revision,
         changed_feature_ids=changed_ids,
     )
     state = bpy.context.scene.twin_guide_state
     state.task_status = "正在刷新编辑数据" if mode == "plan" else "生成中"
     if mode == "preview":
-        state.preview_status = "预览生成中"
+        state.preview_status = "快速预览生成中（通常几十秒）"
     elif mode == "final":
         state.validation_status = "运行中"
 
@@ -1830,7 +1962,7 @@ def _poll_job() -> float:
         return 0.5
     status = str(manifest.get("status", ""))
     state = bpy.context.scene.twin_guide_state
-    state.task_status = {
+    summary = {
         "starting": "正在启动",
         "running": "运行中",
         "validating": "正在检验",
@@ -1841,6 +1973,8 @@ def _poll_job() -> float:
         "failed": "任务失败",
         "cancelled": "已取消",
     }.get(status, status)
+    detail = str(manifest.get("detail", "")).strip()
+    state.task_status = f"{summary}：{detail}" if detail else summary
     if status not in {"completed", "validation_failed", "failed", "cancelled"}:
         if _JOB.process.poll() is not None:
             status = "failed"
@@ -1887,7 +2021,7 @@ def _poll_job() -> float:
                 _load_model(model_path)
                 _create_controls()
                 _show_model_view()
-                state.preview_status = f"预览已更新（版本 {revision}）"
+                state.preview_status = f"快速预览已更新（版本 {revision}）"
                 _LAST_PREVIEW_OVERRIDES = _SESSION.working_overrides
         elif model_path.is_file():
             state.preview_status = "预览缺少编辑快照，仍显示上一版"
@@ -2126,6 +2260,8 @@ def _semantic_values(
                 (object_.location - base).dot(Vector(object_["tg_down"])),
             ),
         )
+    if kind == "sleeve_rotation":
+        return (("双导柱整体方位角 (°)", float(object_["tg_angle_degrees"])),)
     values = _gizmo_axes(object_)
     if not values:
         return ()
@@ -2203,31 +2339,6 @@ class TwinGuideState(bpy.types.PropertyGroup):
         default=True,
         update=_reference_visibility_updated,
     )
-
-
-class TwinGuideModelViewOperator(bpy.types.Operator):
-    """回到只显示结构概览的模型查看状态。"""
-
-    bl_idname = "twinguide.model_view"
-    bl_label = "模型查看"
-
-    @classmethod
-    def poll(cls, context: bpy.types.Context) -> bool:
-        """编辑数据准备完成且未锁定时允许切换结构。"""
-
-        return bool(
-            _EDITOR_PLAN_PATH is not None and not context.scene.twin_guide_state.editing_locked
-        )
-
-    def execute(self, context: bpy.types.Context) -> set[str]:
-        """显示指定结构的控制点。"""
-
-        global _SELECTION_SYNC
-        _SELECTION_SYNC = True
-        context.scene.twin_guide_state.active_feature_index = -1
-        _SELECTION_SYNC = False
-        _show_model_view()
-        return {"FINISHED"}
 
 
 class TwinGuideHandleDragOperator(bpy.types.Operator):
@@ -2350,6 +2461,139 @@ class TwinGuideHandleDragOperator(bpy.types.Operator):
             value = round(value / step) * step
         _gizmo_set_value(self.axis_index, value)
         context.area.header_text_set(self._header_text(object_))
+        return {"RUNNING_MODAL"}
+
+
+class TwinGuideSleeveRotationOperator(bpy.types.Operator):
+    """在导柱共同圆心平面内直接拖动旋转角。"""
+
+    bl_idname = "twinguide.drag_sleeve_rotation"
+    bl_label = "旋转双导柱"
+    bl_options: ClassVar[set[str]] = {"BLOCKING"}
+
+    _object_name: str = ""
+    _initial_angle: float = 0.0
+    _initial_mouse_angle: float = 0.0
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        """只允许橙色导柱旋转手柄进入圆周拖动。"""
+
+        object_ = context.active_object
+        return bool(
+            object_ is not None
+            and object_.get("tg_kind") == "sleeve_rotation"
+            and _SESSION is not None
+            and not _SESSION.locked
+        )
+
+    @staticmethod
+    def _mouse_angle(
+        context: bpy.types.Context,
+        event: bpy.types.Event,
+        object_: bpy.types.Object,
+    ) -> float | None:
+        """把鼠标射线与旋转平面的交点转换为相对参考方向角。"""
+
+        from bpy_extras import view3d_utils
+        from mathutils.geometry import intersect_line_plane
+
+        coordinate = (event.mouse_region_x, event.mouse_region_y)
+        ray_origin = view3d_utils.region_2d_to_origin_3d(
+            context.region,
+            context.region_data,
+            coordinate,
+        )
+        ray_direction = view3d_utils.region_2d_to_vector_3d(
+            context.region,
+            context.region_data,
+            coordinate,
+        )
+        center = Vector(object_["tg_center"])
+        axis = Vector(object_["tg_axis"]).normalized()
+        hit = intersect_line_plane(
+            ray_origin,
+            ray_origin + ray_direction * 10000.0,
+            center,
+            axis,
+            False,
+        )
+        if hit is None:
+            return None
+        radial = hit - center
+        radial -= axis * radial.dot(axis)
+        if radial.length <= 1e-8:
+            return None
+        radial.normalize()
+        reference = Vector(object_["tg_reference"]).normalized()
+        return math.atan2(axis.dot(reference.cross(radial)), reference.dot(radial))
+
+    def invoke(
+        self,
+        context: bpy.types.Context,
+        event: bpy.types.Event,
+    ) -> set[str]:
+        """记录按下时的角度并进入圆周拖动。"""
+
+        object_ = context.active_object
+        if object_ is None or _SESSION is None:
+            return {"CANCELLED"}
+        mouse_angle = self._mouse_angle(context, event, object_)
+        if mouse_angle is None:
+            return {"CANCELLED"}
+        self._object_name = object_.name
+        self._initial_angle = float(object_["tg_angle_degrees"])
+        self._initial_mouse_angle = mouse_angle
+        _SESSION.begin_edit()
+        context.window_manager.modal_handler_add(self)
+        context.area.header_text_set(
+            f"双导柱整体方位角: {self._initial_angle:.1f}°  |  Shift 0.1°  |  Ctrl 1°  |  Esc 取消"
+        )
+        return {"RUNNING_MODAL"}
+
+    def modal(
+        self,
+        context: bpy.types.Context,
+        event: bpy.types.Event,
+    ) -> set[str]:
+        """实时更新圆周手柄、方向线和右侧角度输入。"""
+
+        object_ = bpy.data.objects.get(self._object_name)
+        if object_ is None or _SESSION is None:
+            return {"CANCELLED"}
+        if event.type == "ESC":
+            _SESSION.cancel_edit()
+            _rebuild_working_proxies()
+            context.area.header_text_set(None)
+            return {"CANCELLED"}
+        if event.type == "LEFTMOUSE" and event.value == "RELEASE":
+            _SESSION.commit_edit()
+            context.scene.twin_guide_state.dirty = _SESSION.dirty
+            _sync_feature_values(str(object_["tg_feature_id"]))
+            context.area.header_text_set(None)
+            return {"FINISHED"}
+        if event.type != "MOUSEMOVE":
+            return {"RUNNING_MODAL"}
+        mouse_angle = self._mouse_angle(context, event, object_)
+        if mouse_angle is None:
+            return {"RUNNING_MODAL"}
+        delta = math.atan2(
+            math.sin(mouse_angle - self._initial_mouse_angle),
+            math.cos(mouse_angle - self._initial_mouse_angle),
+        )
+        angle = min(180.0, max(-180.0, self._initial_angle + math.degrees(delta)))
+        if event.shift:
+            angle = round(angle * 10.0) / 10.0
+        elif event.ctrl:
+            angle = round(angle)
+        ring_index = int(object_["tg_ring_index"])
+        _update_sleeve_rotation_preview(ring_index, angle)
+        _preview_feature_edit(str(object_["tg_feature_id"]))
+        context.scene.twin_guide_state.dirty = _SESSION.dirty
+        _sync_feature_values(str(object_["tg_feature_id"]))
+        context.area.header_text_set(
+            f"双导柱整体方位角: {angle:.1f}°  |  Shift 0.1°  |  Ctrl 1°  |  Esc 取消"
+        )
         return {"RUNNING_MODAL"}
 
 
@@ -2481,401 +2725,13 @@ class TwinGuideSurfaceDragOperator(bpy.types.Operator):
         return {"RUNNING_MODAL"}
 
 
-class TwinGuideSaveOperator(bpy.types.Operator):
-    """仅在明确点击时原子写回病例覆盖值。"""
-
-    bl_idname = "twinguide.save_adjustments"
-    bl_label = "保存调整"
-
-    @classmethod
-    def poll(cls, _context: bpy.types.Context) -> bool:
-        """最终任务锁定期间不允许写回病例。"""
-
-        return bool(_SESSION is not None and not _SESSION.locked)
-
-    def execute(self, context: bpy.types.Context) -> set[str]:
-        """保存当前控制点并刷新保存基线。"""
-        global _CONFIG
-        try:
-            if _SESSION is not None and _SESSION.editing:
-                _SESSION.commit_edit()
-            if _SESSION is None:
-                raise RuntimeError("编辑会话尚未初始化")
-            overrides = _SESSION.working_overrides
-            save_editor_overrides(Path(context.scene.twin_guide_state.config_path), overrides)
-            _CONFIG = CaseConfig.from_yaml(Path(context.scene.twin_guide_state.config_path))
-            _SESSION.mark_saved()
-            context.scene.twin_guide_state.dirty = False
-        except Exception as error:
-            self.report({"ERROR"}, str(error))
-            return {"CANCELLED"}
-        return {"FINISHED"}
-
-
-class TwinGuideResetSelectedOperator(bpy.types.Operator):
-    """撤销最近一次已确认的语义编辑。"""
-
-    bl_idname = "twinguide.reset_selected"
-    bl_label = "撤销"
-
-    @classmethod
-    def poll(cls, _context: bpy.types.Context) -> bool:
-        """存在可撤销语义快照时启用。"""
-
-        return bool(_SESSION is not None and not _SESSION.locked and _SESSION.undo_stack)
-
-    def execute(self, context: bpy.types.Context) -> set[str]:
-        """撤销会话快照并重建结构代理。"""
-
-        if _SESSION is None or not _SESSION.undo():
-            return {"CANCELLED"}
-        _rebuild_working_proxies()
-        return {"FINISHED"}
-
-
-class TwinGuideRedoOperator(bpy.types.Operator):
-    """重做最近一次已撤销的语义编辑。"""
-
-    bl_idname = "twinguide.redo_adjustment"
-    bl_label = "重做"
-
-    @classmethod
-    def poll(cls, _context: bpy.types.Context) -> bool:
-        """存在可重做语义快照时启用。"""
-
-        return bool(_SESSION is not None and not _SESSION.locked and _SESSION.redo_stack)
-
-    def execute(self, _context: bpy.types.Context) -> set[str]:
-        """重做会话快照并重建结构代理。"""
-
-        if _SESSION is None or not _SESSION.redo():
-            return {"CANCELLED"}
-        _rebuild_working_proxies()
-        return {"FINISHED"}
-
-
-class TwinGuideRestoreOperator(bpy.types.Operator):
-    """从已保存阶段结果恢复全部控制点。"""
-
-    bl_idname = "twinguide.restore_saved"
-    bl_label = "恢复已保存值"
-
-    @classmethod
-    def poll(cls, _context: bpy.types.Context) -> bool:
-        """工作值偏离保存值且未锁定时启用。"""
-
-        return bool(_SESSION is not None and not _SESSION.locked and _SESSION.dirty)
-
-    def execute(self, _context: bpy.types.Context) -> set[str]:
-        """恢复最近保存值并建立一个可撤销步骤。"""
-
-        if _SESSION is None:
-            return {"CANCELLED"}
-        _SESSION.replace(_SESSION.saved_overrides)
-        _rebuild_working_proxies()
-        return {"FINISHED"}
-
-
-class TwinGuidePreviewOperator(bpy.types.Operator):
-    """启动不运行几何检验的实体预览。"""
-
-    bl_idname = "twinguide.update_preview"
-    bl_label = "更新预览"
-
-    @classmethod
-    def poll(cls, context: bpy.types.Context) -> bool:
-        """编辑计划就绪且没有其他后台任务时启用。"""
-
-        return bool(
-            _EDITOR_PLAN_PATH is not None
-            and not _EDITOR_PLAN_STALE
-            and _JOB is None
-            and not context.scene.twin_guide_state.editing_locked
-        )
-
-    def execute(self, context: bpy.types.Context) -> set[str]:
-        """提交独立后台实体预览任务。"""
-        try:
-            _start_job("preview")
-        except Exception as error:
-            self.report({"ERROR"}, str(error))
-            return {"CANCELLED"}
-        return {"FINISHED"}
-
-
-class TwinGuideFinalOperator(bpy.types.Operator):
-    """保存、生成候选、检验并安全提升正式输出。"""
-
-    bl_idname = "twinguide.final_export"
-    bl_label = "确认导出并检验"
-
-    @classmethod
-    def poll(cls, context: bpy.types.Context) -> bool:
-        """编辑计划就绪且没有其他后台任务时启用。"""
-
-        return bool(
-            _EDITOR_PLAN_PATH is not None
-            and _JOB is None
-            and not context.scene.twin_guide_state.editing_locked
-        )
-
-    def execute(self, context: bpy.types.Context) -> set[str]:
-        """提交最终候选生成和完整检验任务。"""
-        result = bpy.ops.twinguide.save_adjustments()
-        if "FINISHED" not in result:
-            return {"CANCELLED"}
-        try:
-            if _SESSION is not None:
-                _SESSION.locked = True
-            context.scene.twin_guide_state.editing_locked = True
-            _start_job("final")
-        except Exception as error:
-            if _SESSION is not None:
-                _SESSION.locked = False
-            context.scene.twin_guide_state.editing_locked = False
-            self.report({"ERROR"}, str(error))
-            return {"CANCELLED"}
-        return {"FINISHED"}
-
-
-class TwinGuideCancelOperator(bpy.types.Operator):
-    """取消当前后台生成任务。"""
-
-    bl_idname = "twinguide.cancel_job"
-    bl_label = "取消后台任务"
-
-    @classmethod
-    def poll(cls, _context: bpy.types.Context) -> bool:
-        """只在后台任务存在时启用。"""
-
-        return _JOB is not None
-
-    def execute(self, _context: bpy.types.Context) -> set[str]:
-        """终止子进程并保留既有正式文件。"""
-        if _JOB is not None and not _JOB.cancel():
-            self.report({"INFO"}, "正式模型正在更新，当前阶段不能取消")
-        return {"FINISHED"}
-
-
-class _TwinGuidePanelRenderer:
-    """显示简化操作按钮和相互独立的状态。"""
-
-    layout: bpy.types.UILayout
-
-    @staticmethod
-    def _status_icon(value: str) -> str:
-        """为短状态选择稳定的 Blender 图标。"""
-
-        if any(token in value for token in ("失败", "上一版")):
-            return "ERROR"
-        if any(token in value for token in ("通过", "已", "完成", "空闲")):
-            return "CHECKMARK"
-        return "INFO"
-
-    def _draw_status_card(
-        self,
-        layout: bpy.types.UILayout,
-        state: TwinGuideState,
-    ) -> None:
-        """绘制病例、审核、预览和任务状态。"""
-
-        box = layout.box()
-        header = box.row(align=True)
-        header.label(text=state.case_label, icon="FILE_TICK")
-        if state.dirty:
-            header.label(text="未保存", icon="ERROR")
-        else:
-            header.label(text="已保存", icon="CHECKMARK")
-        status = box.grid_flow(columns=2, even_columns=True, align=True)
-        status.label(text=f"审核 {state.review_status}")
-        status.label(text=f"检验 {state.validation_status}")
-        if state.task_status not in {"", "空闲", "已完成"}:
-            box.label(text=state.task_status, icon=self._status_icon(state.task_status))
-
-    @staticmethod
-    def _feature_instruction(feature_id: str) -> str:
-        """返回当前结构的一句话操作提示。"""
-
-        if feature_id.startswith("operation_window:"):
-            return "拖中心移动窗口；拖边缘调宽高；拖前/后点调切除量。"
-        if feature_id.startswith("observation_window:"):
-            return "拖起止点换牙位；拖轴向手柄调下沉、高度和扫掠角。"
-        if feature_id.startswith("connector:"):
-            return "拖沿线箭头改避让节点位置，拖向下箭头改正视避让量。"
-        if feature_id.startswith("press_anchor:"):
-            return "选择吸附表面后，按“在表面重新定位”让图钉贴面滑动。"
-        if feature_id == "press_junction":
-            return "拖二维十字，只在当前工作平面内移动汇合点。"
-        return "拖三个圆环分别调整底部、平台和总高度。"
-
-    @staticmethod
-    def _draw_feature_values(
-        box: bpy.types.UILayout,
-        state: TwinGuideState,
-        feature_id: str,
-    ) -> None:
-        """绘制当前完整结构的临床参数输入框。"""
-
-        box.use_property_split = True
-        box.use_property_decorate = False
-        if feature_id.startswith("operation_window:"):
-            labels = (
-                "宽度 (mm)",
-                "高度 (mm)",
-                "前部切除量 (mm)",
-                "后部切除量 (mm)",
-                "局部横向 (mm)",
-                "局部纵向 (mm)",
-            )
-        elif feature_id.startswith("connector:"):
-            labels = ("沿线位置", "向下偏移 (mm)")
-            if _CONFIG is not None:
-                box.label(text=f"梁直径：{_CONFIG.geometry.connector_diameter_mm:.3f} mm")
-                blocks = _CONFIG.geometry.connection_blocks
-                enabled = [
-                    label
-                    for label, value in (
-                        ("下层", blocks.lower_main),
-                        ("上层", blocks.upper_main),
-                        ("按压梁", blocks.press_beam),
-                    )
-                    if value
-                ]
-                box.label(text=f"连接分块：{'、'.join(enabled)}")
-        elif feature_id.startswith("sleeve:"):
-            labels = ("底部高度 (mm)", "平台高度 (mm)", "总高度 (mm)")
-        elif feature_id.startswith("observation_window:"):
-            row = box.row(align=True)
-            row.prop(state, "feature_fdi_start", text="起点 FDI")
-            row.prop(state, "feature_fdi_end", text="终点 FDI")
-            labels = ("轴向下沉 (mm)", "窗口高度 (mm)", "扫掠角 (°)")
-        elif feature_id == "press_junction":
-            labels = ("工作平面 X (mm)", "工作平面 Y (mm)")
-        elif feature_id.startswith("press_anchor:"):
-            box.prop(state, "surface_role")
-            box.prop(state, "feature_position", text="位置 (mm)")
-            box.operator("twinguide.drag_surface_anchor")
-            labels = ()
-        else:
-            labels = ()
-        for index, label in enumerate(labels, start=1):
-            box.prop(state, f"feature_value_{index}", text=label)
-
-    @staticmethod
-    def _draw_advanced(
-        box: bpy.types.UILayout,
-        state: TwinGuideState,
-        selected: bpy.types.Object,
-    ) -> None:
-        """在折叠区域显示不用于常规调整的世界信息。"""
-
-        row = box.row()
-        icon = "TRIA_DOWN" if state.show_advanced else "TRIA_RIGHT"
-        row.prop(state, "show_advanced", text="高级信息", icon=icon, emboss=False)
-        if not state.show_advanced:
-            return
-        location = selected.location
-        box.label(text=(f"世界坐标：({location.x:.3f}, {location.y:.3f}, {location.z:.3f}) mm"))
-        if "tg_normal" in selected:
-            normal = Vector(selected["tg_normal"])
-            box.label(text=f"法向：({normal.x:.4f}, {normal.y:.4f}, {normal.z:.4f})")
-
-    def draw(self, context: bpy.types.Context) -> None:
-        """绘制当前病例编辑工作流。"""
-        layout = self.layout
-        state = context.scene.twin_guide_state
-        self._draw_status_card(layout, state)
-        if _EDITOR_PLAN_PATH is None:
-            box = layout.box()
-            box.label(text="正在准备编辑数据", icon="TIME")
-            hint = box.column(align=True)
-            hint.enabled = False
-            hint.label(text="模型可以查看，几何编辑和预览稍后可用")
-            hint.label(text="准备完成后会自动显示控制点")
-            cancel = layout.column()
-            cancel.enabled = _JOB is not None
-            cancel.operator("twinguide.cancel_job")
-            return
-        editor = layout.column()
-        editor.enabled = not state.editing_locked
-        reference_box = editor.box()
-        reference_box.label(text="参考显示", icon="HIDE_OFF")
-        reference_row = reference_box.row(align=True)
-        reference_row.prop(
-            state,
-            "show_dentition_reference",
-            text="牙列",
-            icon="HIDE_OFF" if state.show_dentition_reference else "HIDE_ON",
-            toggle=True,
-        )
-        reference_row.prop(
-            state,
-            "show_template_reference",
-            text="原始导板",
-            icon="HIDE_OFF" if state.show_template_reference else "HIDE_ON",
-            toggle=True,
-        )
-        selected = context.active_object
-        if (
-            selected is not None
-            and selected.name.startswith(CONTROL_PREFIX)
-            and not selected.hide_get()
-        ):
-            box = editor.box()
-            feature_id = str(selected.get("tg_feature_id", ""))
-            _group, feature_name = _feature_label(feature_id)
-            title = box.row(align=True)
-            title.scale_y = 1.25
-            title.label(text=feature_name, icon="EDITMODE_HLT")
-            handle_hint = str(selected.get("tg_hint", ""))
-            if handle_hint:
-                box.label(text=f"手柄：{handle_hint}")
-            hint = box.column(align=True)
-            hint.enabled = False
-            hint.label(text=self._feature_instruction(feature_id))
-            hint.label(text="Shift 0.01 精调，Ctrl 0.1 对齐，Esc 取消")
-            box.separator()
-            box.label(text="精确参数", icon="DRIVER")
-            self._draw_feature_values(box, state, feature_id)
-            self._draw_advanced(box, state, selected)
-            if feature_id.startswith("operation_window:"):
-                center = _find_control(
-                    "window_center",
-                    site_index=int(feature_id.rsplit(":", 1)[-1]),
-                )
-                if center is not None and center.get("tg_projection_failed"):
-                    box.label(text="部分轮廓未能投影到当前模型", icon="ERROR")
-            if selected.get("tg_resnap_required"):
-                box.label(text="距已保存表面过远，请重新吸附", icon="ERROR")
-        else:
-            hint = editor.box()
-            hint.label(text="选择一个结构开始调整", icon="INFO")
-            hint.label(text="可点三维标签、彩色热点或左侧列表")
-        edit_box = editor.box()
-        edit_box.label(text="编辑", icon="EDITMODE_HLT")
-        row = edit_box.row(align=True)
-        row.operator("twinguide.reset_selected", text="撤销", icon="LOOP_BACK")
-        row.operator("twinguide.redo_adjustment", text="重做", icon="LOOP_FORWARDS")
-        edit_box.operator("twinguide.restore_saved", text="恢复已保存值")
-        edit_box.operator("twinguide.save_adjustments", text="保存调整")
-        output_box = editor.box()
-        output_box.label(text="预览与输出", icon="INFO")
-        note = output_box.column(align=True)
-        note.enabled = False
-        note.label(text="预览用于快速检查形态")
-        note.label(text="最终结果以导出并检验为准")
-        output_box.operator("twinguide.update_preview", text="更新预览")
-        output_box.operator("twinguide.final_export", text="确认导出并检验")
-        cancel = layout.column()
-        cancel.enabled = _JOB is not None
-        cancel.operator("twinguide.cancel_job")
-
-
 CLASSES = (
     TwinGuideFeatureItem,
     TWINGUIDE_UL_feature_list,
     TwinGuideState,
     TwinGuideHandleDragOperator,
+    TwinGuideSleeveRotationOperator,
+    TwinGuideSleeveRotationStepOperator,
     TwinGuideFeatureGizmoGroup,
     TwinGuideModelViewOperator,
     TwinGuideSurfaceDragOperator,
@@ -2948,10 +2804,17 @@ def launch_from_argv() -> None:
     arguments = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else []
     parser = argparse.ArgumentParser(prog="twinguide ui")
     parser.add_argument("--config", required=True, type=Path)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        help="打开指定生成结果目录，并在其中复用 UI 计划和计算缓存",
+    )
     parsed = parser.parse_args(arguments)
     for object_ in tuple(bpy.data.objects):
         bpy.data.objects.remove(object_, do_unlink=True)
     _CONFIG = CaseConfig.from_yaml(parsed.config.resolve())
+    if parsed.output is not None:
+        _CONFIG = replace(_CONFIG, output_directory=parsed.output.resolve())
     _SESSION = EditorSession.create(_CONFIG.editor_overrides)
     _LAST_PREVIEW_OVERRIDES = _CONFIG.editor_overrides
     _EDITOR_PLAN_STALE = False

@@ -7,16 +7,16 @@ and bracketing of neighbouring present crowns.
 
 from __future__ import annotations
 
+import itertools
+import re
+from collections.abc import Iterable
 from dataclasses import asdict
 from pathlib import Path
-import re
-from typing import Iterable
 
 import numpy as np
 import trimesh
 
 from .models import AlignmentPath, ArchFrame, LabeledMissingSlotAnchor
-
 
 _FDI_AFTER_HASH = re.compile(r"#(\d{2})(?=[^0-9]|$)")
 
@@ -43,10 +43,7 @@ def _sleeve_file_nodes(config: dict[str, object]) -> dict[str, dict[str, object]
     if not isinstance(objects, dict):
         return {}
     sleeve = objects.get("sleeve", {})
-    if isinstance(sleeve, dict):
-        files = sleeve.get("files", []) or []
-    else:
-        files = []
+    files = sleeve.get("files", []) or [] if isinstance(sleeve, dict) else []
     if not files:
         files = objects.get("guide_sleeves", []) or []
     if not isinstance(files, list):
@@ -97,17 +94,21 @@ def extract_labeled_missing_slot_anchors(
                 fdi = int(site["fdi"])
                 sleeve_id = str(site["sleeve_id"])
             except (KeyError, TypeError, ValueError):
-                discovery_issues.append({
-                    "reason": "invalid_planning_implant_site",
-                    "site": site,
-                })
+                discovery_issues.append(
+                    {
+                        "reason": "invalid_planning_implant_site",
+                        "site": site,
+                    }
+                )
                 continue
             if fdi not in missing:
-                discovery_issues.append({
-                    "reason": "implant_site_FDI_is_not_declared_missing",
-                    "fdi": fdi,
-                    "sleeve_id": sleeve_id,
-                })
+                discovery_issues.append(
+                    {
+                        "reason": "implant_site_FDI_is_not_declared_missing",
+                        "fdi": fdi,
+                        "sleeve_id": sleeve_id,
+                    }
+                )
                 continue
             requested.append((fdi, sleeve_id, "planning.implant_sites"))
 
@@ -126,11 +127,13 @@ def extract_labeled_missing_slot_anchors(
             try:
                 fdi = int(explicit_fdi)
             except (TypeError, ValueError):
-                discovery_issues.append({
-                    "reason": "invalid_guide_sleeve_FDI",
-                    "sleeve_id": sleeve_id,
-                    "fdi": explicit_fdi,
-                })
+                discovery_issues.append(
+                    {
+                        "reason": "invalid_guide_sleeve_FDI",
+                        "sleeve_id": sleeve_id,
+                        "fdi": explicit_fdi,
+                    }
+                )
                 continue
             if fdi in missing and fdi not in planned_fdis:
                 requested.append((fdi, sleeve_id, "objects.guide_sleeves.fdi"))
@@ -142,58 +145,70 @@ def extract_labeled_missing_slot_anchors(
             if fdi not in planned_fdis:
                 requested.append((fdi, sleeve_id, "sleeve_filename"))
         elif len(candidates) > 1:
-            discovery_issues.append({
-                "reason": "ambiguous_sleeve_filename_FDI",
-                "sleeve_id": sleeve_id,
-                "candidates": sorted(candidates),
-            })
+            discovery_issues.append(
+                {
+                    "reason": "ambiguous_sleeve_filename_FDI",
+                    "sleeve_id": sleeve_id,
+                    "candidates": sorted(candidates),
+                }
+            )
 
     anchors: list[LabeledMissingSlotAnchor] = []
     seen_fdi: set[int] = set()
     for fdi, sleeve_id, source in requested:
         if fdi in seen_fdi:
-            discovery_issues.append({
-                "reason": "duplicate_sleeve_anchor_for_FDI",
-                "fdi": fdi,
-                "sleeve_id": sleeve_id,
-            })
+            discovery_issues.append(
+                {
+                    "reason": "duplicate_sleeve_anchor_for_FDI",
+                    "fdi": fdi,
+                    "sleeve_id": sleeve_id,
+                }
+            )
             continue
         node = sleeve_files.get(sleeve_id)
         if node is None or node.get("path") is None:
-            discovery_issues.append({
-                "reason": "mapped_sleeve_file_is_missing",
-                "fdi": fdi,
-                "sleeve_id": sleeve_id,
-            })
+            discovery_issues.append(
+                {
+                    "reason": "mapped_sleeve_file_is_missing",
+                    "fdi": fdi,
+                    "sleeve_id": sleeve_id,
+                }
+            )
             continue
         path = (case_dir / str(node["path"])).resolve()
         if not path.is_file():
-            discovery_issues.append({
-                "reason": "mapped_sleeve_path_does_not_exist",
-                "fdi": fdi,
-                "sleeve_id": sleeve_id,
-                "path": str(path),
-            })
+            discovery_issues.append(
+                {
+                    "reason": "mapped_sleeve_path_does_not_exist",
+                    "fdi": fdi,
+                    "sleeve_id": sleeve_id,
+                    "path": str(path),
+                }
+            )
             continue
         try:
             point, point_method = _load_anchor_point(path)
         except Exception as error:
-            discovery_issues.append({
-                "reason": "sleeve_geometry_could_not_be_loaded",
-                "fdi": fdi,
-                "sleeve_id": sleeve_id,
-                "path": str(path),
-                "error": str(error),
-            })
+            discovery_issues.append(
+                {
+                    "reason": "sleeve_geometry_could_not_be_loaded",
+                    "fdi": fdi,
+                    "sleeve_id": sleeve_id,
+                    "path": str(path),
+                    "error": str(error),
+                }
+            )
             continue
-        anchors.append(LabeledMissingSlotAnchor(
-            fdi=fdi,
-            sleeve_id=sleeve_id,
-            label_source=source,
-            mesh_path=str(path),
-            point_global_mm=point,
-            point_method=point_method,
-        ))
+        anchors.append(
+            LabeledMissingSlotAnchor(
+                fdi=fdi,
+                sleeve_id=sleeve_id,
+                label_source=source,
+                mesh_path=str(path),
+                point_global_mm=point,
+                point_method=point_method,
+            )
+        )
         seen_fdi.add(fdi)
 
     return anchors, {
@@ -219,20 +234,22 @@ def project_missing_slot_anchors(
         expected_side = "right" if quadrant in {1, 4} else "left"
         expected_sign = -1.0 if expected_side == "right" else 1.0
         signed_side_support = expected_sign * s_mm
-        records.append({
-            "fdi": anchor.fdi,
-            "sleeve_id": anchor.sleeve_id,
-            "label_source": anchor.label_source,
-            "mesh_path": anchor.mesh_path,
-            "point_method": anchor.point_method,
-            "point_global_mm": list(anchor.point_global_mm),
-            "projected_lr_ap_mm": [float(lr_ap[0]), float(lr_ap[1])],
-            "projected_s_mm": float(s_mm),
-            "projected_u_mm": float(u_mm),
-            "expected_patient_side": expected_side,
-            "signed_side_support_mm": float(signed_side_support),
-            "side_compatible": bool(signed_side_support > 0.0),
-        })
+        records.append(
+            {
+                "fdi": anchor.fdi,
+                "sleeve_id": anchor.sleeve_id,
+                "label_source": anchor.label_source,
+                "mesh_path": anchor.mesh_path,
+                "point_method": anchor.point_method,
+                "point_global_mm": list(anchor.point_global_mm),
+                "projected_lr_ap_mm": [float(lr_ap[0]), float(lr_ap[1])],
+                "projected_s_mm": float(s_mm),
+                "projected_u_mm": float(u_mm),
+                "expected_patient_side": expected_side,
+                "signed_side_support_mm": float(signed_side_support),
+                "side_compatible": bool(signed_side_support > 0.0),
+            }
+        )
     return records
 
 
@@ -248,23 +265,27 @@ def evaluate_anchor_frame(
     violations: list[dict[str, object]] = []
     for record in records:
         if not record["side_compatible"]:
-            violations.append({
-                "reason": "sleeve_anchor_is_on_wrong_patient_side",
-                "fdi": record["fdi"],
-                "sleeve_id": record["sleeve_id"],
-                "projected_s_mm": record["projected_s_mm"],
-                "expected_patient_side": record["expected_patient_side"],
-            })
+            violations.append(
+                {
+                    "reason": "sleeve_anchor_is_on_wrong_patient_side",
+                    "fdi": record["fdi"],
+                    "sleeve_id": record["sleeve_id"],
+                    "projected_s_mm": record["projected_s_mm"],
+                    "expected_patient_side": record["expected_patient_side"],
+                }
+            )
     ordered = sorted(records, key=lambda item: rank[int(item["fdi"])])
-    for first, second in zip(ordered, ordered[1:]):
+    for first, second in itertools.pairwise(ordered):
         if float(first["projected_s_mm"]) >= float(second["projected_s_mm"]):
-            violations.append({
-                "reason": "sleeve_anchors_violate_canonical_rank_order",
-                "first_FDI": first["fdi"],
-                "second_FDI": second["fdi"],
-                "first_s_mm": first["projected_s_mm"],
-                "second_s_mm": second["projected_s_mm"],
-            })
+            violations.append(
+                {
+                    "reason": "sleeve_anchors_violate_canonical_rank_order",
+                    "first_FDI": first["fdi"],
+                    "second_FDI": second["fdi"],
+                    "first_s_mm": first["projected_s_mm"],
+                    "second_s_mm": second["projected_s_mm"],
+                }
+            )
     return {
         "orientation": frame.orientation_name,
         "anchors": records,
@@ -302,17 +323,18 @@ def evaluate_anchor_alignment(
                 "anchor_s_mm": anchor_s,
                 "present_s_mm": float(assignment.s_mm),
                 "expected_relation": (
-                    "present_before_anchor" if expected_relation < 0
-                    else "present_after_anchor"
+                    "present_before_anchor" if expected_relation < 0 else "present_after_anchor"
                 ),
                 "compatible": compatible,
             }
             comparisons.append(comparison)
             if not compatible:
-                violations.append({
-                    "reason": "present_crown_crosses_labeled_missing_slot_rank",
-                    **comparison,
-                })
+                violations.append(
+                    {
+                        "reason": "present_crown_crosses_labeled_missing_slot_rank",
+                        **comparison,
+                    }
+                )
     return {
         "orientation": path.orientation_name,
         "path_signature": list(path.signature),

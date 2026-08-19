@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from twin_guide.clearance import channel_distance, window_distance
-from twin_guide.config import GuideAnchorMode
+from twin_guide.config import GeometryParameters, GuideAnchorMode
 from twin_guide.geometry import Vec3
 from twin_guide.models import CaseAnalysis, CutoutPlan, GuideSleeve, SurfaceSample
 from twin_guide.sleeve_anchors import SleeveAnchorPlan, SleeveAnchorSelection
@@ -31,20 +31,40 @@ class TemplatePointSelectionConfig:
         candidate_limit: 每一侧进入成对评分的候选点上限。
 
     算法说明:
-        左右点最小跨度取导管外半径与连接管直径的 1.25 倍中的较大值，
-        即 ``max(body_radius_mm, 2.5 * connector_radius_mm)``。
+        左右点最小跨度取导管外半径与配置的连接管直径倍数中的较大值。
     """
 
     template_clearance_mm: float = 1.2
     connector_radius_mm: float = 2.30
+    minimum_span_connector_diameters: float = 1.25
     surface_sample_limit: int = 4096
     candidate_limit: int = 512
+
+    @classmethod
+    def from_geometry(cls, geometry: GeometryParameters) -> TemplatePointSelectionConfig:
+        """从病例几何配置生成选点输入，统一默认净距推导。"""
+
+        anchors = geometry.anchor_selection
+        clearance = anchors.clearance_mm
+        return cls(
+            template_clearance_mm=(
+                geometry.connector_radius_mm + geometry.fusion_voxel_size_mm
+                if clearance is None
+                else clearance
+            ),
+            connector_radius_mm=geometry.connector_radius_mm,
+            minimum_span_connector_diameters=anchors.minimum_span_connector_diameters,
+            surface_sample_limit=anchors.surface_sample_limit,
+            candidate_limit=anchors.candidate_limit,
+        )
 
     def __post_init__(self) -> None:
         """校验净距、最小跨度和候选数量的取值范围。"""
 
         if self.template_clearance_mm < 0.0 or self.connector_radius_mm <= 0.0:
             raise ValueError("牙科导板净距不能为负，连接管半径必须为正")
+        if self.minimum_span_connector_diameters <= 0.0:
+            raise ValueError("锚点最小跨度的连接梁直径倍数必须为正")
         if self.surface_sample_limit <= 0 or self.candidate_limit <= 0:
             raise ValueError("牙科导板表面样本上限和单侧候选上限必须为正")
 
@@ -55,7 +75,7 @@ class TemplatePointSelectionConfig:
             body_radius_mm: 导管主体外半径，单位毫米。
 
         返回:
-            导管外半径与 ``2.5`` 倍连接管半径中的较大值。
+            导管外半径与配置的连接管直径倍数中的较大值。
 
         异常:
             ValueError: 导管主体外半径不是正数。
@@ -63,7 +83,10 @@ class TemplatePointSelectionConfig:
 
         if body_radius_mm <= 0.0:
             raise ValueError("导管主体外半径必须为正")
-        return max(body_radius_mm, 2.5 * self.connector_radius_mm)
+        return max(
+            body_radius_mm,
+            2.0 * self.minimum_span_connector_diameters * self.connector_radius_mm,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,9 +229,7 @@ def _remaining_template_samples(
         lower_bound = cutter.bounds[0] - clearance_mm
         upper_bound = cutter.bounds[1] + clearance_mm
         local_indices = np.flatnonzero(
-            retained
-            & np.all(points >= lower_bound, axis=1)
-            & np.all(points <= upper_bound, axis=1)
+            retained & np.all(points >= lower_bound, axis=1) & np.all(points <= upper_bound, axis=1)
         )
         if not len(local_indices):
             continue
@@ -218,9 +239,7 @@ def _remaining_template_samples(
         local_retained &= distances >= clearance_mm
         retained[local_indices] = local_retained
     return tuple(
-        sample
-        for sample, keep in zip(analytic_samples, retained.tolist(), strict=True)
-        if keep
+        sample for sample, keep in zip(analytic_samples, retained.tolist(), strict=True) if keep
     )
 
 
@@ -394,18 +413,16 @@ def select_template_points(
         if len(endpoints) != 1:
             raise ValueError("双种植位末端远中节点模式必须产生一个近中锚点端部")
         side_selections = endpoints[0]
-        side_anchors = {
-            side: selection.anchor for side, selection in side_selections.items()
-        }
+        side_anchors = {side: selection.anchor for side, selection in side_selections.items()}
         pair_assignments = []
         for pair_index in range(0, len(sleeves.sleeves), 2):
             pair = sleeves.sleeves[pair_index : pair_index + 2]
-            direct = pair[0].center.distance_to(
-                side_anchors["u_side"].position
-            ) + pair[1].center.distance_to(side_anchors["back_u_side"].position)
-            reverse = pair[1].center.distance_to(
-                side_anchors["u_side"].position
-            ) + pair[0].center.distance_to(side_anchors["back_u_side"].position)
+            direct = pair[0].center.distance_to(side_anchors["u_side"].position) + pair[
+                1
+            ].center.distance_to(side_anchors["back_u_side"].position)
+            reverse = pair[1].center.distance_to(side_anchors["u_side"].position) + pair[
+                0
+            ].center.distance_to(side_anchors["back_u_side"].position)
             pair_assignments.append(
                 {
                     "u_side": pair[0] if direct <= reverse else pair[1],
@@ -419,8 +436,7 @@ def select_template_points(
         terminal_pair_index = parameters.implant_fdis.index(parameters.missing_fdi)
         terminal_assignment = pair_assignments[terminal_pair_index]
         sleeve_anchor_by_index = {
-            selection.guide_index: selection
-            for selection in sleeve_anchors.selections
+            selection.guide_index: selection for selection in sleeve_anchors.selections
         }
         terminal_guides = (
             terminal_assignment["u_side"],
@@ -455,10 +471,7 @@ def select_template_points(
                     anchor.polygon_index,
                 ),
                 distal_node,
-                tuple(
-                    assignment[side].guide_index
-                    for assignment in pair_assignments
-                ),
+                tuple(assignment[side].guide_index for assignment in pair_assignments),
                 side_selections[side].station_fdis,
                 (parameters.missing_fdi,),
                 (
@@ -498,10 +511,7 @@ def select_template_points(
             paths,
         )
 
-    if (
-        case.config.guide_anchors.mode
-        is GuideAnchorMode.ADJACENT_TWO_IMPLANT_CONTINUOUS_PATHS
-    ):
+    if case.config.guide_anchors.mode is GuideAnchorMode.ADJACENT_TWO_IMPLANT_CONTINUOUS_PATHS:
         if tooth_identification is None:
             raise ValueError("相邻双种植位连续路径模式缺少牙位识别结果")
         from twin_guide.tooth_section_anchors import (
@@ -544,25 +554,17 @@ def select_template_points(
             )
 
         endpoint_midline_start = (
-            endpoints[0]["u_side"].anchor.position
-            + endpoints[0]["back_u_side"].anchor.position
+            endpoints[0]["u_side"].anchor.position + endpoints[0]["back_u_side"].anchor.position
         ) * 0.5
         endpoint_midline_end = (
-            endpoints[1]["u_side"].anchor.position
-            + endpoints[1]["back_u_side"].anchor.position
+            endpoints[1]["u_side"].anchor.position + endpoints[1]["back_u_side"].anchor.position
         ) * 0.5
         progression = (endpoint_midline_end - endpoint_midline_start).normalized()
         pair_assignments.sort(
             key=lambda assignment: (
-                (
-                    (
-                        assignment["u_side"].center
-                        + assignment["back_u_side"].center
-                    )
-                    * 0.5
-                    - endpoint_midline_start
-                ).dot(progression)
-            )
+                (assignment["u_side"].center + assignment["back_u_side"].center) * 0.5
+                - endpoint_midline_start
+            ).dot(progression)
         )
 
         paths = tuple(
@@ -589,8 +591,7 @@ def select_template_points(
             for side, anchors in path_anchors.items()
         )
         sleeve_by_index = {
-            selection.guide_index: selection
-            for selection in sleeve_anchors.selections
+            selection.guide_index: selection for selection in sleeve_anchors.selections
         }
         selections = []
         for path in paths:
@@ -645,12 +646,12 @@ def select_template_points(
                 )
                 for side in ("u_side", "back_u_side")
             )
-            direct_cost = options[0][0].position.distance_to(sleeve_midpoints[0]) + options[
-                1
-            ][0].position.distance_to(sleeve_midpoints[1])
-            reverse_cost = options[1][0].position.distance_to(sleeve_midpoints[0]) + options[
+            direct_cost = options[0][0].position.distance_to(sleeve_midpoints[0]) + options[1][
                 0
-            ][0].position.distance_to(sleeve_midpoints[1])
+            ].position.distance_to(sleeve_midpoints[1])
+            reverse_cost = options[1][0].position.distance_to(sleeve_midpoints[0]) + options[0][
+                0
+            ].position.distance_to(sleeve_midpoints[1])
             if direct_cost <= reverse_cost:
                 assigned[0].append(options[0])
                 assigned[1].append(options[1])
@@ -658,10 +659,7 @@ def select_template_points(
                 assigned[0].append(options[1])
                 assigned[1].append(options[0])
 
-        if (
-            case.config.guide_anchors.mode
-            is GuideAnchorMode.TERMINAL_DISTAL_COMMON_NODE
-        ):
+        if case.config.guide_anchors.mode is GuideAnchorMode.TERMINAL_DISTAL_COMMON_NODE:
             from twin_guide.terminal_distal_common_node import (
                 select_terminal_distal_common_node,
             )
@@ -693,9 +691,7 @@ def select_template_points(
                     terminal_anchor.distal_direction,
                     None,
                 )
-                lateral = (
-                    terminal_anchor.centerline_node - guide_anchor.position
-                ).normalized()
+                lateral = (terminal_anchor.centerline_node - guide_anchor.position).normalized()
                 selections.append(
                     TemplatePointSelection(
                         guide.guide_index,

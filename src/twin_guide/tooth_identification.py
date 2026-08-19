@@ -217,7 +217,7 @@ def _window_mappings(
     return tuple(windows)
 
 
-WORKFLOW_SCHEMA_VERSION = "2.3-fdi-new-default"
+WORKFLOW_SCHEMA_VERSION = "2.4-unified-downstream-contract"
 STAGE_RESULT_SCHEMA = "twin-guide.stage-result/1.0"
 WORKFLOW_RESULT_NAME = "stage-02-tooth-mapping.json"
 WORKFLOW_OVERVIEW_NAME = "stage-02-tooth-mapping.png"
@@ -452,6 +452,7 @@ def _run_unified_workflow(
             GuideMappingRequest,
             map_recognized_teeth_to_guide,
         )
+
         if inputs.backend is ToothIdentificationBackend.FDI_NEW:
             from twin_guide.tooth_fdi_mapping_new import (
                 ToothFdiMappingNewRequest,
@@ -462,6 +463,7 @@ def _run_unified_workflow(
                 ToothFdiMappingNewRequest(
                     case_yaml=inputs.case_yaml,
                     output_dir=recognition_directory,
+                    profile=inputs.profile,
                     write_report_json=True,
                 )
             )

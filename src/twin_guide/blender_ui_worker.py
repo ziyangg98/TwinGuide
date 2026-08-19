@@ -110,10 +110,13 @@ def run_job(
     revision: int = 0,
     job_id: str = "",
     changed_feature_ids: tuple[str, ...] = (),
+    formal_output_directory: Path | None = None,
 ) -> None:
     """运行不检验的预览，或运行候选生成、检验和正式提升。"""
 
     config = CaseConfig.from_yaml(config_path)
+    if formal_output_directory is not None:
+        config = replace(config, output_directory=formal_output_directory.resolve())
     formal_directory = config.output_directory
     if mode in {"plan", "preview"}:
         _seed_ui_cache(formal_directory, output_directory)
@@ -126,6 +129,15 @@ def run_job(
         {
             "status": "running",
             "mode": mode,
+            "detail": (
+                "正在分析病例并识别牙位，首次运行可能需要数分钟"
+                if mode == "plan"
+                else (
+                    "正在生成快速预览，最终融合留到确认导出"
+                    if mode == "preview"
+                    else "正在生成并检验最终模型"
+                )
+            ),
             "revision": revision,
             "job_id": job_id,
             "changed_feature_ids": list(changed_feature_ids),
@@ -261,8 +273,7 @@ def run_job(
     results = _validate(artifacts.model_path, job_config)
     timings["validation"] = perf_counter() - started
     result_values = [
-        {"name": item.name, "passed": item.passed, "metrics": item.metrics}
-        for item in results
+        {"name": item.name, "passed": item.passed, "metrics": item.metrics} for item in results
     ]
     passed = all(item.passed for item in results)
     promoted = ()
@@ -331,6 +342,7 @@ def launch_from_argv() -> None:
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--formal-output", type=Path)
     parser.add_argument("--revision", type=int, default=0)
     parser.add_argument("--job-id", default="")
     parser.add_argument("--changed-feature-id", action="append", default=[])
@@ -344,6 +356,7 @@ def launch_from_argv() -> None:
             parsed.revision,
             parsed.job_id,
             tuple(parsed.changed_feature_id),
+            parsed.formal_output,
         )
     except Exception as error:
         write_manifest(
@@ -389,6 +402,9 @@ def serve(request_path: Path, parent_pid: int) -> None:
                 int(request.get("revision", 0)),
                 str(request.get("job_id", "")),
                 tuple(str(item) for item in request.get("changed_feature_ids", [])),
+                Path(str(request["formal_output_directory"]))
+                if request.get("formal_output_directory")
+                else None,
             )
         except Exception as error:
             write_manifest(

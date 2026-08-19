@@ -29,6 +29,7 @@ class ProductionReviewStatus:
         """返回病例是否没有待人工确认字段。"""
         return not self.pending_fields
 
+
 def _load_case_yaml_anatomy(inputs: ToothIdentificationInputs) -> dict[str, object]:
     """读取特殊拓扑配置所需的病例牙位语义。"""
 
@@ -72,21 +73,17 @@ def case_occlusal_axis(config: CaseConfig) -> tuple[float, float, float] | None:
         isinstance(raw_axis, list | tuple)
         and len(raw_axis) == 3
         and all(
-            not isinstance(value, bool) and isinstance(value, int | float)
-            for value in raw_axis
+            not isinstance(value, bool) and isinstance(value, int | float) for value in raw_axis
         )
     ):
         values = tuple(float(value) for value in raw_axis)
     else:
         raise ConfigurationError(
-            "case.yaml anatomy.orientation.occlusal_axis 必须为 "
-            "+X/-X/+Y/-Y/+Z/-Z 或三元素数值数组"
+            "case.yaml anatomy.orientation.occlusal_axis 必须为 +X/-X/+Y/-Y/+Z/-Z 或三元素数值数组"
         )
     length = math.sqrt(sum(value * value for value in values))
     if not math.isfinite(length) or length <= 1e-8:
-        raise ConfigurationError(
-            "case.yaml anatomy.orientation.occlusal_axis 必须为有限非零向量"
-        )
+        raise ConfigurationError("case.yaml anatomy.orientation.occlusal_axis 必须为有限非零向量")
     return tuple(value / length for value in values)
 
 
@@ -136,8 +133,7 @@ def _anatomy_fdis(anatomy: dict[str, object], key: str) -> tuple[int, ...]:
     if not isinstance(raw, list):
         raise ConfigurationError(f"case.yaml anatomy.{key} 必须为 FDI 数组")
     return tuple(
-        _fdi(value, f"case.yaml anatomy.{key}[{index}]")
-        for index, value in enumerate(raw)
+        _fdi(value, f"case.yaml anatomy.{key}[{index}]") for index, value in enumerate(raw)
     )
 
 
@@ -153,20 +149,14 @@ def _validate_distal_pair(
 
     terminal_quadrant, terminal_position = divmod(terminal_fdi, 10)
     reference_quadrant, reference_position = divmod(reference_fdi, 10)
-    if (
-        terminal_quadrant != reference_quadrant
-        or terminal_position != reference_position + 1
-    ):
-        raise ConfigurationError(
-            f"{section} 必须满足参考牙→直接远中终末牙的相邻关系"
-        )
+    if terminal_quadrant != reference_quadrant or terminal_position != reference_position + 1:
+        raise ConfigurationError(f"{section} 必须满足参考牙→直接远中终末牙的相邻关系")
     if reference_fdi not in present_fdis:
         raise ConfigurationError(f"{section} 的参考邻牙必须为现存牙")
     if terminal_must_be_present and terminal_fdi not in present_fdis:
         raise ConfigurationError(f"{section} 的终末牙必须为现存牙")
     if any(
-        divmod(fdi, 10)[0] == terminal_quadrant
-        and divmod(fdi, 10)[1] > terminal_position
+        divmod(fdi, 10)[0] == terminal_quadrant and divmod(fdi, 10)[1] > terminal_position
         for fdi in present_fdis
     ):
         raise ConfigurationError(f"{section} 的 terminal_fdi 不是当前牙列末端")
@@ -195,25 +185,18 @@ def validate_special_case_anatomy(config: CaseConfig) -> None:
         ):
             implant_fdis = terminal.implant_fdis
             if len(implant_fdis) != 2:
-                raise ConfigurationError(
-                    "双种植位末端牙龈模式必须配置两个 implant_fdis"
-                )
+                raise ConfigurationError("双种植位末端牙龈模式必须配置两个 implant_fdis")
             if terminal.missing_fdi != implant_fdis[-1]:
                 raise ConfigurationError(
                     "terminal_distal_common_node.missing_fdi 必须是 implant_fdis 的远中末项"
                 )
-            quadrant, reference_position = divmod(
-                terminal.reference_neighbor_fdi, 10
-            )
+            quadrant, reference_position = divmod(terminal.reference_neighbor_fdi, 10)
             expected = tuple(
                 quadrant * 10 + reference_position + offset
                 for offset in range(1, len(implant_fdis) + 1)
             )
             if implant_fdis != expected:
-                raise ConfigurationError(
-                    "双种植位末端牙龈模式必须满足"
-                    "参考邻牙→两个连续远中种植位"
-                )
+                raise ConfigurationError("双种植位末端牙龈模式必须满足参考邻牙→两个连续远中种植位")
             if terminal.reference_neighbor_fdi not in present:
                 raise ConfigurationError("末端远中公共节点参考邻牙必须为现存牙")
             if any(fdi not in missing for fdi in implant_fdis):
@@ -246,8 +229,6 @@ def validate_special_case_anatomy(config: CaseConfig) -> None:
         )
 
 
-
-
 def _fdi(value: object, name: str) -> int:
     """校验一个恒牙 FDI 编码。"""
 
@@ -257,7 +238,6 @@ def _fdi(value: object, name: str) -> int:
     if quadrant not in {1, 2, 3, 4} or position not in set(range(1, 9)):
         raise ConfigurationError(f"{name} 不是有效恒牙 FDI 编码")
     return value
-
 
 
 __all__ = [
